@@ -134,9 +134,6 @@ static s16b get_idx_from_name(char *s)
  */
 static void do_cmd_wiz_hack_nick(void)
 {
-	int py = player->py;
-	int px = player->px;
-
 	int i, y, x;
 
 	char kp;
@@ -147,16 +144,17 @@ static void do_cmd_wiz_hack_nick(void)
 		for (y = Term->offset_y; y < Term->offset_y + SCREEN_HGT; y++)
 			for (x = Term->offset_x; x < Term->offset_x + SCREEN_WID; x++) {
 				byte a = COLOUR_RED;
+				struct loc grid = loc(x, y);
 
-				if (!square_in_bounds_fully(cave, y, x)) continue;
+				if (!square_in_bounds_fully(cave, grid)) continue;
 
 				/* Display proper noise */
 				if (cave->noise.grids[y][x] != i) continue;
 
 				/* Display player/floors/walls */
-				if ((y == py) && (x == px))
+				if (loc_eq(grid, player->grid))
 					print_rel(L'@', a, y, x);
-				else if (square_ispassable(cave, y, x))
+				else if (square_ispassable(cave, grid))
 					print_rel(L'*', a, y, x);
 				else
 					print_rel(L'#', a, y, x);
@@ -176,16 +174,17 @@ static void do_cmd_wiz_hack_nick(void)
 		for (y = Term->offset_y; y < Term->offset_y + SCREEN_HGT; y++)
 			for (x = Term->offset_x; x < Term->offset_x + SCREEN_WID; x++) {
 				byte a = COLOUR_YELLOW;
+				struct loc grid = loc(x, y);
 
-				if (!square_in_bounds_fully(cave, y, x)) continue;
+				if (!square_in_bounds_fully(cave, grid)) continue;
 
 				/* Display proper smell */
 				if (cave->scent.grids[y][x] != i) continue;
 
 				/* Display player/floors/walls */
-				if ((y == py) && (x == px))
+				if (loc_eq(grid, player->grid))
 					print_rel(L'@', a, y, x);
-				else if (square_ispassable(cave, y, x))
+				else if (square_ispassable(cave, grid))
 					print_rel(L'*', a, y, x);
 				else
 					print_rel(L'#', a, y, x);
@@ -271,22 +270,24 @@ static void do_cmd_keylog(void) {
  */
 static void do_cmd_wiz_bamf(void)
 {
-	int x = 0, y = 0;
+	struct loc grid = loc(0, 0);
 
 	/* Use the targeting function. */
 	if (!target_set_interactive(TARGET_LOOK, -1, -1))
 		return;
 
 	/* grab the target coords. */
-	target_get(&x, &y);
+	target_get(&grid);
 
 	/* Test for passable terrain. */
-	if (!square_ispassable(cave, y, x))
+	if (!square_ispassable(cave, grid)) {
 		msg("The square you are aiming for is impassable.");
 
-	/* Teleport to the target */
-	else
-		effect_simple(EF_TELEPORT_TO, source_player(), "0", 0, 0, 0, y, x,NULL);
+	} else {
+		/* Teleport to the target */
+		effect_simple(EF_TELEPORT_TO, source_player(), "0", 0, 0, 0, grid.y,
+					  grid.x, NULL);
+	}
 }
 
 
@@ -600,7 +601,7 @@ static void wiz_create_item_drop_object(struct object *obj)
 	obj->origin_depth = player->depth;
 
 	/* Drop the object from heaven */
-	drop_near(cave, &obj, 0, player->py, player->px, true);
+	drop_near(cave, &obj, 0, player->grid, true);
 }
 
 /**
@@ -1372,7 +1373,7 @@ void wiz_cheat_death(void)
 	(void)player_clear_timed(player, TMD_CUT, true);
 
 	/* Prevent starvation */
-	player_set_food(player, PY_FOOD_MAX - 1);
+	player_set_timed(player, TMD_FOOD, PY_FOOD_MAX - 1, false);
 
 	/* Cancel recall */
 	if (player->word_recall)
@@ -1449,7 +1450,7 @@ static void do_cmd_wiz_cure_all(void)
 	(void)player_clear_timed(player, TMD_AMNESIA, true);
 
 	/* No longer hungry */
-	player_set_food(player, PY_FOOD_MAX - 1);
+	player_set_timed(player, TMD_FOOD, PY_FOOD_MAX - 1, false);
 
 	/* Redraw everything */
 	do_cmd_redraw();
@@ -1590,27 +1591,28 @@ static void do_cmd_wiz_summon(int num)
  */
 static void do_cmd_wiz_named(struct monster_race *r, bool slp)
 {
-	int py = player->py;
-	int px = player->px;
-
-	int i, x, y;
+	int i;
+	struct monster_group_info info = { 0, 0 };
 
 	/* Paranoia */
 	assert(r);
 
 	/* Try 10 times */
 	for (i = 0; i < 10; i++) {
+		struct loc grid;
 		int d = 1;
 
 		/* Pick a location */
-		scatter(cave, &y, &x, py, px, d, true);
+		scatter(cave, &grid, player->grid, d, true);
 
 		/* Require empty grids */
-		if (!square_isempty(cave, y, x)) continue;
+		if (!square_isempty(cave, grid)) continue;
 
 		/* Place it (allow groups) */
-		if (place_new_monster(cave, y, x, r, slp, true, ORIGIN_DROP_WIZARD))
+		if (place_new_monster(cave, grid, r, slp, true, info,
+							  ORIGIN_DROP_WIZARD)) {
 			break;
+		}
 	}
 }
 
@@ -1648,13 +1650,8 @@ static void do_cmd_wiz_zap(int d)
  */
 static void do_cmd_wiz_query(void)
 {
-	int py = player->py;
-	int px = player->px;
-
 	int y, x;
-
 	char cmd;
-
 	int flag = 0;
 
 
@@ -1684,22 +1681,23 @@ static void do_cmd_wiz_query(void)
 	for (y = Term->offset_y; y < Term->offset_y + SCREEN_HGT; y++) {
 		for (x = Term->offset_x; x < Term->offset_x + SCREEN_WID; x++) {
 			byte a = COLOUR_RED;
+			struct loc grid = loc(x, y);
 
-			if (!square_in_bounds_fully(cave, y, x)) continue;
+			if (!square_in_bounds_fully(cave, grid)) continue;
 
 			/* Given flag, show only those grids */
-			if (flag && !sqinfo_has(cave->squares[y][x].info, flag)) continue;
+			if (flag && !sqinfo_has(square(cave, grid).info, flag)) continue;
 
 			/* Given no flag, show known grids */
-			if (!flag && (!square_isknown(cave, y, x))) continue;
+			if (!flag && (!square_isknown(cave, grid))) continue;
 
 			/* Color */
-			if (square_ispassable(cave, y, x)) a = COLOUR_YELLOW;
+			if (square_ispassable(cave, grid)) a = COLOUR_YELLOW;
 
 			/* Display player/floors/walls */
-			if ((y == py) && (x == px))
+			if (loc_eq(grid, player->grid))
 				print_rel(L'@', a, y, x);
-			else if (square_ispassable(cave, y, x))
+			else if (square_ispassable(cave, grid))
 				print_rel(L'*', a, y, x);
 			else
 				print_rel(L'#', a, y, x);
@@ -1722,9 +1720,6 @@ static void do_cmd_wiz_query(void)
  */
 static void do_cmd_wiz_features(void)
 {
-	int py = player->py;
-	int px = player->px;
-
 	int y, x;
 
 	char cmd;
@@ -1790,25 +1785,26 @@ static void do_cmd_wiz_features(void)
 	/* Scan map */
 	for (y = Term->offset_y; y < Term->offset_y + SCREEN_HGT; y++) {
 		for (x = Term->offset_x; x < Term->offset_x + SCREEN_WID; x++) {
+			struct loc grid = loc(x, y);
 			byte a = COLOUR_RED;
 			bool show = false;
 			int i;
 
-			if (!square_in_bounds_fully(cave, y, x)) continue;
+			if (!square_in_bounds_fully(cave, loc(x, y))) continue;
 
 			/* Given feature, show only those grids */
 			for (i = 0; i < length; i++)
-				if (cave->squares[y][x].feat == feat[i]) show = true;
+				if (square(cave, grid).feat == feat[i]) show = true;
 
 			/* Color */
-			if (square_ispassable(cave, y, x)) a = COLOUR_YELLOW;
+			if (square_ispassable(cave, grid)) a = COLOUR_YELLOW;
 
 			if (!show) continue;
 
 			/* Display player/floors/walls */
-			if ((y == py) && (x == px))
+			if (loc_eq(grid, player->grid))
 				print_rel(L'@', a, y, x);
-			else if (square_ispassable(cave, y, x))
+			else if (square_ispassable(cave, grid))
 				print_rel(L'*', a, y, x);
 			else
 				print_rel(L'#', a, y, x);
@@ -1831,8 +1827,6 @@ static void do_cmd_wiz_features(void)
  */
 static void wiz_test_kind(int tval)
 {
-	int py = player->py;
-	int px = player->px;
 	int sval;
 
 	struct object *obj, *known_obj;
@@ -1862,7 +1856,7 @@ static void wiz_test_kind(int tval)
 		obj->known = known_obj;
 
 		/* Drop the object from heaven */
-		drop_near(cave, &obj, 0, py, px, true);
+		drop_near(cave, &obj, 0, player->grid, true);
 	}
 
 	msg("Done.");
@@ -1992,9 +1986,6 @@ void do_cmd_wiz_effect(void)
  */
 void get_debug_command(void)
 {
-	int py = player->py;
-	int px = player->px;
-
 	char cmd;
 
 	/* Get a "debug command" */
@@ -2112,7 +2103,7 @@ void get_debug_command(void)
 			n= get_quantity("How many good objects? ", 40);
 			screen_load();
 			if (n < 1) n = 1;
-			acquirement(py, px, player->depth, n, false);
+			acquirement(player->grid, player->depth, n, false);
 			break;
 		}
 
@@ -2314,7 +2305,7 @@ void get_debug_command(void)
 		/* Create a trap */
 		case 'T':
 		{
-			if (!square_isfloor(cave, player->py, player->px)) {
+			if (!square_isfloor(cave, player->grid)) {
 				msg("You can't place a trap there!");
 				break;
 			} else if (player->depth == 0) {
@@ -2328,7 +2319,7 @@ void get_debug_command(void)
 
 			struct trap_kind *trap = lookup_trap(buf);
 			if (trap) {
-				place_trap(cave, player->py, player->px, trap->tidx, 0);
+				place_trap(cave, player->grid, trap->tidx, 0);
 			} else {
 				msg("Trap not found.");
 			}
@@ -2352,7 +2343,7 @@ void get_debug_command(void)
 			n = get_quantity("How many great objects? ", 40);
 			screen_load();
 			if (n < 1) n = 1;
-			acquirement(py, px, player->depth, n, true);
+			acquirement(player->grid, player->depth, n, true);
 			break;
 		}
 

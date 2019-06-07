@@ -80,22 +80,20 @@ static struct monster_race *poly_race(struct monster_race *race)
  * Monsters and players can be pushed past monsters or players weaker than
  * they are.
  */
-void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
+void thrust_away(struct loc centre, struct loc target, int grids_away)
 {
-	int y, x, yy, xx;
+	struct loc grid, next;
 	int i, d, first_d;
 	int angle;
 
-	/* Determine where target is in relation to caster. */
-	y = t_y - centre.y + 20;
-	x = t_x - centre.x + 20;
+	/* Determine where target is in relation to caster, extend. */
+	grid = loc_sum(loc_diff(target, centre), loc(20, 20));
 
 	/* Find the angle (/2) of the line from caster to target. */
-	angle = get_angle_to_grid[y][x];
+	angle = get_angle_to_grid[grid.y][grid.x];
 
 	/* Start at the target grid. */
-	y = t_y;
-	x = t_x;
+	grid = target;
 
 	/* Up to the number of grids requested, force the target away from the
 	 * source of the projection, until it hits something it can't travel
@@ -104,9 +102,9 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 		/* Randomize initial direction. */
 		first_d = randint0(8);
 
-		/* Look around. */
+		/* Look around (two possibilities for most angles). */
 		for (d = first_d; d < 8 + first_d; d++) {
-			/* Reject angles more than 44 degrees from line. */
+			/* Reject angles more than 44 degrees from desired direction. */
 			if (d % 8 == 0) {	/* 135 */
 				if ((angle > 157) || (angle < 114))
 					continue;
@@ -141,18 +139,15 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 			}
 
 			/* Extract adjacent location */
-			yy = y + ddy_ddd[d % 8];
-			xx = x + ddx_ddd[d % 8];
+			next = loc_sum(grid, ddgrid_ddd[d % 8]);
 
-			/* Cannot switch places with stronger monsters. */
-			if (cave->squares[yy][xx].mon != 0) {
+			/* There's someone there, try to switch places. */
+			if (square(cave, next).mon != 0) {
 				/* A monster is trying to pass. */
-				if (cave->squares[y][x].mon > 0) {
-
-					struct monster *mon = square_monster(cave, y, x);
-
-					if (cave->squares[yy][xx].mon > 0) {
-						struct monster *mon1 = square_monster(cave, yy, xx);
+				if (square(cave, grid).mon > 0) {
+					struct monster *mon = square_monster(cave, grid);
+					if (square(cave, next).mon > 0) {
+						struct monster *mon1 = square_monster(cave, next);
 
 						/* Monsters cannot pass by stronger monsters. */
 						if (mon1->race->mexp > mon->race->mexp)
@@ -165,9 +160,9 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 				}
 
 				/* The player is trying to pass. */
-				if (cave->squares[y][x].mon < 0) {
-					if (cave->squares[yy][xx].mon > 0) {
-						struct monster *mon1 = square_monster(cave, yy, xx);
+				if (square(cave, grid).mon < 0) {
+					if (square(cave, next).mon > 0) {
+						struct monster *mon1 = square_monster(cave, next);
 
 						/* Players cannot pass by stronger monsters. */
 						if (mon1->race->level > player->lev * 2)
@@ -177,15 +172,14 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 			}
 
 			/* Check for obstruction. */
-			if (!square_isprojectable(cave, yy, xx)) {
+			if (!square_isprojectable(cave, next)) {
 				/* Some features allow entrance, but not exit. */
-				if (square_ispassable(cave, yy, xx)) {
+				if (square_ispassable(cave, next)) {
 					/* Travel down the path. */
-					monster_swap(y, x, yy, xx);
+					monster_swap(grid, next);
 
 					/* Jump to new location. */
-					y = yy;
-					x = xx;
+					grid = next;
 
 					/* We can't travel any more. */
 					i = grids_away;
@@ -197,17 +191,16 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 				/* If there are walls everywhere, stop here. */
 				else if (d == (8 + first_d - 1)) {
 					/* Message for player. */
-					if (cave->squares[y][x].mon < 0)
+					if (square(cave, grid).mon < 0)
 						msg("You come to rest next to a wall.");
 					i = grids_away;
 				}
 			} else {
 				/* Travel down the path. */
-				monster_swap(y, x, yy, xx);
+				monster_swap(grid, next);
 
 				/* Jump to new location. */
-				y = yy;
-				x = xx;
+				grid = next;
 
 				/* Stop looking at previous location. */
 				break;
@@ -216,25 +209,17 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 	}
 
 	/* Some special messages or effects for player or monster. */
-	if (square_isfiery(cave, y, x)) {
-		if (cave->squares[y][x].mon < 0) {
+	if (square_isfiery(cave, grid)) {
+		if (square(cave, grid).mon < 0) {
 			msg("You are thrown into molten lava!");
-		} else if (cave->squares[y][x].mon > 0) {
-			struct monster *mon = square_monster(cave, y, x);
-			bool fear = false;
-
-			if (!rf_has(mon->race->flags, RF_IM_FIRE)) {
-				mon_take_hit(mon, 100 + randint1(100), &fear, " is burnt up.");
-			}
-
-			if (fear && monster_is_visible(mon)) {
-				add_monster_message(mon, MON_MSG_FLEE_IN_TERROR, true);
-			}
+		} else if (square(cave, grid).mon > 0) {
+			struct monster *mon = square_monster(cave, grid);
+			monster_take_terrain_damage(mon);
 		}
 	}
 
 	/* Clear the projection mark. */
-	sqinfo_off(cave->squares[y][x].info, SQUARE_PROJECT);
+	sqinfo_off(square(cave, grid).info, SQUARE_PROJECT);
 }
 
 /**
@@ -245,8 +230,7 @@ void thrust_away(struct loc centre, int t_y, int t_x, int grids_away)
 typedef struct project_monster_handler_context_s {
 	const struct source origin;
 	const int r;
-	const int y;
-	const int x;
+	const struct loc grid;
 	int dam;
 	const int type;
 	bool seen; /* Ideally, this would be const, but we can't with C89 initialization. */
@@ -706,7 +690,7 @@ static void project_monster_handler_FORCE(project_monster_handler_context_t *con
 		return;
 
 	/* Thrust monster away */
-	thrust_away(centre, context->y, context->x, 3 + context->dam / 20);
+	thrust_away(centre, context->grid, 3 + context->dam / 20);
 }
 
 /* Time -- breathers resist */
@@ -895,8 +879,7 @@ static void project_monster_handler_MON_CLONE(project_monster_handler_context_t 
 	context->mon->hp = context->mon->maxhp;
 
 	/* Speed up */
-	mon_inc_timed(context->mon, MON_TMD_FAST, 50, MON_TMD_FLG_NOTIFY, 
-				  context->id);
+	mon_inc_timed(context->mon, MON_TMD_FAST, 50, MON_TMD_FLG_NOTIFY);
 
 	/* Attempt to clone. */
 	if (multiply_monster(cave, context->mon))
@@ -923,9 +906,8 @@ static void project_monster_handler_MON_POLY(project_monster_handler_context_t *
 /* Heal Monster (use "dam" as amount of healing) */
 static void project_monster_handler_MON_HEAL(project_monster_handler_context_t *context)
 {
-	/* Wake up */
-	mon_clear_timed(context->mon, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE,
-					context->id);
+	/* Wake up, become aware */
+	monster_wake(context->mon, false, 100);
 
 	/* Heal */
 	context->mon->hp += context->dam;
@@ -1059,8 +1041,8 @@ static bool project_m_monster_attack(project_monster_handler_context_t *context,
 	if (player->upkeep->health_who == mon)
 		player->upkeep->redraw |= (PR_HEALTH);
 
-	/* Wake the monster up */
-	mon_clear_timed(mon, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, false);
+	/* Wake the monster up, don't notice the player */
+	monster_wake(mon, false, 0);
 
 	/* Hurt the monster */
 	mon->hp -= dam;
@@ -1170,8 +1152,7 @@ static void project_m_apply_side_effects(project_monster_handler_context_t *cont
 	 */
 	if (context->do_poly) {
 		enum mon_messages hurt_msg = MON_MSG_UNAFFECTED;
-		const int x = context->x;
-		const int y = context->y;
+		const struct loc grid = context->grid;
 		int savelvl = 0;
 		struct monster_race *old;
 		struct monster_race *new;
@@ -1200,29 +1181,32 @@ static void project_m_apply_side_effects(project_monster_handler_context_t *cont
 
 		/* Handle polymorph */
 		if (new != old) {
+			struct monster_group_info info = {0, 0 };
+
 			/* Report the polymorph before changing the monster */
 			hurt_msg = MON_MSG_CHANGE;
 			add_monster_message(mon, hurt_msg, false);
 
 			/* Delete the old monster, and return a new one */
 			delete_monster_idx(m_idx);
-			place_new_monster(cave, y, x, new, false, false, ORIGIN_DROP_POLY);
-			context->mon = square_monster(cave, y, x);
+			place_new_monster(cave, grid, new, false, false, info,
+							  ORIGIN_DROP_POLY);
+			context->mon = square_monster(cave, grid);
 		} else {
 			add_monster_message(mon, hurt_msg, false);
 		}
 	} else if (context->teleport_distance > 0) {
 		char dice[5];
 		strnfmt(dice, sizeof(dice), "%d", context->teleport_distance);
-		effect_simple(EF_TELEPORT, context->origin, dice, 0, 0, 0, context->y, context->x, NULL);
+		effect_simple(EF_TELEPORT, context->origin, dice, 0, 0, 0,
+					  context->grid.y, context->grid.x, NULL);
 	} else {
 		for (int i = 0; i < MON_TMD_MAX; i++) {
 			if (context->mon_timed[i] > 0) {
 				mon_inc_timed(mon,
 							  i,
 							  context->mon_timed[i],
-							  context->flag | MON_TMD_FLG_NOTIFY,
-							  context->id);
+							  context->flag | MON_TMD_FLG_NOTIFY);
 				context->obvious = true;
 			}
 		}
@@ -1288,9 +1272,8 @@ static void project_m_apply_side_effects(project_monster_handler_context_t *cont
  *
  * Hack -- effects on grids which are memorized but not in view are also seen.
  */
-void project_m(struct source origin, int r, int y, int x,
-				int dam, int typ, int flg,
-				bool *did_hit, bool *was_obvious)
+void project_m(struct source origin, int r, struct loc grid, int dam, int typ,
+			   int flg, bool *did_hit, bool *was_obvious)
 {
 	struct monster *mon;
 	struct monster_lore *lore;
@@ -1309,14 +1292,13 @@ void project_m(struct source origin, int r, int y, int x,
 	bool charm = (origin.what == SRC_PLAYER) ?
 		player_has(player, PF_CHARM) : false;
 
-	int m_idx = cave->squares[y][x].mon;
+	int m_idx = square(cave, grid).mon;
 
 	project_monster_handler_f monster_handler = monster_handlers[typ];
 	project_monster_handler_context_t context = {
 		origin,
 		r,
-		y,
-		x,
+		grid,
 		dam,
 		typ,
 		seen,
@@ -1338,7 +1320,7 @@ void project_m(struct source origin, int r, int y, int x,
 	*was_obvious = false;
 
 	/* Walls protect monsters */
-	if (!square_ispassable(cave, y, x)) return;
+	if (!square_ispassable(cave, grid)) return;
 
 	/* No monster here */
 	if (!(m_idx > 0)) return;
@@ -1407,7 +1389,7 @@ void project_m(struct source origin, int r, int y, int x,
 			update_mon(mon, cave, false);
 
 		/* Redraw the (possibly new) monster grid */
-		square_light_spot(cave, mon->fy, mon->fx);
+		square_light_spot(cave, mon->grid);
 
 		/* Update monster recall window */
 		if (player->upkeep->monster_race == mon->race) {

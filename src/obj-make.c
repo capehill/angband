@@ -1104,7 +1104,7 @@ struct object_kind *get_obj_num(int level, bool good, int tval)
 struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 						   bool extra_roll, s32b *value, int tval)
 {
-	int base, tries = 3;
+	int base;
 	struct object_kind *kind;
 	struct object *new_obj;
 
@@ -1123,18 +1123,8 @@ struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 	/* Base level for the object */
 	base = (good ? (lev + 10) : lev);
 
-	/* Try to choose an object kind; reject most books the player can't read */
-	while (tries) {
-		kind = get_obj_num(base, good || great, tval);
-		if (kind && tval_is_book_k(kind) && !obj_kind_can_browse(kind)) {
-			if (one_in_(5)) break;
-			kind = NULL;
-			tries--;
-			continue;
-		} else {
-			break;
-		}
-	}
+	/* Try to choose an object kind */
+	kind = get_obj_num(base, good || great, tval);
 	if (!kind)
 		return NULL;
 
@@ -1166,7 +1156,7 @@ struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 /**
  * Scatter some objects near the player
  */
-void acquirement(int y1, int x1, int level, int num, bool great)
+void acquirement(struct loc grid, int level, int num, bool great)
 {
 	struct object *nice_obj;
 
@@ -1180,7 +1170,7 @@ void acquirement(int y1, int x1, int level, int num, bool great)
 		nice_obj->origin_depth = player->depth;
 
 		/* Drop the object */
-		drop_near(cave, &nice_obj, 0, y1, x1, true);
+		drop_near(cave, &nice_obj, 0, grid, true);
 	}
 }
 
@@ -1236,8 +1226,9 @@ struct object *make_gold(int lev, char *coin_type)
 	object_prep(new_gold, money_kind(coin_type, value), lev, RANDOMISE);
 
 	/* If we're playing with no_selling, increase the value */
-	if (OPT(player, birth_no_selling) && player->depth)
-		value *= MIN(5, player->depth);
+	if (OPT(player, birth_no_selling) && player->depth)	{
+		value *= 5;
+	}
 
 	/* Cap gold at max short (or alternatively make pvals s32b) */
 	if (value >= SHRT_MAX) {

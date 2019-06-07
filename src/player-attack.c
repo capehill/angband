@@ -69,10 +69,9 @@ int breakage_chance(const struct object *obj, bool hit_target) {
 }
 
 static int chance_of_missile_hit(const struct player *p,
-		const struct object *missile,
-		const struct object *launcher,
-		int y,
-		int x)
+								 const struct object *missile,
+								 const struct object *launcher,
+								 struct loc grid)
 {
 	bool throw = (launcher ? false : true);
 	int bonus = p->state.to_h + missile->to_h;
@@ -85,7 +84,7 @@ static int chance_of_missile_hit(const struct player *p,
 		chance = p->state.skills[SKILL_TO_HIT_BOW] + bonus * BTH_PLUS_ADJ;
 	}
 
-	return chance - distance(loc(p->px, p->py), loc(x, y));
+	return chance - distance(p->grid, grid);
 }
 
 /**
@@ -259,7 +258,7 @@ static void blow_side_effects(struct player *p, struct monster *mon)
 		player_clear_timed(p, TMD_ATT_CONF, true);
 
 		mon_inc_timed(mon, MON_TMD_CONF, (10 + randint0(p->lev) / 10),
-					  MON_TMD_FLG_NOTIFY, false);
+					  MON_TMD_FLG_NOTIFY);
 	}
 }
 
@@ -269,10 +268,8 @@ static void blow_side_effects(struct player *p, struct monster *mon)
 static bool blow_knock_back(struct player *p, struct monster *mon, int dmg,
 							bool *fear)
 {
-	int y = mon->fy;
-	int x = mon->fx;
-	int dy = y - p->py;
-	int dx = x - p->px;
+	struct loc grid = mon->grid;
+	struct loc offset = loc_diff(grid, p->grid);
 	int power = (p->state.num_blows - 100) / 100;
 
 	/* Not enough power left */
@@ -281,47 +278,46 @@ static bool blow_knock_back(struct player *p, struct monster *mon, int dmg,
 	/* Forced backwards until power runs out */
 	while (power > 0) {
 		/* Move back a square */
-		y += dy;
-		x += dx;
+		grid = loc_sum(grid, offset);
 
 		/* React differently depending on the terrain behind the monster */
-		if (square_ispassable(cave, y, x)) {
+		if (square_ispassable(cave, grid)) {
 			/* Monster there - current monster takes all the damage
 			 * Note we could have more fun here by pushing it back... */
-			if (square_monster(cave, y, x)) {
+			if (square_monster(cave, grid)) {
 				if (mon_take_hit(mon, dmg * power, fear, NULL)) return true;
 				break;
 			} else {
 				/* Push back a square */
-				monster_swap(mon->fy, mon->fx, y, x);
+				monster_swap(mon->grid, grid);
 				power--;
 			}
 		} else {
 			bool moved = false;
 
 			/* Deal with impassable terrain */
-			if (square_isdoor(cave, y, x)) {
+			if (square_isdoor(cave, grid)) {
 				if (power >= 1) {
-					square_open_door(cave, y, x);
-					monster_swap(mon->fy, mon->fx, y, x);
+					square_open_door(cave, grid);
+					monster_swap(mon->grid, grid);
 					if (mon_take_hit(mon, dmg, fear, NULL)) return true;
 					power--;
 					moved = true;
 				}
-			} else if (square_isrubble(cave, y, x)) {
+			} else if (square_isrubble(cave, grid)) {
 				if (power >= 1) {
-					square_destroy_wall(cave, y, x);
-					monster_swap(mon->fy, mon->fx, y, x);
+					square_destroy_wall(cave, grid);
+					monster_swap(mon->grid, grid);
 					if (mon_take_hit(mon, dmg, fear, NULL)) return true;
 					power--;
 					moved = true;
 				}
-			} else if (square_ismagma(cave, y, x)) {
+			} else if (square_ismagma(cave, grid)) {
 				if (power >= 1) {
-					square_destroy_wall(cave, y, x);
-					monster_swap(mon->fy, mon->fx, y, x);
-					if (square_hasgoldvein(cave, y, x)) {
-						place_gold(cave, y, x, p->depth, ORIGIN_FLOOR);
+					square_destroy_wall(cave, grid);
+					monster_swap(mon->grid, grid);
+					if (square_hasgoldvein(cave, grid)) {
+						place_gold(cave, grid, p->depth, ORIGIN_FLOOR);
 					}
 					if (randint0(20) < power) {
 						effect_simple(EF_EARTHQUAKE,
@@ -332,12 +328,12 @@ static bool blow_knock_back(struct player *p, struct monster *mon, int dmg,
 					power--;
 					moved = true;
 				}
-			} else if (square_isquartz(cave, y, x)) {
+			} else if (square_isquartz(cave, grid)) {
 				if (power >= 2) {
-					square_destroy_wall(cave, y, x);
-					monster_swap(mon->fy, mon->fx, y, x);
-					if (square_hasgoldvein(cave, y, x)) {
-						place_gold(cave, y, x, p->depth, ORIGIN_FLOOR);
+					square_destroy_wall(cave, grid);
+					monster_swap(mon->grid, grid);
+					if (square_hasgoldvein(cave, grid)) {
+						place_gold(cave, grid, p->depth, ORIGIN_FLOOR);
 					}
 					if (randint0(20) < power) {
 						effect_simple(EF_EARTHQUAKE,
@@ -348,10 +344,10 @@ static bool blow_knock_back(struct player *p, struct monster *mon, int dmg,
 					power -= 2;
 					moved = true;
 				}
-			} else if (square_isgranite(cave, y, x)) {
+			} else if (square_isgranite(cave, grid)) {
 				if (power >= 3) {
-					square_destroy_wall(cave, y, x);
-					monster_swap(mon->fy, mon->fx, y, x);
+					square_destroy_wall(cave, grid);
+					monster_swap(mon->grid, grid);
 					if (randint0(20) < power) {
 						effect_simple(EF_EARTHQUAKE,
 									  source_monster(mon->midx), "0",
@@ -370,20 +366,22 @@ static bool blow_knock_back(struct player *p, struct monster *mon, int dmg,
 		}
 	}
 	/* Player needs to stop hitting if the monster has moved */
-	return (ABS(mon->fy - p->py) > 1) || (ABS(mon->fx - p->px) > 1);
+	return (ABS(mon->grid.y - p->grid.y) > 1) ||
+		(ABS(mon->grid.x - p->grid.x) > 1);
 }
 
 /**
  * Apply blow after effects
  */
-static bool blow_after_effects(int y, int x, bool quake)
+static bool blow_after_effects(struct loc grid, bool quake)
 {
 	/* Apply earthquake brand */
 	if (quake) {
-		effect_simple(EF_EARTHQUAKE, source_player(), "0", 0, 10, 0, 0, 0, NULL);
+		effect_simple(EF_EARTHQUAKE, source_player(), "0", 0, 10, 0, 0, 0,
+					  NULL);
 
 		/* Monster may be dead or moved */
-		if (!square_monster(cave, y, x))
+		if (!square_monster(cave, grid))
 			return true;
 	}
 
@@ -417,12 +415,12 @@ int py_attack_hit_chance(const struct player *p, const struct object *weapon)
 /**
  * Attack the monster at the given location with a single blow.
  */
-static bool py_attack_real(struct player *p, int y, int x, bool *fear)
+static bool py_attack_real(struct player *p, struct loc grid, bool *fear)
 {
 	size_t i;
 
 	/* Information about the target of the attack */
-	struct monster *mon = square_monster(cave, y, x);
+	struct monster *mon = square_monster(cave, grid);
 	char m_name[80];
 	bool stop = false;
 
@@ -460,8 +458,8 @@ static bool py_attack_real(struct player *p, int y, int x, bool *fear)
 	}
 
 	/* Disturb the monster */
-	mon_clear_timed(mon, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, false);
-	mon_clear_timed(mon, MON_TMD_HOLD, MON_TMD_FLG_NOTIFY, false);
+	monster_wake(mon, false, 100);
+	mon_clear_timed(mon, MON_TMD_HOLD, MON_TMD_FLG_NOTIFY);
 
 	/* See if the player hit */
 	success = test_hit(chance, mon->race->ac, monster_is_visible(mon));
@@ -580,7 +578,7 @@ static bool py_attack_real(struct player *p, int y, int x, bool *fear)
 		(*fear) = false;
 
 	/* Post-damage effects */
-	if (blow_after_effects(y, x, do_quake))
+	if (blow_after_effects(grid, do_quake))
 		stop = true;
 
 	return stop;
@@ -603,6 +601,9 @@ bool attempt_shield_bash(struct player *p, struct monster *mon, bool *fear,
 
 	/* No shield, no bash */
 	if (!shield) return false;
+
+	/* Monster is too pathetic, don't bother */
+	if (mon->race->level < p->lev / 2) return false;
 
 	/* Players bash more often when they see a real need: */
 	if (!equipped_item_by_slot_name(p, "weapon")) {
@@ -644,19 +645,17 @@ bool attempt_shield_bash(struct player *p, struct monster *mon, bool *fear,
 
 		/* Stunning. */
 		if (bash_quality + p->lev > randint1(200 + mon->race->level * 8)) {
-			mon_inc_timed(mon, MON_TMD_STUN, randint0(p->lev / 5) + 4, 0,
-						  false);
+			mon_inc_timed(mon, MON_TMD_STUN, randint0(p->lev / 5) + 4, 0);
 		}
 
 		/* Confusion. */
 		if (bash_quality + p->lev > randint1(300 + mon->race->level * 12)) {
-			mon_inc_timed(mon, MON_TMD_CONF, randint0(p->lev / 5) + 4, 0,
-						  false);
+			mon_inc_timed(mon, MON_TMD_CONF, randint0(p->lev / 5) + 4, 0);
 		}
 
 		/* The player will sometimes stumble. */
 		if (35 + adj_dex_th[p->state.stat_ind[STAT_DEX]] < randint1(60)) {
-			*blows += randint1(p->state.num_blows);
+			*blows += randint1(p->state.num_blows / 100);
 			msgt(MSG_GENERIC, "You stumble!");
 		}
 	}
@@ -671,12 +670,12 @@ bool attempt_shield_bash(struct player *p, struct monster *mon, bool *fear,
  * We don't allow @ to spend more than 100 energy in one go, to avoid slower
  * monsters getting double moves.
  */
-void py_attack(struct player *p, int y, int x)
+void py_attack(struct player *p, struct loc grid)
 {
 	int blow_energy = 100 * z_info->move_energy / p->state.num_blows;
 	int blows = 0;
 	bool fear = false;
-	struct monster *mon = square_monster(cave, y, x);
+	struct monster *mon = square_monster(cave, grid);
 
 	/* Disturb the player */
 	disturb(p, 0);
@@ -686,15 +685,18 @@ void py_attack(struct player *p, int y, int x)
 
 	/* Player attempts a shield bash if they can, and if monster is visible
 	 * and not too pathetic */
-	if (player_has(p, PF_SHIELD_BASH) && monster_is_visible(mon) &&
-		(mon->race->level > p->lev / 2)) {
+	if (player_has(p, PF_SHIELD_BASH) && monster_is_visible(mon)) {
+		/* Monster may die */
 		if (attempt_shield_bash(p, mon, &fear, &blows)) return;
 	}
+
+	/* Deduct any energy lost due to stumbling after shield bash. */
+	p->upkeep->energy_use += blow_energy * blows;
 
 	/* Attack until energy runs out or enemy dies. We limit energy use to 100
 	 * to avoid giving monsters a possible double move. */
 	while (p->energy >= blow_energy * (blows + 1)) {
-		bool stop = py_attack_real(player, y, x, &fear);
+		bool stop = py_attack_real(player, grid, &fear);
 		p->upkeep->energy_use += blow_energy;
 		if (p->upkeep->energy_use + blow_energy > z_info->move_energy ||
 			stop) break;
@@ -735,12 +737,10 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 	struct loc path_g[256];
 
 	/* Start at the player */
-	int x = p->px;
-	int y = p->py;
+	struct loc grid = p->grid;
 
 	/* Predict the "target" location */
-	int ty = y + 99 * ddy[dir];
-	int tx = x + 99 * ddx[dir];
+	struct loc target = loc_sum(grid, loc(99 * ddx[dir], 99 * ddy[dir]));
 
 	bool hit_target = false;
 	bool none_left = false;
@@ -751,8 +751,8 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 	/* Check for target validity */
 	if ((dir == DIR_TARGET) && target_okay()) {
 		int taim;
-		target_get(&tx, &ty);
-		taim = distance(loc(x, y), loc(tx, ty));
+		target_get(&target);
+		taim = distance(grid, target);
 		if (taim > range) {
 			char msg[80];
 			strnfmt(msg, sizeof(msg),
@@ -772,7 +772,7 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 	p->upkeep->energy_use = (z_info->move_energy * 10 / shots);
 
 	/* Calculate the path */
-	path_n = project_path(path_g, range, y, x, ty, tx, 0);
+	path_n = project_path(path_g, range, grid, target, 0);
 
 	/* Calculate potenital piercing */
 	if (player->timed[TMD_POWERSHOT] && tval_is_sharp_missile(obj)) {
@@ -782,31 +782,24 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 	/* Hack -- Handle stuff */
 	handle_stuff(p);
 
-	/* Start at the player */
-	x = p->px;
-	y = p->py;
-
 	/* Project along the path */
 	for (i = 0; i < path_n; ++i) {
 		struct monster *mon = NULL;
-		int ny = path_g[i].y;
-		int nx = path_g[i].x;
-		bool see = square_isseen(cave, ny, nx);
+		bool see = square_isseen(cave, path_g[i]);
 
 		/* Stop before hitting walls */
-		if (!(square_ispassable(cave, ny, nx)) &&
-			!(square_isprojectable(cave, ny, nx)))
+		if (!(square_ispassable(cave, path_g[i])) &&
+			!(square_isprojectable(cave, path_g[i])))
 			break;
 
 		/* Advance */
-		x = nx;
-		y = ny;
+		grid = path_g[i];
 
 		/* Tell the UI to display the missile */
-		event_signal_missile(EVENT_MISSILE, obj, see, y, x);
+		event_signal_missile(EVENT_MISSILE, obj, see, grid.y, grid.x);
 
 		/* Try the attack on the monster at (x, y) if any */
-		mon = square_monster(cave, y, x);
+		mon = square_monster(cave, path_g[i]);
 		if (mon) {
 			int visible = monster_is_visible(mon);
 
@@ -814,7 +807,7 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 			const char *note_dies = monster_is_destroyed(mon) ? 
 				" is destroyed." : " dies.";
 
-			struct attack_result result = attack(p, obj, y, x);
+			struct attack_result result = attack(p, obj, grid);
 			int dmg = result.dmg;
 			u32b msg_type = result.msg_type;
 			char hit_verb[20];
@@ -885,7 +878,7 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 		}
 
 		/* Stop if non-projectable but passable */
-		if (!(square_isprojectable(cave, ny, nx))) 
+		if (!(square_isprojectable(cave, path_g[i]))) 
 			break;
 	}
 
@@ -901,7 +894,7 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
 	}
 
 	/* Drop (or break) near that location */
-	drop_near(cave, &missile, breakage_chance(missile, hit_target), y, x, true);
+	drop_near(cave, &missile, breakage_chance(missile, hit_target), grid, true);
 }
 
 
@@ -909,13 +902,13 @@ static void ranged_helper(struct player *p,	struct object *obj, int dir,
  * Helper function used with ranged_helper by do_cmd_fire.
  */
 static struct attack_result make_ranged_shot(struct player *p,
-		struct object *ammo, int y, int x)
+		struct object *ammo, struct loc grid)
 {
 	char *hit_verb = mem_alloc(20 * sizeof(char));
 	struct attack_result result = {false, 0, 0, hit_verb};
 	struct object *bow = equipped_item_by_slot_name(p, "shooting");
-	struct monster *mon = square_monster(cave, y, x);
-	int chance = chance_of_missile_hit(p, ammo, bow, y, x);
+	struct monster *mon = square_monster(cave, grid);
+	int chance = chance_of_missile_hit(p, ammo, bow, grid);
 	int multiplier = p->state.ammo_mult;
 	int b = 0, s = 0;
 
@@ -944,12 +937,12 @@ static struct attack_result make_ranged_shot(struct player *p,
  * Helper function used with ranged_helper by do_cmd_throw.
  */
 static struct attack_result make_ranged_throw(struct player *p,
-	struct object *obj, int y, int x)
+	struct object *obj, struct loc grid)
 {
 	char *hit_verb = mem_alloc(20*sizeof(char));
 	struct attack_result result = {false, 0, 0, hit_verb};
-	struct monster *mon = square_monster(cave, y, x);
-	int chance = chance_of_missile_hit(p, obj, NULL, y, x);
+	struct monster *mon = square_monster(cave, grid);
+	int chance = chance_of_missile_hit(p, obj, NULL, grid);
 	int multiplier = 1;
 	int b = 0, s = 0;
 

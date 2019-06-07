@@ -392,8 +392,7 @@ s16b spell_chance(int spell_index)
 	}
 
 	/* Necromancers are punished by being on lit squares */
-	if (player_has(player, PF_UNLIGHT) &&
-		square_islit(cave, player->py, player->px)) {
+	if (player_has(player, PF_UNLIGHT) && square_islit(cave, player->grid)) {
 		chance += 25;
 	}
 
@@ -413,7 +412,7 @@ s16b spell_chance(int spell_index)
 		chance += 15;
 	}
 
-	/* Amnesia doubles failure change */
+	/* Amnesia doubles failure chance */
 	if (player->timed[TMD_AMNESIA]) {
 		chance = 50 + chance / 2;
 	}
@@ -591,7 +590,11 @@ static void spell_effect_append_value_info(const struct effect *effect,
 		case EF_BALL:
 			/* Append radius */
 			if (effect->radius) {
-				special = format(", rad %d", effect->radius);
+				int rad = effect->radius;
+				if (effect->other) {
+					rad += player->lev / effect->other;
+				}
+				special = format(", rad %d", rad);
 			} else {
 				special = "rad 2";
 			}

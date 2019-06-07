@@ -22,8 +22,8 @@
 #include "player-calcs.h"
 #include "project.h"
 
-/* 30 = TMD_MAX */
-static s16b TEST_DATA test_timed[30] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 
+/* 31 = TMD_MAX */
+static s16b TEST_DATA test_timed[31] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 
 };
 
 static struct object_base TEST_DATA sword_base = {
@@ -747,7 +747,7 @@ static struct monster_base TEST_DATA test_rb_info = {
 	.next = NULL,
 	.name = "townsfolk",
 	.text = "Townsfolk",
-	.flags = "\0\0\0\0\0\0\0\0\0\0",
+	.flags = "\0\0\0\0\0\0\0\0\0\0\0",
 	.spell_flags = "\0\0\0\0\0\0\0\0\0\0\0",
 	.d_char = 116,
 	.pain = NULL,
@@ -1021,8 +1021,7 @@ static struct object TEST_DATA test_player_knowledge = {
 	.next = NULL,
 	.known = NULL,
 	.oidx = 0,
-	.iy = 0,
-	.ix = 0,
+	.grid = { 0, 0 },
 	.tval = 0,
 	.sval = 0,
 	.pval = 0,
@@ -1086,8 +1085,7 @@ static struct object TEST_DATA test_player_knowledge = {
 
 
 static struct player TEST_DATA test_player = {
-	.py = 1,
-	.px = 1,
+	.grid = { 1, 1 },
 	.race = &test_race,
 	.class = &test_class,
 	.hitdie = 10,
@@ -1123,7 +1121,6 @@ static struct player TEST_DATA test_player = {
 	.timed = test_timed,
 	.word_recall = 0,
 	.energy = 100,
-	.food = 5000,
 	.player_hp = {
 		  5,  10,  15,  20,  25,  30,  35,  40,  45,  50,
 		 55,  60,  65,  70,  75,  80,  85,  90,  95, 100,

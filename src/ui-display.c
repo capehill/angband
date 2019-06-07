@@ -621,7 +621,7 @@ static void hp_colour_change(game_event_type type, game_event_data *data,
 							 void *user)
 {
 	if ((OPT(player, hp_changes_color)) && (use_graphics == GRAPHICS_NONE))
-		square_light_spot(cave, player->py, player->px);
+		square_light_spot(cave, player->grid);
 }
 
 
@@ -645,18 +645,6 @@ struct state_info
 	const char *str;
 	size_t len;
 	byte attr;
-};
-
-/**
- * player->hunger descriptions
- */
-static const struct state_info hunger_data[] =
-{
-	{ PY_FOOD_FAINT, S("Faint"),    COLOUR_RED },
-	{ PY_FOOD_WEAK,  S("Weak"),     COLOUR_ORANGE },
-	{ PY_FOOD_ALERT, S("Hungry"),   COLOUR_YELLOW },
-	{ PY_FOOD_FULL,  S(""),         COLOUR_L_GREEN },
-	{ PY_FOOD_MAX,   S("Full"),     COLOUR_L_GREEN },
 };
 
 /**
@@ -685,28 +673,6 @@ static size_t prt_descent(int row, int col)
 
 	return 0;
 }
-
-
-/**
- * Prints status of hunger
- */
-static size_t prt_hunger(int row, int col)
-{
-	size_t i;
-
-	for (i = 0; i < N_ELEMENTS(hunger_data); i++) {
-		if (player->food <= hunger_data[i].value) {
-			if (hunger_data[i].str[0]) {
-				c_put_str(hunger_data[i].attr, hunger_data[i].str, row, col);
-				return hunger_data[i].len;
-			} else {
-				return 0;
-			}
-		}
-	}
-	return 0;
-}
-
 
 
 /**
@@ -891,9 +857,9 @@ static size_t prt_level_feeling(int row, int col)
 static size_t prt_dtrap(int row, int col)
 {
 	/* The player is in a trap-detected grid */
-	if (square_isdtrap(cave, player->py, player->px)) {
+	if (square_isdtrap(cave, player->grid)) {
 		/* The player is on the border */
-		if (square_dtrap_edge(cave, player->py, player->px))
+		if (square_dtrap_edge(cave, player->grid))
 			c_put_str(COLOUR_YELLOW, "DTrap", row, col);
 		else
 			c_put_str(COLOUR_L_GREEN, "DTrap", row, col);
@@ -942,6 +908,7 @@ static size_t prt_tmd(int row, int col)
 			while (player->timed[i] > grade->max) {
 				grade = grade->next;
 			}
+			if (!grade->name) continue;
 			c_put_str(grade->color, grade->name, row, col + len);
 			len += strlen(grade->name) + 1;
 		}
@@ -971,7 +938,7 @@ typedef size_t status_f(int row, int col);
 
 static status_f *status_handlers[] =
 { prt_level_feeling, prt_unignore, prt_recall, prt_descent, prt_state,
-  prt_hunger, prt_study, prt_tmd, prt_dtrap };
+  prt_study, prt_tmd, prt_dtrap };
 
 
 /**
@@ -1068,7 +1035,7 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 
 
 		/* Redraw the grid spot */
-		map_info(data->point.y, data->point.x, &g);
+		map_info(data->point, &g);
 		grid_data_as_text(&g, &a, &c, &ta, &tc);
 		Term_queue_char(t, vx, vy, a, c, ta, tc);
 #ifdef MAP_DEBUG
@@ -1085,7 +1052,7 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 		int hgt = (t == angband_term[0]) ? SCREEN_HGT / 2 : t->hgt / 2;
 		int wid = (t == angband_term[0]) ? SCREEN_WID / 2 : t->wid / 2;
 
-		if (panel_should_modify(t, player->py - hgt, player->px - wid))
+		if (panel_should_modify(t, player->grid.y - hgt, player->grid.x - wid))
 			return;
 	}
 
@@ -2120,9 +2087,9 @@ static void refresh(game_event_type type, game_event_data *data, void *user)
 {
 	/* Place cursor on player/target */
 	if (OPT(player, show_target) && target_sighted()) {
-		int col, row;
-		target_get(&col, &row);
-		move_cursor_relative(row, col);
+		struct loc target;
+		target_get(&target);
+		move_cursor_relative(target.y, target.x);
 	}
 
 	Term_fresh();

@@ -98,7 +98,7 @@ void look_mon_desc(char *buf, size_t max, int m_idx)
 bool target_able(struct monster *m)
 {
 	return m && m->race && monster_is_obvious(m) &&
-		projectable(cave, player->py, player->px, m->fy, m->fx, PROJECT_NONE) &&
+		projectable(cave, player->grid, m->grid, PROJECT_NONE) &&
 		!player->timed[TMD_IMAGE];
 }
 
@@ -119,8 +119,7 @@ bool target_okay(void)
 		struct monster *mon = cave_monster(cave, target.midx);
 		if (target_able(mon)) {
 			/* Get the monster location */
-			target.grid.y = mon->fy;
-			target.grid.x = mon->fx;
+			target.grid = mon->grid;
 
 			/* Good target */
 			return true;
@@ -144,8 +143,7 @@ bool target_set_monster(struct monster *mon)
 	if (mon && target_able(mon)) {
 		target_set = true;
 		target.midx = mon->midx;
-		target.grid.y = mon->fy;
-		target.grid.x = mon->fx;
+		target.grid = mon->grid;
 		return true;
 	}
 
@@ -164,13 +162,14 @@ bool target_set_monster(struct monster *mon)
  */
 void target_set_location(int y, int x)
 {
+	struct loc grid = loc(x, y);
+
 	/* Legal target */
-	if (square_in_bounds_fully(cave, y, x)) {
+	if (square_in_bounds_fully(cave, grid)) {
 		/* Save target info */
 		target_set = true;
 		target.midx = 0;
-		target.grid.y = y;
-		target.grid.x = x;
+		target.grid = grid;
 		return;
 	}
 
@@ -197,8 +196,8 @@ bool target_is_set(void)
  */
 int cmp_distance(const void *a, const void *b)
 {
-	int py = player->py;
-	int px = player->px;
+	int py = player->grid.y;
+	int px = player->grid.x;
 
 	const struct loc *pa = a;
 	const struct loc *pb = b;
@@ -282,27 +281,28 @@ s16b target_pick(int y1, int x1, int dy, int dx, struct point_set *targets)
  */
 bool target_accept(int y, int x)
 {
+	struct loc grid = loc(x, y);
 	struct object *obj;
 
 	/* Player grids are always interesting */
-	if (cave->squares[y][x].mon < 0) return true;
+	if (square(cave, grid).mon < 0) return true;
 
 	/* Handle hallucination */
 	if (player->timed[TMD_IMAGE]) return false;
 
 	/* Obvious monsters */
-	if (cave->squares[y][x].mon > 0) {
-		struct monster *mon = square_monster(cave, y, x);
+	if (square(cave, grid).mon > 0) {
+		struct monster *mon = square_monster(cave, grid);
 		if (monster_is_obvious(mon)) {
 			return true;
 		}
 	}
 
 	/* Traps */
-	if (square_isvisibletrap(cave, y, x)) return true;
+	if (square_isvisibletrap(cave, grid)) return true;
 
 	/* Scan all objects in the grid */
-	for (obj = square_object(player->cave, y, x); obj; obj = obj->next) {
+	for (obj = square_object(player->cave, grid); obj; obj = obj->next) {
 		/* Memorized object */
 		if ((obj->kind == unknown_item_kind) || !ignore_known_item_ok(obj)) {
 			return true;
@@ -310,7 +310,7 @@ bool target_accept(int y, int x)
 	}
 
 	/* Interesting memorized features */
-	if (square_isknown(cave, y, x) && square_isinteresting(cave, y, x)) {
+	if (square_isknown(cave, grid) && square_isinteresting(cave, grid)) {
 		return true;
 	}
 
@@ -327,8 +327,8 @@ void coords_desc(char *buf, int size, int y, int x)
 	const char *east_or_west;
 	const char *north_or_south;
 
-	int py = player->py;
-	int px = player->px;
+	int py = player->grid.y;
+	int px = player->grid.x;
 
 	if (y > py)
 		north_or_south = "S";
@@ -341,19 +341,16 @@ void coords_desc(char *buf, int size, int y, int x)
 		east_or_west = "E";
 
 	strnfmt(buf, size, "%d %s, %d %s",
-		ABS(y-py), north_or_south, ABS(x-px), east_or_west);
+		ABS(y - py), north_or_south, ABS(x-px), east_or_west);
 }
 
 /**
  * Obtains the location the player currently targets.
  */
-void target_get(int *x, int *y)
+void target_get(struct loc *grid)
 {
-	assert(x);
-	assert(y);
-
-	*x = target.grid.x;
-	*y = target.grid.y;
+	assert(grid);
+	*grid = target.grid;
 }
 
 
@@ -375,7 +372,7 @@ bool target_sighted(void)
 			panel_contains(target.grid.y, target.grid.x) &&
 			 /* either the target is a grid and is visible, or it is a monster
 			  * that is visible */
-		((!target.midx && square_isseen(cave, target.grid.y, target.grid.x)) ||
+		((!target.midx && square_isseen(cave, target.grid)) ||
 		 (target.midx && monster_is_visible(cave_monster(cave, target.midx))));
 }
 
@@ -397,15 +394,17 @@ struct point_set *target_get_monsters(int mode, monster_predicate pred)
 	/* Scan for targets */
 	for (y = min_y; y < max_y; y++) {
 		for (x = min_x; x < max_x; x++) {
+			struct loc grid = loc(x, y);
+
 			/* Check bounds */
-			if (!square_in_bounds_fully(cave, y, x)) continue;
+			if (!square_in_bounds_fully(cave, grid)) continue;
 
 			/* Require "interesting" contents */
 			if (!target_accept(y, x)) continue;
 
 			/* Special mode */
 			if (mode & (TARGET_KILL)) {
-				struct monster *mon = square_monster(cave, y, x);
+				struct monster *mon = square_monster(cave, grid);
 
 				/* Must contain a monster */
 				if (mon == NULL) continue;
@@ -418,7 +417,7 @@ struct point_set *target_get_monsters(int mode, monster_predicate pred)
 			}
 
 			/* Save the location */
-			add_to_point_set(targets, y, x);
+			add_to_point_set(targets, grid);
 		}
 	}
 
@@ -433,7 +432,6 @@ struct point_set *target_get_monsters(int mode, monster_predicate pred)
  */
 bool target_set_closest(int mode, monster_predicate pred)
 {
-	int y, x;
 	struct monster *mon;
 	char m_name[80];
 	struct point_set *targets;
@@ -452,9 +450,7 @@ bool target_set_closest(int mode, monster_predicate pred)
 	}
 
 	/* Find the first monster in the queue */
-	y = targets->pts[0].y;
-	x = targets->pts[0].x;
-	mon = square_monster(cave, y, x);
+	mon = square_monster(cave, targets->pts[0]);
 	
 	/* Target the monster, if possible */
 	if (!target_able(mon)) {

@@ -828,13 +828,12 @@ void object_set_base_known(struct object *obj)
 void object_sense(struct player *p, struct object *obj)
 {
 	struct object *known_obj = p->cave->objects[obj->oidx];
-	int y = obj->iy;
-	int x = obj->ix;
 	int none = tval_find_idx("none");
 
 	/* Make new sensed objects where necessary */
 	if (known_obj == NULL) {
 		/* Make and list the new object */
+		struct loc grid = obj->grid;
 		struct object *new_obj = object_new();
 		p->cave->objects[obj->oidx] = new_obj;
 		new_obj->oidx = obj->oidx;
@@ -851,9 +850,8 @@ void object_sense(struct player *p, struct object *obj)
 		}
 
 		/* Attach it to the current floor pile */
-		new_obj->iy = y;
-		new_obj->ix = x;
-		pile_insert_end(&p->cave->squares[y][x].obj, new_obj);
+		new_obj->grid = grid;
+		pile_insert_end(&p->cave->squares[grid.y][grid.x].obj, new_obj);
 	}
 }
 
@@ -863,8 +861,7 @@ void object_sense(struct player *p, struct object *obj)
 void object_see(struct player *p, struct object *obj)
 {
 	struct object *known_obj = p->cave->objects[obj->oidx];
-	int y = obj->iy;
-	int x = obj->ix;
+	struct loc grid = obj->grid;
 
 	/* Make new known objects, fully know sensed ones, relocate old ones */
 	if (known_obj == NULL) {
@@ -888,52 +885,47 @@ void object_see(struct player *p, struct object *obj)
 		new_obj->oidx = obj->oidx;
 
 		/* Attach it to the current floor pile */
-		new_obj->iy = y;
-		new_obj->ix = x;
+		new_obj->grid = grid;
 		new_obj->number = obj->number;
-		if (!square_holds_object(p->cave, y, x, new_obj)) {
-			pile_insert_end(&p->cave->squares[y][x].obj, new_obj);
+		if (!square_holds_object(p->cave, grid, new_obj)) {
+			pile_insert_end(&p->cave->squares[grid.y][grid.x].obj, new_obj);
 		}
 	} else if (known_obj->kind != obj->kind) {
-		int iy = known_obj->iy;
-		int ix = known_obj->ix;
+		struct loc old = known_obj->grid;
 
 		/* Make sure knowledge is correct */
 		assert(known_obj == obj->known);
 
 		/* Detach from any old pile (possibly the correct one) */
-		if (iy && ix && square_holds_object(p->cave, iy, ix, known_obj)) {
-			square_excise_object(p->cave, iy, ix, known_obj);
+		if (!loc_is_zero(old) && square_holds_object(p->cave, old, known_obj)) {
+			square_excise_object(p->cave, old, known_obj);
 		}
 
 		/* Copy over actual details */
 		object_set_base_known(obj);
 
 		/* Attach it to the current floor pile */
-		known_obj->iy = y;
-		known_obj->ix = x;
+		known_obj->grid = grid;
 		known_obj->held_m_idx = 0;
-		if (!square_holds_object(p->cave, y, x, known_obj)) {
-			pile_insert_end(&p->cave->squares[y][x].obj, known_obj);
+		if (!square_holds_object(p->cave, grid, known_obj)) {
+			pile_insert_end(&p->cave->squares[grid.y][grid.x].obj, known_obj);
 		}
-	} else if (!square_holds_object(p->cave, y, x, known_obj)) {
-		int iy = known_obj->iy;
-		int ix = known_obj->ix;
+	} else if (!square_holds_object(p->cave, grid, known_obj)) {
+		struct loc old = known_obj->grid;
 
 		/* Make sure knowledge is correct */
 		assert(known_obj == obj->known);
 		known_obj->number = obj->number;
 
 		/* Detach from any old pile */
-		if (iy && ix && square_holds_object(p->cave, iy, ix, known_obj)) {
-			square_excise_object(p->cave, iy, ix, known_obj);
+		if (!loc_is_zero(old) && square_holds_object(p->cave, old, known_obj)) {
+			square_excise_object(p->cave, old, known_obj);
 		}
 
 		/* Attach it to the current floor pile */
-		known_obj->iy = y;
-		known_obj->ix = x;
+		known_obj->grid = grid;
 		known_obj->held_m_idx = 0;
-		pile_insert_end(&p->cave->squares[y][x].obj, known_obj);
+		pile_insert_end(&p->cave->squares[grid.y][grid.x].obj, known_obj);
 	}
 }
 
@@ -978,15 +970,14 @@ void object_grab(struct player *p, struct object *obj)
 		p->cave->objects[obj->oidx] = new_obj;
 		new_obj->oidx = obj->oidx;
 	} else {
-		int iy = known_obj->iy;
-		int ix = known_obj->ix;
+		struct loc old = known_obj->grid;
 
 		/* Make sure knowledge is correct */
 		assert(known_obj == obj->known);
 
 		/* Detach from any old (incorrect) floor pile */
-		if (iy && ix && square_holds_object(p->cave, iy, ix, known_obj)) {
-			square_excise_object(p->cave, iy, ix, known_obj);
+		if (!loc_is_zero(old) && square_holds_object(p->cave, old, known_obj)) {
+			square_excise_object(p->cave, old, known_obj);
 		}
 
 		/* Copy over actual details */
@@ -1115,7 +1106,7 @@ void player_know_object(struct player *p, struct object *obj)
 		if (object_is_carried(p, obj)) {
 			object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
 			msg("You have %s (%c).", o_name, gear_to_label(obj));
-		} else if (cave && square_holds_object(cave, p->py, p->px, obj)) {
+		} else if (cave && square_holds_object(cave, p->grid, obj)) {
 			object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
 			msg("On the ground: %s.", o_name);
 		}
@@ -2249,15 +2240,16 @@ void object_flavor_aware(struct object *obj)
 		for (x = 1; x < cave->width; x++) {
 			bool light = false;
 			const struct object *floor_obj;
+			struct loc grid = loc(x, y);
 
-			for (floor_obj = square_object(cave, y, x); floor_obj;
+			for (floor_obj = square_object(cave, grid); floor_obj;
 				 floor_obj = floor_obj->next)
 				if (floor_obj->kind == obj->kind) {
 					light = true;
 					break;
 				}
 
-			if (light) square_light_spot(cave, y, x);
+			if (light) square_light_spot(cave, grid);
 		}
 	}
 }

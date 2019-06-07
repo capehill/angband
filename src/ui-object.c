@@ -199,7 +199,7 @@ static void show_obj(int obj_num, int row, int col, bool cursor,
 
 	/* Price */
 	if (mode & OLIST_PRICE) {
-		struct store *store = store_at(cave, player->py, player->px);
+		struct store *store = store_at(cave, player->grid);
 		if (store) {
 			int price = price_item(store, obj, true, obj->number);
 
@@ -1410,7 +1410,7 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 			newmenu = false;
 
 			/* Get an item choice */
-			*choice = item_menu(cmd, MAX(strlen(pmt), 15), mode);
+			*choice = item_menu(cmd, MAX(pmt ? strlen(pmt) : 0, 15), mode);
 
 			/* Fix the screen */
 			screen_load();

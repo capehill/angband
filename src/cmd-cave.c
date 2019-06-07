@@ -33,6 +33,7 @@
 #include "mon-util.h"
 #include "monster.h"
 #include "obj-chest.h"
+#include "obj-gear.h"
 #include "obj-ignore.h"
 #include "obj-knowledge.h"
 #include "obj-pile.h"
@@ -54,7 +55,7 @@ void do_cmd_go_up(struct command *cmd)
 	int ascend_to;
 
 	/* Verify stairs */
-	if (!square_isupstairs(cave, player->py, player->px)) {
+	if (!square_isupstairs(cave, player->grid)) {
 		msg("I see no up staircase here.");
 		return;
 	}
@@ -95,7 +96,7 @@ void do_cmd_go_down(struct command *cmd)
 	int descend_to = dungeon_get_next_level(player->depth, 1);
 
 	/* Verify stairs */
-	if (!square_isdownstairs(cave, player->py, player->px)) {
+	if (!square_isdownstairs(cave, player->grid)) {
 		msg("I see no down staircase here.");
 		return;
 	}
@@ -133,16 +134,16 @@ void do_cmd_go_down(struct command *cmd)
 /**
  * Determine if a given grid may be "opened"
  */
-static bool do_cmd_open_test(int y, int x)
+static bool do_cmd_open_test(struct loc grid)
 {
 	/* Must have knowledge */
-	if (!square_isknown(cave, y, x)) {
+	if (!square_isknown(cave, grid)) {
 		msg("You see nothing there.");
 		return false;
 	}
 
 	/* Must be a closed door */
-	if (!square_iscloseddoor(cave, y, x)) {
+	if (!square_iscloseddoor(cave, grid)) {
 		msgt(MSG_NOTHING_TO_OPEN, "You see nothing there to open.");
 		return false;
 	}
@@ -158,16 +159,16 @@ static bool do_cmd_open_test(int y, int x)
  *
  * Returns true if repeated commands may continue
  */
-static bool do_cmd_open_aux(int y, int x)
+static bool do_cmd_open_aux(struct loc grid)
 {
 	int i, j;
 	bool more = false;
 
 	/* Verify legality */
-	if (!do_cmd_open_test(y, x)) return (false);
+	if (!do_cmd_open_test(grid)) return (false);
 
 	/* Locked door */
-	if (square_islockeddoor(cave, y, x)) {
+	if (square_islockeddoor(cave, grid)) {
 		/* Disarm factor */
 		i = player->state.skills[SKILL_DISARM_PHYS];
 
@@ -178,7 +179,7 @@ static bool do_cmd_open_aux(int y, int x)
 			i = i / 10;
 
 		/* Extract the lock power */
-		j = square_door_power(cave, y, x);
+		j = square_door_power(cave, grid);
 
 		/* Extract the difficulty XXX XXX XXX */
 		j = i - (j * 4);
@@ -191,11 +192,11 @@ static bool do_cmd_open_aux(int y, int x)
 			msgt(MSG_LOCKPICK, "You have picked the lock.");
 
 			/* Open the door */
-			square_open_door(cave, y, x);
+			square_open_door(cave, grid);
 
 			/* Update the visuals */
-			square_memorize(cave, y, x);
-			square_light_spot(cave, y, x);
+			square_memorize(cave, grid);
+			square_light_spot(cave, grid);
 			player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 
 			/* Experience */
@@ -212,9 +213,9 @@ static bool do_cmd_open_aux(int y, int x)
 		}
 	} else {
 		/* Closed door */
-		square_open_door(cave, y, x);
-		square_memorize(cave, y, x);
-		square_light_spot(cave, y, x);
+		square_open_door(cave, grid);
+		square_memorize(cave, grid);
+		square_light_spot(cave, grid);
 		player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 		sound(MSG_OPENDOOR);
 	}
@@ -233,23 +234,24 @@ static bool do_cmd_open_aux(int y, int x)
  */
 void do_cmd_open(struct command *cmd)
 {
-	int y, x, dir;
+	struct loc grid;
+	int dir;
 	struct object *obj;
 	bool more = false;
 	int err;
-	struct monster *m;
+	struct monster *mon;
 
 	/* Get arguments */
 	err = cmd_get_arg_direction(cmd, "direction", &dir);
 	if (err || dir == DIR_UNKNOWN) {
-		int y2, x2;
+		struct loc grid1;
 		int n_closed_doors, n_locked_chests;
 
-		n_closed_doors = count_feats(&y2, &x2, square_iscloseddoor, false);
-		n_locked_chests = count_chests(&y2, &x2, CHEST_OPENABLE);
+		n_closed_doors = count_feats(&grid1, square_iscloseddoor, false);
+		n_locked_chests = count_chests(&grid1, CHEST_OPENABLE);
 
 		if (n_closed_doors + n_locked_chests == 1) {
-			dir = coords_to_dir(player, y2, x2);
+			dir = motion_dir(player->grid, grid1);
 			cmd_set_arg_direction(cmd, "direction", dir);
 		} else if (cmd_get_direction(cmd, "direction", &dir, false)) {
 			return;
@@ -257,14 +259,13 @@ void do_cmd_open(struct command *cmd)
 	}
 
 	/* Get location */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
+	grid = loc_sum(player->grid, ddgrid[dir]);
 
 	/* Check for chest */
-	obj = chest_check(y, x, CHEST_OPENABLE);
+	obj = chest_check(grid, CHEST_OPENABLE);
 
 	/* Check for door */
-	if (!obj && !do_cmd_open_test(y, x)) {
+	if (!obj && !do_cmd_open_test(grid)) {
 		/* Cancel repeat */
 		disturb(player, 0);
 		return;
@@ -276,35 +277,34 @@ void do_cmd_open(struct command *cmd)
 	/* Apply confusion */
 	if (player_confuse_dir(player, &dir, false)) {
 		/* Get location */
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
+		grid = loc_sum(player->grid, ddgrid[dir]);
 
 		/* Check for chest */
-		obj = chest_check(y, x, CHEST_OPENABLE);
+		obj = chest_check(grid, CHEST_OPENABLE);
 	}
 
 	/* Monster */
-	m = square_monster(cave, y, x);
-	if (m) {
+	mon = square_monster(cave, grid);
+	if (mon) {
 		/* Mimics surprise the player */
-		if (monster_is_mimicking(m)) {
-			become_aware(m);
+		if (monster_is_mimicking(mon)) {
+			become_aware(mon);
 
-			/* Mimic wakes up */
-			mon_clear_timed(m, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, false);
+			/* Mimic wakes up and becomes aware*/
+			monster_wake(mon, false, 100);
 		} else {
 			/* Message */
 			msg("There is a monster in the way!");
 
 			/* Attack */
-			py_attack(player, y, x);
+			py_attack(player, grid);
 		}
 	} else if (obj) {
 		/* Chest */
-		more = do_cmd_open_chest(y, x, obj);
+		more = do_cmd_open_chest(grid, obj);
 	} else {
 		/* Door */
-		more = do_cmd_open_aux(y, x);
+		more = do_cmd_open_aux(grid);
 	}
 
 	/* Cancel repeat unless we may continue */
@@ -315,10 +315,10 @@ void do_cmd_open(struct command *cmd)
 /**
  * Determine if a given grid may be "closed"
  */
-static bool do_cmd_close_test(int y, int x)
+static bool do_cmd_close_test(struct loc grid)
 {
 	/* Must have knowledge */
-	if (!square_isknown(cave, y, x)) {
+	if (!square_isknown(cave, grid)) {
 		/* Message */
 		msg("You see nothing there.");
 
@@ -327,7 +327,7 @@ static bool do_cmd_close_test(int y, int x)
 	}
 
  	/* Require open/broken door */
-	if (!square_isopendoor(cave, y, x) && !square_isbrokendoor(cave, y, x)) {
+	if (!square_isopendoor(cave, grid) && !square_isbrokendoor(cave, grid)) {
 		/* Message */
 		msg("You see nothing there to close.");
 
@@ -347,22 +347,21 @@ static bool do_cmd_close_test(int y, int x)
  *
  * Returns true if repeated commands may continue
  */
-static bool do_cmd_close_aux(int y, int x)
+static bool do_cmd_close_aux(struct loc grid)
 {
 	bool more = false;
 
 	/* Verify legality */
-	if (!do_cmd_close_test(y, x)) return (false);
+	if (!do_cmd_close_test(grid)) return (false);
 
 	/* Broken door */
-	if (square_isbrokendoor(cave, y, x))
-	{
+	if (square_isbrokendoor(cave, grid)) {
 		msg("The door appears to be broken.");
 	} else {
 		/* Close door */
-		square_close_door(cave, y, x);
-		square_memorize(cave, y, x);
-		square_light_spot(cave, y, x);
+		square_close_door(cave, grid);
+		square_memorize(cave, grid);
+		square_light_spot(cave, grid);
 		player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 		sound(MSG_SHUTDOOR);
 	}
@@ -377,7 +376,8 @@ static bool do_cmd_close_aux(int y, int x)
  */
 void do_cmd_close(struct command *cmd)
 {
-	int y, x, dir;
+	struct loc grid;
+	int dir;
 	int err;
 
 	bool more = false;
@@ -385,11 +385,11 @@ void do_cmd_close(struct command *cmd)
 	/* Get arguments */
 	err = cmd_get_arg_direction(cmd, "direction", &dir);
 	if (err || dir == DIR_UNKNOWN) {
-		int y2, x2;
+		struct loc grid1;
 
 		/* Count open doors */
-		if (count_feats(&y2, &x2, square_isopendoor, false) == 1) {
-			dir = coords_to_dir(player, y2, x2);
+		if (count_feats(&grid1, square_isopendoor, false) == 1) {
+			dir = motion_dir(player->grid, grid1);
 			cmd_set_arg_direction(cmd, "direction", dir);
 		} else if (cmd_get_direction(cmd, "direction", &dir, false)) {
 			return;
@@ -397,11 +397,10 @@ void do_cmd_close(struct command *cmd)
 	}
 
 	/* Get location */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
+	grid = loc_sum(player->grid, ddgrid[dir]);
 
 	/* Verify legality */
-	if (!do_cmd_close_test(y, x)) {
+	if (!do_cmd_close_test(grid)) {
 		/* Cancel repeat */
 		disturb(player, 0);
 		return;
@@ -413,17 +412,16 @@ void do_cmd_close(struct command *cmd)
 	/* Apply confusion */
 	if (player_confuse_dir(player, &dir, false)) {
 		/* Get location */
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
+		grid = loc_sum(player->grid, ddgrid[dir]);
 	}
 
 	/* Monster - alert, then attack */
-	if (cave->squares[y][x].mon > 0) {
+	if (square(cave, grid).mon > 0) {
 		msg("There is a monster in the way!");
-		py_attack(player, y, x);
+		py_attack(player, grid);
 	} else
 		/* Door - close it */
-		more = do_cmd_close_aux(y, x);
+		more = do_cmd_close_aux(grid);
 
 	/* Cancel repeat unless told not to */
 	if (!more) disturb(player, 0);
@@ -433,22 +431,23 @@ void do_cmd_close(struct command *cmd)
 /**
  * Determine if a given grid may be "tunneled"
  */
-static bool do_cmd_tunnel_test(int y, int x)
+static bool do_cmd_tunnel_test(struct loc grid)
 {
+
 	/* Must have knowledge */
-	if (!square_isknown(cave, y, x)) {
+	if (!square_isknown(cave, grid)) {
 		msg("You see nothing there.");
 		return (false);
 	}
 
 	/* Titanium */
-	if (square_isperm(cave, y, x)) {
+	if (square_isperm(cave, grid)) {
 		msg("This seems to be permanent rock.");
 		return (false);
 	}
 
 	/* Must be a wall/door/etc */
-	if (!(square_isdiggable(cave, y, x) || square_iscloseddoor(cave, y, x))) {
+	if (!(square_isdiggable(cave, grid) || square_iscloseddoor(cave, grid))) {
 		msg("You see nothing there to tunnel.");
 		return (false);
 	}
@@ -468,20 +467,20 @@ static bool do_cmd_tunnel_test(int y, int x)
  * of the room, and whose "illumination" status do not change with
  * the rest of the room.
  */
-static bool twall(int y, int x)
+static bool twall(struct loc grid)
 {
 	/* Paranoia -- Require a wall or door or some such */
-	if (!(square_isdiggable(cave, y, x) || square_iscloseddoor(cave, y, x)))
+	if (!(square_isdiggable(cave, grid) || square_iscloseddoor(cave, grid)))
 		return (false);
 
 	/* Sound */
 	sound(MSG_DIG);
 
 	/* Forget the wall */
-	square_forget(cave, y, x);
+	square_forget(cave, grid);
 
 	/* Remove the feature */
-	square_tunnel_wall(cave, y, x);
+	square_tunnel_wall(cave, grid);
 
 	/* Update the visuals */
 	player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
@@ -498,24 +497,41 @@ static bool twall(int y, int x)
  * Uses twall() (above) to do all "terrain feature changing".
  * Returns true if repeated commands may continue.
  */
-static bool do_cmd_tunnel_aux(int y, int x)
+static bool do_cmd_tunnel_aux(struct loc grid)
 {
 	bool more = false;
 	int digging_chances[DIGGING_MAX];
 	bool okay = false;
-	bool gold = square_hasgoldvein(cave, y, x);
-	bool rubble = square_isrubble(cave, y, x);
+	bool gold = square_hasgoldvein(cave, grid);
+	bool rubble = square_isrubble(cave, grid);
+	int weapon_slot = slot_by_name(player, "weapon");
+	struct object *current_weapon = slot_object(player, weapon_slot);
+	struct object *best_digger = NULL;
 
 	/* Verify legality */
-	if (!do_cmd_tunnel_test(y, x)) return (false);
+	if (!do_cmd_tunnel_test(grid)) return (false);
 
+	/* Find what we're digging with and our chance of success */
+	best_digger = player_best_digger(player);
+	if (best_digger && best_digger != current_weapon) {
+		player->body.slots[weapon_slot].obj = best_digger;
+		player->upkeep->update |= (PU_BONUS);
+		update_stuff(player);
+	}
 	calc_digging_chances(&player->state, digging_chances);
 
 	/* Do we succeed? */
-	okay = (digging_chances[square_digging(cave, y, x) - 1] > randint0(1600));
+	okay = (digging_chances[square_digging(cave, grid) - 1] > randint0(1600));
+
+	/* Swap back */
+	if (best_digger && best_digger != current_weapon) {
+		player->body.slots[weapon_slot].obj = current_weapon;
+		player->upkeep->update |= (PU_BONUS);
+		update_stuff(player);
+	}
 
 	/* Success */
-	if (okay && twall(y, x)) {
+	if (okay && twall(grid)) {
 		/* Rubble is a special case - could be handled more generally NRM */
 		if (rubble) {
 			/* Message */
@@ -524,17 +540,17 @@ static bool do_cmd_tunnel_aux(int y, int x)
 			/* Place an object (except in town) */
 			if ((randint0(100) < 10) && player->depth) {
 				/* Create a simple object */
-				place_object(cave, y, x, player->depth, false, false,
+				place_object(cave, grid, player->depth, false, false,
 							 ORIGIN_RUBBLE, 0);
 
 				/* Observe the new object */
-				if (!ignore_item_ok(square_object(cave, y, x)) &&
-					square_isseen(cave, y, x))
+				if (!ignore_item_ok(square_object(cave, grid)) &&
+					square_isseen(cave, grid))
 					msg("You have found something!");
 			} 
 		} else if (gold) {
 			/* Found treasure */
-			place_gold(cave, y, x, player->depth, ORIGIN_FLOOR);
+			place_gold(cave, grid, player->depth, ORIGIN_FLOOR);
 			msg("You have found something!");
 		} else {
 			msg("You have finished the tunnel.");
@@ -545,7 +561,7 @@ static bool do_cmd_tunnel_aux(int y, int x)
 			msg("You dig in the rubble.");
 		else
 			msg("You tunnel into the %s.",
-				square_apparent_name(cave, player, y, x));
+				square_apparent_name(cave, player, grid));
 		more = true;
 	}
 
@@ -562,7 +578,8 @@ static bool do_cmd_tunnel_aux(int y, int x)
  */
 void do_cmd_tunnel(struct command *cmd)
 {
-	int y, x, dir;
+	struct loc grid;
+	int dir;
 	bool more = false;
 
 	/* Get arguments */
@@ -570,11 +587,10 @@ void do_cmd_tunnel(struct command *cmd)
 		return;
 
 	/* Get location */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
+	grid = loc_sum(player->grid, ddgrid[dir]);
 
 	/* Oops */
-	if (!do_cmd_tunnel_test(y, x)) {
+	if (!do_cmd_tunnel_test(grid)) {
 		/* Cancel repeat */
 		disturb(player, 0);
 		return;
@@ -586,17 +602,16 @@ void do_cmd_tunnel(struct command *cmd)
 	/* Apply confusion */
 	if (player_confuse_dir(player, &dir, false)) {
 		/* Get location */
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
+		grid = loc_sum(player->grid, ddgrid[dir]);
 	}
 
 	/* Attack any monster we run into */
-	if (cave->squares[y][x].mon > 0) {
+	if (square(cave, grid).mon > 0) {
 		msg("There is a monster in the way!");
-		py_attack(player, y, x);
+		py_attack(player, grid);
 	} else {
 		/* Tunnel through walls */
-		more = do_cmd_tunnel_aux(y, x);
+		more = do_cmd_tunnel_aux(grid);
 	}
 
 	/* Cancel repetition unless we can continue */
@@ -606,20 +621,20 @@ void do_cmd_tunnel(struct command *cmd)
 /**
  * Determine if a given grid may be "disarmed"
  */
-static bool do_cmd_disarm_test(int y, int x)
+static bool do_cmd_disarm_test(struct loc grid)
 {
 	/* Must have knowledge */
-	if (!square_isknown(cave, y, x)) {
+	if (!square_isknown(cave, grid)) {
 		msg("You see nothing there.");
 		return false;
 	}
 
 	/* Look for a closed, unlocked door to lock */
-	if (square_iscloseddoor(cave, y, x) && !square_islockeddoor(cave, y, x))
+	if (square_iscloseddoor(cave, grid) && !square_islockeddoor(cave, grid))
 		return true;
 
 	/* Look for a trap */
-	if (!square_isdisarmabletrap(cave, y, x)) {
+	if (!square_isdisarmabletrap(cave, grid)) {
 		msg("You see nothing there to disarm.");
 		return false;
 	}
@@ -636,13 +651,13 @@ static bool do_cmd_disarm_test(int y, int x)
  *
  * Returns true if repeated commands may continue
  */
-static bool do_cmd_lock_door(int y, int x)
+static bool do_cmd_lock_door(struct loc grid)
 {
 	int i, j, power;
 	bool more = false;
 
 	/* Verify legality */
-	if (!do_cmd_disarm_test(y, x)) return false;
+	if (!do_cmd_disarm_test(grid)) return false;
 
 	/* Get the "disarm" factor */
 	i = player->state.skills[SKILL_DISARM_PHYS];
@@ -665,7 +680,7 @@ static bool do_cmd_lock_door(int y, int x)
 	/* Success */
 	if (randint0(100) < j) {
 		msg("You lock the door.");
-		square_set_door_lock(cave, y, x, power);
+		square_set_door_lock(cave, grid, power);
 	}
 
 	/* Failure -- Keep trying */
@@ -692,14 +707,14 @@ static bool do_cmd_lock_door(int y, int x)
  *
  * Returns true if repeated commands may continue
  */
-static bool do_cmd_disarm_aux(int y, int x)
+static bool do_cmd_disarm_aux(struct loc grid)
 {
 	int skill, power, chance;
-    struct trap *trap = cave->squares[y][x].trap;
+    struct trap *trap = square(cave, grid).trap;
 	bool more = false;
 
 	/* Verify legality */
-	if (!do_cmd_disarm_test(y, x)) return (false);
+	if (!do_cmd_disarm_test(grid)) return (false);
 
     /* Choose first player trap */
 	while (trap) {
@@ -738,8 +753,8 @@ static bool do_cmd_disarm_aux(int y, int x)
 		player_exp_gain(player, 1 + power);
 
 		/* Trap is gone */
-		square_forget(cave, y, x);
-		square_destroy_trap(cave, y, x);
+		square_forget(cave, grid);
+		square_destroy_trap(cave, grid);
 	} else if (randint0(100) < chance) {
 		event_signal(EVENT_INPUT_FLUSH);
 		msg("You failed to disarm the %s.", trap->kind->name);
@@ -748,7 +763,7 @@ static bool do_cmd_disarm_aux(int y, int x)
 		more = true;
 	} else {
 		msg("You set off the %s!", trap->kind->name);
-		hit_trap(y, x);
+		hit_trap(grid, -1);
 	}
 
 	/* Result */
@@ -763,7 +778,8 @@ static bool do_cmd_disarm_aux(int y, int x)
  */
 void do_cmd_disarm(struct command *cmd)
 {
-	int y, x, dir;
+	struct loc grid;
+	int dir;
 	int err;
 
 	struct object *obj;
@@ -772,14 +788,14 @@ void do_cmd_disarm(struct command *cmd)
 	/* Get arguments */
 	err = cmd_get_arg_direction(cmd, "direction", &dir);
 	if (err || dir == DIR_UNKNOWN) {
-		int y2, x2;
+		struct loc grid1;
 		int n_traps, n_chests;
 
-		n_traps = count_feats(&y2, &x2, square_isdisarmabletrap, true);
-		n_chests = count_chests(&y2, &x2, CHEST_TRAPPED);
+		n_traps = count_feats(&grid1, square_isdisarmabletrap, true);
+		n_chests = count_chests(&grid1, CHEST_TRAPPED);
 
 		if (n_traps + n_chests == 1) {
-			dir = coords_to_dir(player, y2, x2);
+			dir = motion_dir(player->grid, grid1);
 			cmd_set_arg_direction(cmd, "direction", dir);
 		} else if (cmd_get_direction(cmd, "direction", &dir, n_chests > 0)) {
 			/* If there are chests to disarm, 5 is allowed as a direction */
@@ -788,14 +804,13 @@ void do_cmd_disarm(struct command *cmd)
 	}
 
 	/* Get location */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
+	grid = loc_sum(player->grid, ddgrid[dir]);
 
 	/* Check for chests */
-	obj = chest_check(y, x, CHEST_TRAPPED);
+	obj = chest_check(grid, CHEST_TRAPPED);
 
 	/* Verify legality */
-	if (!obj && !do_cmd_disarm_test(y, x)) {
+	if (!obj && !do_cmd_disarm_test(grid)) {
 		/* Cancel repeat */
 		disturb(player, 0);
 		return;
@@ -807,28 +822,27 @@ void do_cmd_disarm(struct command *cmd)
 	/* Apply confusion */
 	if (player_confuse_dir(player, &dir, false)) {
 		/* Get location */
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
+		grid = loc_sum(player->grid, ddgrid[dir]);
 
 		/* Check for chests */
-		obj = chest_check(y, x, CHEST_TRAPPED);
+		obj = chest_check(grid, CHEST_TRAPPED);
 	}
 
 
 	/* Monster */
-	if (cave->squares[y][x].mon > 0) {
+	if (square(cave, grid).mon > 0) {
 		msg("There is a monster in the way!");
-		py_attack(player, y, x);
+		py_attack(player, grid);
 	} else if (obj)
 		/* Chest */
-		more = do_cmd_disarm_chest(y, x, obj);
-	else if (square_iscloseddoor(cave, y, x) &&
-			 !square_islockeddoor(cave, y, x))
+		more = do_cmd_disarm_chest(obj);
+	else if (square_iscloseddoor(cave, grid) &&
+			 !square_islockeddoor(cave, grid))
 		/* Door to lock */
-		more = do_cmd_lock_door(y, x);
+		more = do_cmd_lock_door(grid);
 	else
 		/* Disarm trap */
-		more = do_cmd_disarm_aux(y, x);
+		more = do_cmd_disarm_aux(grid);
 
 	/* Cancel repeat unless told not to */
 	if (!more) disturb(player, 0);
@@ -847,12 +861,11 @@ void do_cmd_disarm(struct command *cmd)
  */
 void do_cmd_alter_aux(int dir)
 {
-	int y, x;
+	struct loc grid;
 	bool more = false;
 
 	/* Get location */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
+	grid = loc_sum(player->grid, ddgrid[dir]);
 
 	/* Take a turn */
 	player->upkeep->energy_use = z_info->move_energy;
@@ -860,27 +873,26 @@ void do_cmd_alter_aux(int dir)
 	/* Apply confusion */
 	if (player_confuse_dir(player, &dir, false)) {
 		/* Get location */
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
+		grid = loc_sum(player->grid, ddgrid[dir]);
 	}
 
 	/* Action depends on what's there */
-	if (cave->squares[y][x].mon > 0) {
+	if (square(cave, grid).mon > 0) {
 		/* Attack or steal from monsters */
 		if (player_has(player, PF_STEAL)) {
-			steal_monster_item(square_monster(cave, y, x), -1);
+			steal_monster_item(square_monster(cave, grid), -1);
 		} else {
-			py_attack(player, y, x);
+			py_attack(player, grid);
 		}
-	} else if (square_isdiggable(cave, y, x)) {
+	} else if (square_isdiggable(cave, grid)) {
 		/* Tunnel through walls and rubble */
-		more = do_cmd_tunnel_aux(y, x);
-	} else if (square_iscloseddoor(cave, y, x)) {
+		more = do_cmd_tunnel_aux(grid);
+	} else if (square_iscloseddoor(cave, grid)) {
 		/* Open closed doors */
-		more = do_cmd_open_aux(y, x);
-	} else if (square_isdisarmabletrap(cave, y, x)) {
+		more = do_cmd_open_aux(grid);
+	} else if (square_isdisarmabletrap(cave, grid)) {
 		/* Disarm traps */
-		more = do_cmd_disarm_aux(y, x);
+		more = do_cmd_disarm_aux(grid);
 	} else {
 		/* Oops */
 		msg("You spin around.");
@@ -911,14 +923,13 @@ void do_cmd_alter(struct command *cmd)
  */
 void move_player(int dir, bool disarm)
 {
-	int y = player->py + ddy[dir];
-	int x = player->px + ddx[dir];
+	struct loc grid = loc_sum(player->grid, ddgrid[dir]);
 
-	int m_idx = cave->squares[y][x].mon;
+	int m_idx = square(cave, grid).mon;
 	struct monster *mon = cave_monster(cave, m_idx);
 	bool trapsafe = player_is_trapsafe(player);
-	bool alterable = square_isdisarmabletrap(cave, y, x) ||
-		square_iscloseddoor(cave, y, x);
+	bool alterable = square_isdisarmabletrap(cave, grid) ||
+		square_iscloseddoor(cave, grid);
 
 	/* Many things can happen on movement */
 	if (m_idx > 0) {
@@ -926,54 +937,53 @@ void move_player(int dir, bool disarm)
 		if (monster_is_mimicking(mon)) {
 			become_aware(mon);
 
-			/* Mimic wakes up */
-			mon_clear_timed(mon, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, false);
-
+			/* Mimic wakes up and becomes aware*/
+			monster_wake(mon, false, 100);
 		} else {
-			py_attack(player, y, x);
+			py_attack(player, grid);
 		}
-	} else if (alterable && disarm && square_isknown(cave, y, x)) {
+	} else if (alterable && disarm && square_isknown(cave, grid)) {
 		/* Auto-repeat if not already repeating */
 		if (cmd_get_nrepeats() == 0)
 			cmd_set_repeat(99);
 		do_cmd_alter_aux(dir);
-	} else if (player->upkeep->running && square_isdisarmabletrap(cave, y, x)
+	} else if (player->upkeep->running && square_isdisarmabletrap(cave, grid)
 		&& !trapsafe) {
 		/* Stop running before known traps */
 		disturb(player, 0);
-	} else if (!square_ispassable(cave, y, x)) {
+	} else if (!square_ispassable(cave, grid)) {
 		disturb(player, 0);
 
 		/* Notice unknown obstacles, mention known obstacles */
-		if (!square_isknown(cave, y, x)) {
-			if (square_isrubble(cave, y, x)) {
+		if (!square_isknown(cave, grid)) {
+			if (square_isrubble(cave, grid)) {
 				msgt(MSG_HITWALL,
 					 "You feel a pile of rubble blocking your way.");
-				square_memorize(cave, y, x);
-				square_light_spot(cave, y, x);
-			} else if (square_iscloseddoor(cave, y, x)) {
+				square_memorize(cave, grid);
+				square_light_spot(cave, grid);
+			} else if (square_iscloseddoor(cave, grid)) {
 				msgt(MSG_HITWALL, "You feel a door blocking your way.");
-				square_memorize(cave, y, x);
-				square_light_spot(cave, y, x);
+				square_memorize(cave, grid);
+				square_light_spot(cave, grid);
 			} else {
 				msgt(MSG_HITWALL, "You feel a wall blocking your way.");
-				square_memorize(cave, y, x);
-				square_light_spot(cave, y, x);
+				square_memorize(cave, grid);
+				square_light_spot(cave, grid);
 			}
 		} else {
-			if (square_isrubble(cave, y, x))
+			if (square_isrubble(cave, grid))
 				msgt(MSG_HITWALL,
 					 "There is a pile of rubble blocking your way.");
-			else if (square_iscloseddoor(cave, y, x))
+			else if (square_iscloseddoor(cave, grid))
 				msgt(MSG_HITWALL, "There is a door blocking your way.");
 			else
 				msgt(MSG_HITWALL, "There is a wall blocking your way.");
 		}
-	} else if (square_isdamaging(cave, y, x)) {
+	} else if (square_isdamaging(cave, grid)) {
 		/* Some terrain can damage the player */
 		bool step = true;
-		struct feature *feat = square_feat(cave, y, x);
-		int dam_taken = player_check_terrain_damage(player, y, x);
+		struct feature *feat = square_feat(cave, grid);
+		int dam_taken = player_check_terrain_damage(player, grid);
 
 		/* Check if running, or going to cost more than a third of hp */
 		if (player->upkeep->running) {
@@ -990,7 +1000,7 @@ void move_player(int dir, bool disarm)
 		/* Enter if OK or confirmed. */
 		if (step) {
 			/* Move player */
-			monster_swap(player->py, player->px, y, x);
+			monster_swap(player->grid, grid);
 
 			/* Update view and search */
 			update_view(cave, player);
@@ -998,8 +1008,8 @@ void move_player(int dir, bool disarm)
 		}
 	} else {
 		/* See if trap detection status will change */
-		bool old_dtrap = square_isdtrap(cave, player->py, player->px);
-		bool new_dtrap = square_isdtrap(cave, y, x);
+		bool old_dtrap = square_isdtrap(cave, player->grid);
+		bool new_dtrap = square_isdtrap(cave, grid);
 
 		/* Note the change in the detect status */
 		if (old_dtrap != new_dtrap)
@@ -1013,10 +1023,10 @@ void move_player(int dir, bool disarm)
 		}
 
 		/* Move player */
-		monster_swap(player->py, player->px, y, x);
+		monster_swap(player->grid, grid);
 
 		/* Handle store doors, or notice objects */
-		if (square_isshop(cave, y, x)) {
+		if (square_isshop(cave, grid)) {
 			if (player_is_shapechanged(player)) {
 				msg("There is a scream and the door slams shut!");
 				return;
@@ -1029,17 +1039,17 @@ void move_player(int dir, bool disarm)
 			event_signal(EVENT_LEAVE_STORE);
 			event_remove_handler_type(EVENT_LEAVE_STORE);
 		} else {
-			square_know_pile(cave, y, x);
+			square_know_pile(cave, grid);
 			cmdq_push(CMD_AUTOPICKUP);
 		}
 
 		/* Discover invisible traps, set off visible ones */
-		if (square_issecrettrap(cave, y, x)) {
+		if (square_issecrettrap(cave, grid)) {
 			disturb(player, 0);
-			hit_trap(y, x);
-		} else if (square_isdisarmabletrap(cave, y, x) && !trapsafe) {
+			hit_trap(grid, 0);
+		} else if (square_isdisarmabletrap(cave, grid) && !trapsafe) {
 			disturb(player, 0);
-			hit_trap(y, x);
+			hit_trap(grid, 0);
 		}
 
 		/* Update view and search */
@@ -1053,9 +1063,9 @@ void move_player(int dir, bool disarm)
 /**
  * Determine if a given grid may be "walked"
  */
-static bool do_cmd_walk_test(int y, int x)
+static bool do_cmd_walk_test(struct loc grid)
 {
-	int m_idx = cave->squares[y][x].mon;
+	int m_idx = square(cave, grid).mon;
 	struct monster *mon = cave_monster(cave, m_idx);
 
 	/* Allow attack on visible monsters if unafraid */
@@ -1078,15 +1088,15 @@ static bool do_cmd_walk_test(int y, int x)
 	}
 
 	/* If we don't know the grid, allow attempts to walk into it */
-	if (!square_isknown(cave, y, x))
+	if (!square_isknown(cave, grid))
 		return true;
 
 	/* Require open space */
-	if (!square_ispassable(cave, y, x)) {
-		if (square_isrubble(cave, y, x)) {
+	if (!square_ispassable(cave, grid)) {
+		if (square_isrubble(cave, grid)) {
 			/* Rubble */
 			msgt(MSG_HITWALL, "There is a pile of rubble in the way!");
-		} else if (square_iscloseddoor(cave, y, x)) {
+		} else if (square_iscloseddoor(cave, grid)) {
 			/* Door */
 			return true;
 		} else {
@@ -1111,12 +1121,22 @@ static bool do_cmd_walk_test(int y, int x)
  */
 void do_cmd_walk(struct command *cmd)
 {
-	int x, y, dir;
+	struct loc grid;
+	int dir;
 	bool trapsafe = player_is_trapsafe(player) ? true : false;
 
 	/* Get arguments */
 	if (cmd_get_direction(cmd, "direction", &dir, false) != CMD_OK)
 		return;
+
+	/* If we're in a web, deal with that */
+	if (square_iswebbed(cave, player->grid)) {
+		/* Clear the web, finish turn */
+		msg("You clear the web.");
+		square_destroy_trap(cave, player->grid);
+		player->upkeep->energy_use = z_info->move_energy;
+		return;
+	}
 
 	/* Apply confusion if necessary */
 	/* Confused movements use energy no matter what */
@@ -1124,15 +1144,14 @@ void do_cmd_walk(struct command *cmd)
 		player->upkeep->energy_use = z_info->move_energy;
 	
 	/* Verify walkability */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
-	if (!do_cmd_walk_test(y, x))
+	grid = loc_sum(player->grid, ddgrid[dir]);
+	if (!do_cmd_walk_test(grid))
 		return;
 
 	player->upkeep->energy_use = z_info->move_energy / player->state.num_moves;
 
 	/* Attempt to disarm unless it's a trap and we're trapsafe */
-	move_player(dir, !(square_isdisarmabletrap(cave, y, x) && trapsafe));
+	move_player(dir, !(square_isdisarmabletrap(cave, grid) && trapsafe));
 }
 
 
@@ -1141,20 +1160,29 @@ void do_cmd_walk(struct command *cmd)
  */
 void do_cmd_jump(struct command *cmd)
 {
-	int x, y, dir;
+	struct loc grid;
+	int dir;
 
 	/* Get arguments */
 	if (cmd_get_direction(cmd, "direction", &dir, false) != CMD_OK)
 		return;
+
+	/* If we're in a web, deal with that */
+	if (square_iswebbed(cave, player->grid)) {
+		/* Clear the web, finish turn */
+		msg("You clear the web.");
+		square_destroy_trap(cave, player->grid);
+		player->upkeep->energy_use = z_info->move_energy;
+		return;
+	}
 
 	/* Apply confusion if necessary */
 	if (player_confuse_dir(player, &dir, false))
 		player->upkeep->energy_use = z_info->move_energy;
 
 	/* Verify walkability */
-	y = player->py + ddy[dir];
-	x = player->px + ddx[dir];
-	if (!do_cmd_walk_test(y, x))
+	grid = loc_sum(player->grid, ddgrid[dir]);
+	if (!do_cmd_walk_test(grid))
 		return;
 
 	player->upkeep->energy_use = z_info->move_energy / player->state.num_moves;
@@ -1170,7 +1198,8 @@ void do_cmd_jump(struct command *cmd)
  */
 void do_cmd_run(struct command *cmd)
 {
-	int x, y, dir;
+	struct loc grid;
+	int dir;
 
 	/* Get arguments */
 	if (cmd_get_direction(cmd, "direction", &dir, false) != CMD_OK)
@@ -1181,9 +1210,8 @@ void do_cmd_run(struct command *cmd)
 
 	/* Get location */
 	if (dir) {
-		y = player->py + ddy[dir];
-		x = player->px + ddx[dir];
-		if (!do_cmd_walk_test(y, x))
+		grid = loc_sum(player->grid, ddgrid[dir]);
+		if (!do_cmd_walk_test(grid))
 			return;
 			
 		/* Hack: convert repeat count to running count */
@@ -1243,7 +1271,7 @@ void do_cmd_hold(struct command *cmd)
 	do_autopickup(player);
 
 	/* Enter a store if we are on one, otherwise look at the floor */
-	if (square_isshop(cave, player->py, player->px)) {
+	if (square_isshop(cave, player->grid)) {
 		if (player_is_shapechanged(player)) {
 			msg("There is a scream and the door slams shut!");
 			return;
@@ -1260,7 +1288,7 @@ void do_cmd_hold(struct command *cmd)
 		player->upkeep->energy_use = 0;
 	} else {
 	    event_signal(EVENT_SEEFLOOR);
-		square_know_pile(cave, player->py, player->px);
+		square_know_pile(cave, player->grid);
 	}
 }
 
@@ -1469,7 +1497,7 @@ void do_cmd_mon_command(struct command *cmd)
 
 			/* Pick a random spell and cast it */
 			rsf_copy(f, mon->race->spell_flags);
-			spell_index = choose_attack_spell(f);
+			spell_index = choose_attack_spell(f, true, true);
 			if (!spell_index) {
 				msg("This monster has no spells!");
 				return;
@@ -1500,7 +1528,7 @@ void do_cmd_mon_command(struct command *cmd)
 			struct object *obj = get_random_monster_object(mon);
 			obj->held_m_idx = 0;
 			pile_excise(&mon->held_obj, obj);
-			drop_near(cave, &obj, 0, mon->fy, mon->fx, true);
+			drop_near(cave, &obj, 0, mon->grid, true);
 
 			break;
 		}
@@ -1509,7 +1537,7 @@ void do_cmd_mon_command(struct command *cmd)
 			break;
 		}
 		case CMD_WALK: {
-			int ny, nx;
+			struct loc grid;
 			bool can_move = false;
 			bool has_hit = false;
 			struct monster *t_mon = NULL;
@@ -1517,11 +1545,10 @@ void do_cmd_mon_command(struct command *cmd)
 			/* Get arguments */
 			if (cmd_get_direction(cmd, "direction", &dir, false) != CMD_OK)
 				return;
-			ny = mon->fy + ddy[dir];
-			nx = mon->fx + ddx[dir];
+			grid = loc_sum(mon->grid, ddgrid[dir]);
 
 			/* Monster there - attack */
-			t_mon = square_monster(cave, ny, nx);
+			t_mon = square_monster(cave, grid);
 			if (t_mon) {
 				/* Attack the monster */
 				if (monster_attack_monster(mon, t_mon)) {
@@ -1529,11 +1556,10 @@ void do_cmd_mon_command(struct command *cmd)
 				} else {
 					can_move = false;
 				}
-			} else if (square_ispassable(cave, ny, nx)) {
+			} else if (square_ispassable(cave, grid)) {
 				/* Floor is open? */
 				can_move = true;
-			} else if (square_iswall(cave, ny, nx) &&
-					   square_isperm(cave, ny, nx)) {
+			} else if (square_iswall(cave, grid) && square_isperm(cave, grid)) {
 				/* Permanent wall in the way */
 				can_move = false;
 			} else {
@@ -1542,6 +1568,7 @@ void do_cmd_mon_command(struct command *cmd)
 				if (monster_is_visible(mon)) {
 					rf_on(lore->flags, RF_PASS_WALL);
 					rf_on(lore->flags, RF_KILL_WALL);
+					rf_on(lore->flags, RF_SMASH_WALL);
 				}
 
 				/* Monster may be able to deal with walls and doors */
@@ -1549,10 +1576,14 @@ void do_cmd_mon_command(struct command *cmd)
 					can_move = true;
 				} else if (rf_has(mon->race->flags, RF_KILL_WALL)) {
 					/* Remove the wall */
-					square_destroy_wall(cave, ny, nx);
+					square_destroy_wall(cave, grid);
 					can_move = true;
-				} else if (square_iscloseddoor(cave, ny, nx) ||
-						   square_issecretdoor(cave, ny, nx)) {
+				} else if (rf_has(mon->race->flags, RF_SMASH_WALL)) {
+					/* Remove everything */
+					square_smash_wall(cave, grid);
+					can_move = true;
+				} else if (square_iscloseddoor(cave, grid) ||
+						   square_issecretdoor(cave, grid)) {
 					bool can_open = rf_has(mon->race->flags, RF_OPEN_DOOR);
 					bool can_bash = rf_has(mon->race->flags, RF_BASH_DOOR);
 
@@ -1565,9 +1596,9 @@ void do_cmd_mon_command(struct command *cmd)
 					/* If the monster can deal with doors, prefer to bash */
 					if (can_bash || can_open) {
 						/* Now outcome depends on type of door */
-						if (square_islockeddoor(cave, ny, nx)) {
+						if (square_islockeddoor(cave, grid)) {
 							/* Test strength against door strength */
-							int k = square_door_power(cave, ny, nx);
+							int k = square_door_power(cave, grid);
 							if (randint0(mon->hp / 10) > k) {
 								if (can_bash) {
 									msg("%s slams against the door.", m_name);
@@ -1576,19 +1607,19 @@ void do_cmd_mon_command(struct command *cmd)
 								}
 
 								/* Reduce the power of the door by one */
-								square_set_door_lock(cave, ny, nx, k - 1);
+								square_set_door_lock(cave, grid, k - 1);
 							}
 						} else {
 							/* Closed or secret door -- always open or bash */
 							if (can_bash) {
-								square_smash_door(cave, ny, nx);
+								square_smash_door(cave, grid);
 
 								msg("You hear a door burst open!");
 
 								/* Fall into doorway */
 								can_move = true;
 							} else {
-								square_open_door(cave, ny, nx);
+								square_open_door(cave, grid);
 								can_move = true;
 							}
 						}
@@ -1599,7 +1630,7 @@ void do_cmd_mon_command(struct command *cmd)
 			if (has_hit) {
 				break;
 			} else if (can_move) {
-				monster_swap(mon->fy, mon->fx, ny, nx);
+				monster_swap(mon->grid, grid);
 				player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 			} else {
 				msg("The way is blocked.");
