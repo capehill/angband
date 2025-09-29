@@ -15,7 +15,7 @@ int setup_tests(void **state) {
 	return 0;
 }
 
-int teardown_tests(void **state) {
+int teardown_tests(void *state) {
 	mem_free(k_info);
 	mem_free(z_info);
 	return 0;
@@ -39,15 +39,16 @@ const char *names[] = {
 
 const char **p[] = { names, names };
 
-int test_names(void *state) {
+static int test_names(void *state) {
 	struct artifact a;
+	char name[16] = "of Prometheus";
 	char *n;
 	int i;
 
 	a.aidx = 1;
 	a.tval = TV_LIGHT;
 	a.sval = 1;
-	a.name = "of Prometheus";
+	a.name = name;
 
 	for (i = 0; i < NAMES_TRIES; i++) {
 		n = artifact_gen_name(&a, p);

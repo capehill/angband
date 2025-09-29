@@ -21,12 +21,15 @@
 
 #include "source.h"
 #include "object.h"
+#include "player-attack.h"
+#include "cmds.h"
+
 
 /* Types of effect */
 typedef enum
 {
 	EF_NONE,
-	#define EFFECT(x, a, b, c, d, e)	EF_##x,
+	#define EFFECT(x, a, b, c, d, e, f)	EF_##x,
 	#include "list-effects.h"
 	#undef EFFECT
 	EF_MAX
@@ -41,6 +44,7 @@ const char *effect_info(const struct effect *effect);
 const char *effect_desc(const struct effect *effect);
 effect_index effect_lookup(const char *name);
 int effect_subtype(int index, const char *type);
+extern expression_base_value_f effect_value_base_by_name(const char *name);
 bool effect_do(struct effect *effect,
 	struct source origin,
 	struct object *obj,
@@ -48,7 +52,8 @@ bool effect_do(struct effect *effect,
 	bool aware,
 	int dir,
 	int beam,
-	int boost);
+	int boost,
+	struct command *cmd);
 void effect_simple(int index,
 	struct source origin,
 	const char *dice_string,

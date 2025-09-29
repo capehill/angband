@@ -26,8 +26,10 @@
 #include "angband.h"
 #include "game-input.h"
 #include "game-event.h"
+#include "init.h"
 #include "ui-display.h"
 #include "ui-game.h"
+#include "ui-init.h"
 #include "ui-input.h"
 #include "ui-keymap.h"
 #include "ui-knowledge.h"
@@ -41,43 +43,53 @@
  */
 void textui_init(void)
 {
-	u32b default_window_flag[ANGBAND_TERM_MAX];
+	uint32_t default_window_flag[ANGBAND_TERM_MAX];
 
 	/* Initialize graphics info and basic pref data */
 	event_signal_message(EVENT_INITSTATUS, 0, "Loading basic pref file...");
 	(void)process_pref_file("pref.prf", false, false);
 
-	/* Sneakily init command list */
-	cmd_init();
+	if (!play_again) {
+		/* Sneakily init command list */
+		cmd_init();
 
-	/* Initialize knowledge things */
-	textui_knowledge_init();
+		/* Initialize knowledge things */
+		textui_knowledge_init();
 
-	/* Initialize input hooks */
-	textui_input_init();
+		/* Initialize input hooks */
+		textui_input_init();
 
-	/* Initialize visual prefs */
-	textui_prefs_init();
+		/* Initialize visual prefs */
+		textui_prefs_init();
 
-	/* Hack -- Increase "icky" depth */
-	screen_save_depth++;
+		/* Increase "icky" depth */
+		screen_save_depth++;
 
-	/* Verify main term */
-	if (!term_screen)
-		quit("Main window does not exist");
+		/* Verify main term */
+		if (!term_screen)
+			quit("Main window does not exist");
 
-	/* Make sure main term is active */
-	Term_activate(term_screen);
+		/* Make sure main term is active */
+		Term_activate(term_screen);
 
-	/* Verify minimum size */
-	if ((Term->hgt < 24) || (Term->wid < 80))
-		plog("Main window is too small - please make it bigger.");
+		/* Verify minimum size */
+		if ((Term->hgt < 24) || (Term->wid < 80))
+			plog("Main window is too small - please make it bigger.");
 
-	/* Hack -- Turn off the cursor */
-	(void)Term_set_cursor(false);
+		/* Turn off the cursor */
+		(void)Term_set_cursor(false);
+
+		/* Update terminals for preference changes. */
+		(void) Term_xtra(TERM_XTRA_REACT, 0);
+		(void) Term_redraw_all();
+	} else {
+		/* Redo knowledge initialization. */
+		textui_knowledge_cleanup();
+		textui_knowledge_init();
+	}
 
 	/* initialize window options that will be overridden by the savefile */
-	memset(window_flag, 0, sizeof(u32b)*ANGBAND_TERM_MAX);
+	memset(window_flag, 0, sizeof(uint32_t)*ANGBAND_TERM_MAX);
 	memset(default_window_flag, 0, sizeof default_window_flag);
 	if (ANGBAND_TERM_MAX > 1) default_window_flag[1] = (PW_MESSAGE);
 	if (ANGBAND_TERM_MAX > 2) default_window_flag[2] = (PW_INVEN);
@@ -105,4 +117,5 @@ void textui_cleanup(void)
 
 	keymap_free();
 	textui_prefs_free();
+	textui_knowledge_cleanup();
 }

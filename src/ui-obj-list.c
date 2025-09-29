@@ -41,11 +41,14 @@
  * \param list is the object list to format.
  * \param tb is the textblock to produce or NULL if only the dimensions need to
  * be calculated.
+ * \param section is the section of the list to format.
  * \param lines_to_display are the number of entries to display (not including
  * the header).
  * \param max_width is the maximum line width.
  * \param prefix is the beginning of the header; the remainder is appended with
  * the number of objects.
+ * \param show_others will, if true, adjust the maximum line length calculation
+ * for the line mentioning the number of objects not shown in the list.
  * \param max_width_result is returned with the width needed to format the list
  * without truncation.
  */
@@ -96,7 +99,7 @@ static void object_list_format_section(const object_list_t *list,
 	for (entry_index = 0; entry_index < total && line_count < lines_to_display;
 		 entry_index++) {
 		char location[20] = { '\0' };
-		byte line_attr;
+		uint8_t line_attr;
 		size_t full_width;
 		const char *direction_y = (list->entries[entry_index].dy <= 0) ? "N" : "S";
 		const char *direction_x = (list->entries[entry_index].dx <= 0) ? "W" : "E";
@@ -128,7 +131,7 @@ static void object_list_format_section(const object_list_t *list,
 		/* textblock_append_pict will safely add the object symbol, regardless
 		 * of ASCII/graphics mode. */
 		if (tb != NULL && tile_width == 1 && tile_height == 1) {
-			byte a = COLOUR_RED;
+			uint8_t a = COLOUR_RED;
 			wchar_t c = L'*';
 
 			if (!is_unknown(list->entries[entry_index].object) &&
@@ -151,8 +154,8 @@ static void object_list_format_section(const object_list_t *list,
 			 */
 			full_width += strlen(line_buffer) - utf8_strlen(line_buffer);
 			line_attr = object_list_entry_line_attribute(&list->entries[entry_index]);
-			textblock_append_c(tb, line_attr, "%-*s%s\n", full_width,
-							   line_buffer, location);
+			textblock_append_c(tb, line_attr, "%-*s%s\n",
+				(int) full_width, line_buffer, location);
 		}
 
 		line_count++;

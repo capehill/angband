@@ -20,10 +20,12 @@
 #include "cave.h"
 #include "game-world.h"
 #include "generate.h"
+#include "obj-ignore.h"
 #include "obj-pile.h"
 #include "obj-util.h"
 #include "player-calcs.h"
 #include "player-timed.h"
+#include "project.h"
 #include "source.h"
 #include "trap.h"
 
@@ -49,7 +51,7 @@ static void project_feature_handler_LIGHT_WEAK(project_feature_handler_context_t
 	const struct loc grid = context->grid;
 
 	/* Turn on the light */
-	sqinfo_on(square(cave, grid).info, SQUARE_GLOW);
+	sqinfo_on(square(cave, grid)->info, SQUARE_GLOW);
 
 	/* Grid is in line of sight */
 	if (square_isview(cave, grid)) {
@@ -70,7 +72,7 @@ static void project_feature_handler_DARK_WEAK(project_feature_handler_context_t 
 
 	if ((player->depth != 0 || !is_daytime()) && !square_isbright(cave, grid)) {
 		/* Turn off the light */
-		sqinfo_off(square(cave, grid).info, SQUARE_GLOW);
+		sqinfo_off(square(cave, grid)->info, SQUARE_GLOW);
 	}
 
 	/* Grid is in line of sight */
@@ -109,17 +111,20 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 		/* Destroy the rubble */
 		square_destroy_rubble(cave, grid);
 
-		/* Hack -- place an object */
+		/* Place an object */
 		if (randint0(100) < 10){
-			if (square_isseen(cave, grid)) {
+			place_object(cave, grid, player->depth, false, false,
+						 ORIGIN_RUBBLE, 0);
+			if (square_object(cave, grid)
+					&& !ignore_item_ok(player,
+					square_object(cave, grid))
+					&& square_isseen(cave, grid)) {
 				msg("There was something buried in the rubble!");
 				context->obvious = true;
 			}
-			place_object(cave, grid, player->depth, false, false,
-						 ORIGIN_RUBBLE, 0);
 		}
 	} else if (square_isdoor(cave, grid)) {
-		/* Hack -- special message */
+		/* Special message */
 		if (square_isseen(cave, grid)) {
 			msg("The door turns into mud!");
 			context->obvious = true;
@@ -158,7 +163,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 
 		/* Destroy the wall */
 		square_destroy_wall(cave, grid);
-	} else if (square_iswall(cave, grid)) {
+	} else if (square_isgranite(cave, grid)) {
 		/* Message */
 		if (square_isseen(cave, grid)) {
 			msg("The wall turns into mud!");
@@ -171,6 +176,9 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 		/* Destroy the wall */
 		square_destroy_wall(cave, grid);
 	}
+
+	/* On the surface, new terrain may be exposed to the sun. */
+	if (cave->depth == 0) expose_to_sun(cave, grid, is_daytime());
 
 	/* Update the visuals */
 	player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
@@ -198,6 +206,9 @@ static void project_feature_handler_KILL_DOOR(project_feature_handler_context_t 
 
 		/* Destroy the feature */
 		square_destroy_door(cave, grid);
+
+		/* On the surface, new terrain may be exposed to the sun. */
+		if (cave->depth == 0) expose_to_sun(cave, grid, is_daytime());
 	}
 }
 
@@ -210,15 +221,15 @@ static void project_feature_handler_KILL_TRAP(project_feature_handler_context_t 
 	if (square_issecretdoor(cave, grid)) {
 		place_closed_door(cave, grid);
 
-		/* Check line of sight */
+		/* Check if visible */
 		if (square_isseen(cave, grid))
 			context->obvious = true;
 	}
 
 	/* Disable traps, unlock doors */
 	if (square_isdisarmabletrap(cave, grid)) {
-		/* Check line of sight */
-		if (square_isview(cave, grid)) {
+		/* Check if visible */
+		if (square_isseen(cave, grid)) {
 			msg("The trap seizes up.");
 			context->obvious = true;
 		}
@@ -229,7 +240,7 @@ static void project_feature_handler_KILL_TRAP(project_feature_handler_context_t 
 		/* Unlock the door */
 		square_unlock_door(cave, grid);
 
-		/* Check line of sound */
+		/* Check line of sound; approximated with square_isview() */
 		if (square_isview(cave, grid)) {
 			msg("Click!");
 			context->obvious = true;
@@ -256,7 +267,7 @@ static void project_feature_handler_MAKE_DOOR(project_feature_handler_context_t 
 	square_add_door(cave, grid, true);
 
 	/* Observe */
-	if (square_isknown(cave, grid))
+	if (square_isseen(cave, grid))
 		context->obvious = true;
 
 	/* Update the visuals */
@@ -308,7 +319,10 @@ static void project_feature_handler_FIRE(project_feature_handler_context_t *cont
 
 	/* Removes webs */
 	if (square_iswebbed(cave, context->grid)) {
-		square_destroy_trap(cave, context->grid);
+		struct trap_kind *web = lookup_trap("web");
+
+		assert(web);
+		square_remove_all_traps_of_type(cave, context->grid, web->tidx);
 	}
 
 	/* Can create lava if extremely powerful. */
@@ -317,6 +331,8 @@ static void project_feature_handler_FIRE(project_feature_handler_context_t *cont
 		/* Forget the floor, make lava. */
 		square_unmark(cave, context->grid);
 		square_set_feat(cave, context->grid, FEAT_LAVA);
+		if (cave->depth == 0)
+			expose_to_sun(cave, context->grid, is_daytime());
 
 		/* Objects that have survived should move */
 		push_object(context->grid);
@@ -344,6 +360,8 @@ static void project_feature_handler_COLD(project_feature_handler_context_t *cont
 		} else {
 			square_set_feat(cave, context->grid, FEAT_PASS_RUBBLE);
 		}
+		if (cave->depth == 0)
+			expose_to_sun(cave, context->grid, is_daytime());
 	}
 }
 
@@ -452,6 +470,8 @@ static void project_feature_handler_ICE(project_feature_handler_context_t *conte
 		} else {
 			square_set_feat(cave, context->grid, FEAT_PASS_RUBBLE);
 		}
+		if (cave->depth == 0)
+			expose_to_sun(cave, context->grid, is_daytime());
 	}
 }
 
@@ -505,6 +525,8 @@ static void project_feature_handler_PLASMA(project_feature_handler_context_t *co
 		/* Forget the floor, make lava. */
 		square_unmark(cave, context->grid);
 		square_set_feat(cave, context->grid, FEAT_LAVA);
+		if (cave->depth == 0)
+			expose_to_sun(cave, context->grid, is_daytime());
 
 		/* Objects that have survived should move */
 		push_object(context->grid);
@@ -670,8 +692,7 @@ static const project_feature_handler_f feature_handlers[] = {
  *
  * \param origin is the origin of the effect
  * \param r is the distance from the centre of the effect
- * \param y the coordinates of the grid being handled
- * \param x the coordinates of the grid being handled
+ * \param grid is the coordinates of the grid being handled
  * \param dam is the "damage" from the effect at distance r from the centre
  * \param typ is the projection (PROJ_) type
  * \return whether the effects were obvious
@@ -679,7 +700,7 @@ static const project_feature_handler_f feature_handlers[] = {
  * Note that this function determines if the player can see anything that
  * happens by taking into account: blindness, line-of-sight, and illumination.
  *
- * Hack -- effects on grids which are memorized but not in view are also seen.
+ * Effects on grids which are memorized but not in view are also seen.
  */
 bool project_f(struct source origin, int r, struct loc grid, int dam, int typ)
 {

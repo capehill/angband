@@ -20,10 +20,10 @@
 #include "angband.h"
 #include "cmds.h"
 #include "effects.h"
+#include "effects-info.h"
 #include "game-world.h"
 #include "init.h"
 #include "monster.h"
-#include "mon-summon.h"
 #include "mon-util.h"
 #include "obj-curse.h"
 #include "obj-gear.h"
@@ -36,7 +36,6 @@
 #include "obj-util.h"
 #include "player-attack.h"
 #include "player-calcs.h"
-#include "player-timed.h"
 #include "project.h"
 #include "z-textblock.h"
 
@@ -64,22 +63,10 @@ static const struct origin_type {
 	#undef ORIGIN
 };
 
-static struct {
-	int index;
-	int args;
-	int efinfo_flag;
-	const char *desc;
-} base_descs[] = {
-	{ EF_NONE, 0, EFINFO_NONE, "" },
-	#define EFFECT(x, a, b, c, d, e) { EF_##x, c, d, e },
-	#include "list-effects.h"
-	#undef EFFECT
-};
-
 
 /**
  * ------------------------------------------------------------------------
- * List-writiing utility code
+ * List-writing utility code
  * ------------------------------------------------------------------------ */
 
 /**
@@ -93,7 +80,7 @@ static void info_out_list(textblock *tb, const char *list[], size_t count)
 	size_t i;
 
 	for (i = 0; i < count; i++) {
-		textblock_append(tb, list[i]);
+		textblock_append(tb, "%s", list[i]);
 		if (i != (count - 1)) textblock_append(tb, ", ");
 	}
 
@@ -137,16 +124,12 @@ static bool describe_curses(textblock *tb, const struct object *obj,
 	for (i = 1; i < z_info->curse_max; i++) {
 		if (c[i].power) {
 			textblock_append(tb, "It ");
-			textblock_append_c(tb, COLOUR_L_RED, curses[i].desc);
+			textblock_append_c(tb, COLOUR_L_RED, "%s", curses[i].desc);
 			if (c[i].power == 100) {
 				textblock_append(tb, "; this curse cannot be removed");
 			}
 			textblock_append(tb, ".\n");
 		}
-	}
-	/* Say if curse removal has been tried */
-	if (of_has(obj->flags, OF_FRAGILE)) {
-		textblock_append(tb, "Attempting to uncurse it may destroy it.\n");
 	}
 
 	return true;
@@ -394,7 +377,7 @@ static bool describe_slays(textblock *tb, const struct object *obj)
 	for (i = 1; i < z_info->slay_max; i++) {
 		if (!s[i]) continue;
 
-		textblock_append(tb, slays[i].name);
+		textblock_append(tb, "%s", slays[i].name);
 		if (slays[i].multiplier > 3)
 			textblock_append(tb, " (powerfully)");
 		if (count > 1)
@@ -434,7 +417,7 @@ static bool describe_brands(textblock *tb, const struct object *obj)
 
 		if (brands[i].multiplier < 3)
 			textblock_append(tb, "weak ");
-		textblock_append(tb, brands[i].name);
+		textblock_append(tb, "%s", brands[i].name);
 		if (count > 1)
 			textblock_append(tb, ", ");
 		else
@@ -446,64 +429,363 @@ static bool describe_brands(textblock *tb, const struct object *obj)
 }
 
 /**
+ * Sum over the critical levels for O-combat to get the expected number of
+ * dice added when a critical happens.
+ */
+static struct my_rational sum_o_criticals(const struct o_critical_level *head)
+{
+	struct my_rational remaining_chance = my_rational_construct(1, 1);
+	struct my_rational added_dice = my_rational_construct(0, 1);
+
+	while (head) {
+		/* The last level of criticals takes all the remainder. */
+		struct my_rational level_added_dice = my_rational_construct(
+			head->added_dice, (head->next) ? head->chance : 1);
+
+		level_added_dice = my_rational_product(&level_added_dice,
+			&remaining_chance);
+		added_dice = my_rational_sum(&added_dice, &level_added_dice);
+		if (head->next) {
+			struct my_rational pr_not_this = my_rational_construct(
+				head->chance - 1, head->chance);
+
+			remaining_chance = my_rational_product(
+				&remaining_chance, &pr_not_this);
+		}
+		head = head->next;
+	}
+
+	return added_dice;
+}
+
+/**
  * Account for criticals in the calculation of melee prowess
  *
  * Note -- This relies on the criticals being an affine function
  * of previous damage, since we are used to transform the mean
  * of a roll.
- *
- * Also note -- rounding error makes this not completely accurate
- * (but for the big crit weapons like Grond an odd point of damage
- * won't be missed)
- *
- * This code written according to the KISS principle.  650 adds
- * are cheaper than a FOV call and get the job done fine.
  */
 static void calculate_melee_crits(struct player_state *state, int weight,
-		int plus, int *mult, int *add, int *div)
+		int plus, int *mult, int *add, int *div, int *mult_round,
+		int *add_round, int *scl_round)
 {
-	int k, to_crit = weight + 5 * (state->to_h + plus) + 3 * player->lev;
-	to_crit = MIN(5000, MAX(0, to_crit));
-
-	*mult = *add = 0;
-
-	for (k = weight; k < weight + 650; k++) {
-		if (k <  400) { *mult += 4; *add += 10; continue; }
-		if (k <  700) { *mult += 4; *add += 20; continue; }
-		if (k <  900) { *mult += 6; *add += 30; continue; }
-		if (k < 1300) { *mult += 6; *add += 40; continue; }
-		                *mult += 7; *add += 50;
-	}
-
 	/*
-	 * Scale the output down to a more reasonable size, to prevent
-	 * integer overflow downstream.
+	 * Pessimistically assume that the target is not debuffed; otherwise
+	 * this must agree with the calculations in player-attack.c's
+	 * critical_melee().
 	 */
-	*mult = 100 + to_crit*(*mult - 1300)/(50*1300);
-	*add  = *add * to_crit / (500*50);
-	*div  = 100;
+	int crit_chance = z_info->m_crit_chance_weight_scl * weight
+		+ z_info->m_crit_chance_toh_scl * (state->to_h + plus)
+		+ z_info->m_crit_chance_level_scl * player->lev
+		+ z_info->m_crit_chance_toh_skill_scl
+			* state->skills[SKILL_TO_HIT_MELEE]
+		+ z_info->m_crit_chance_offset;
+	crit_chance = MIN(z_info->m_crit_chance_range, MAX(0, crit_chance));
+
+	/* Reported results (*mult and *add) are scaled up by 100. */
+	*div = 100;
+
+	if (crit_chance > 0 && z_info->m_crit_level_head) {
+		/*
+		 * Now sum over the possible values of the critical power.
+		 */
+		const struct critical_level *this_l = z_info->m_crit_level_head;
+		int min_power = z_info->m_crit_power_weight_scl * weight + 1;
+		int max_power = min_power - 1 + z_info->m_crit_power_random;
+		int mult_sum = 0;
+		int add_sum = 0;
+		int scale;
+
+		while (min_power <= max_power) {
+			int w;
+
+			if (max_power < this_l->cutoff || !this_l->next) {
+				/*
+				 * All the remaining possible critical powers
+				 * fall in this band.
+				 */
+				w = max_power - min_power + 1;
+				min_power = max_power + 1;
+			} else  {
+				if (min_power >= this_l->cutoff) {
+					/*
+					 * This band doesn't overlap the
+					 * possible powers.
+					 */
+					this_l = this_l->next;
+					continue;
+				}
+				/*
+				 * This band is either fully covered or has its
+				 * upper part covered by the possible powers.
+				 */
+				w = this_l->cutoff - min_power;
+				min_power = this_l->cutoff;
+			}
+			mult_sum += w * (this_l->mult - 1);
+			add_sum += w * this_l->add;
+			this_l = this_l->next;
+		}
+		/*
+		 * In other words, the result of no critical (multipler of 1
+		 * and no additive term) plus the scaled result of summing over
+		 * the possible criticals truncated to the nearest integer.
+		 */
+		scale = (z_info->m_crit_chance_range / *div)
+			* z_info->m_crit_power_random;
+		*mult = *div + (crit_chance * mult_sum) / scale;
+		*add = (crit_chance * add_sum) / scale;
+		*mult_round = (crit_chance * mult_sum) % scale;
+		*add_round = (crit_chance * add_sum) % scale;
+		*scl_round = scale;
+	} else {
+		*mult = 100;
+		*add = 0;
+		*mult_round = 0;
+		*add_round = 0;
+		*scl_round = 1;
+	}
+}
+
+/**
+ * Account for criticals in the calculation of melee prowess for O-combat;
+ * crit chance * average number of dice added
+ *
+ * \param state points to the state for the player of interest.
+ * \param obj is the melee weapon of interest.
+ * \param dice is dereferenced and set to 100 * crit chance * average number
+ * of dice added.
+ * \param frac_dice is dereferenced and set to the fractional part truncated
+ * from *dice when converted to an integer.
+ */
+static void o_calculate_melee_crits(struct player_state *state,
+		const struct object *obj, unsigned int *dice,
+		struct my_rational *frac_dice)
+{
+	if (z_info->o_m_crit_level_head) {
+		/*
+		 * Pessimistically assume that the target is not debuffed.
+		 * Otherwise, these calculations must agree with those in
+		 * player-attack.c's o_critical_melee().
+		 */
+		struct player_state old_state = player->state;
+		int power, chance_num, chance_den;
+
+		if (z_info->o_m_max_added.n == 0) {
+			z_info->o_m_max_added =
+				sum_o_criticals(z_info->o_m_crit_level_head);
+		}
+
+		player->state = *state;
+		power = chance_of_melee_hit_base(player, obj);
+		player->state = old_state;
+		power = (power * z_info->o_m_crit_power_toh_scl_num)
+			/ z_info->o_m_crit_power_toh_scl_den;
+		chance_num = power * z_info->o_m_crit_chance_power_scl_num;
+		chance_den = power * z_info->o_m_crit_chance_power_scl_den
+			+ z_info->o_m_crit_chance_add_den;
+		if (chance_den > 0 && chance_num > 0) {
+			unsigned int tr;
+
+			if (chance_num < chance_den) {
+				/*
+				 * Critical only happens some of the time.
+				 * Scale by the chance and 100.
+				 */
+				struct my_rational t = my_rational_construct(
+					chance_num, chance_den);
+
+				t = my_rational_product(&t,
+					&z_info->o_m_max_added);
+				*dice = my_rational_to_uint(&t, 100, &tr);
+				*frac_dice = my_rational_construct(tr, t.d);
+			} else {
+				/* Critical always happens.  Scale by 100. */
+				*dice = my_rational_to_uint(
+					&z_info->o_m_max_added, 100, &tr);
+				*frac_dice = my_rational_construct(tr,
+					z_info->o_m_max_added.d);
+			}
+		} else {
+			/* No chance of happening so no additional damage. */
+			*dice = 0;
+			*frac_dice = my_rational_construct(0, 1);
+		}
+	} else {
+		/* No critical levels defined so no additional damage. */
+		*dice = 0;
+		*frac_dice = my_rational_construct(0, 1);
+	}
 }
 
 /**
  * Missile crits follow the same approach as melee crits.
  */
 static void calculate_missile_crits(struct player_state *state, int weight,
-		int plus, int *mult, int *add, int *div)
+		int plus, bool launched, int *mult, int *add, int *div,
+		int *mult_round, int *add_round, int *scl_round)
 {
-	int k, to_crit = weight + 4 * (state->to_h + plus) + 2 * player->lev;
-	to_crit = MIN(5000, MAX(0, to_crit));
+	/*
+	 * Pessimistically assume that the target is not debuffed; otherwise
+	 * this must agree with the calculations in player-attack.c's
+	 * critical_shot().
+	 */
+	int crit_chance = z_info->r_crit_chance_weight_scl * weight
+		+ z_info->r_crit_chance_toh_scl * (state->to_h + plus)
+		+ z_info->r_crit_chance_level_scl * player->lev
+		+ z_info->r_crit_chance_offset;
 
-	*mult = *add = 0;
-
-	for (k = weight; k < weight + 500; k++) {
-		if (k <  500) { *mult += 2; *add +=  5; continue; }
-		if (k < 1000) { *mult += 2; *add += 10; continue; }
-		                *mult += 3; *add += 15;
+	if (launched) {
+		crit_chance += z_info->r_crit_chance_launched_toh_skill_scl
+			* player->state.skills[SKILL_TO_HIT_BOW];
+	} else {
+		crit_chance += z_info->r_crit_chance_thrown_toh_skill_scl
+			* player->state.skills[SKILL_TO_HIT_THROW];
 	}
+	crit_chance = MIN(z_info->r_crit_chance_range, MAX(0, crit_chance));
 
-	*mult = 100 + to_crit * (*mult - 500) / (500 * 50);
-	*add  = *add * to_crit / (500 * 50);
-	*div  = 100;
+	/* Reported results (*mult and *add) are scaled up by 100. */
+	*div = 100;
+
+	if (crit_chance > 0 && z_info->r_crit_level_head) {
+		/*
+		 * Now sum over the possible values of the critical power.
+		 */
+		const struct critical_level *this_l = z_info->r_crit_level_head;
+		int min_power = z_info->r_crit_power_weight_scl * weight + 1;
+		int max_power = min_power - 1 + z_info->r_crit_power_random;
+		int mult_sum = 0;
+		int add_sum = 0;
+		int scale;
+
+		while (min_power <= max_power) {
+			int w;
+
+			if (max_power < this_l->cutoff || !this_l->next) {
+				/*
+				 * All the remaining possible critical powers
+				 * fall in this band.
+				 */
+				w = max_power - min_power + 1;
+				min_power = max_power + 1;
+			} else  {
+				if (min_power >= this_l->cutoff) {
+					/*
+					 * This band doesn't overlap the
+					 * possible powers.
+					 */
+					this_l = this_l->next;
+					continue;
+				}
+				/*
+				 * This band is either fully covered or has its
+				 * upper part covered by the possible powers.
+				 */
+				w = this_l->cutoff - min_power;
+				min_power = this_l->cutoff;
+			}
+			mult_sum += w * (this_l->mult - 1);
+			add_sum += w * this_l->add;
+			this_l = this_l->next;
+		}
+		/*
+		 * In other words, the result of no critical (multipler of 1
+		 * and no additive term) plus the scaled result of summing over
+		 * the possible criticals truncated to the nearest integer.
+		 */
+		scale = (z_info->r_crit_chance_range / *div)
+			* z_info->r_crit_power_random;
+		*mult = *div + (crit_chance * mult_sum) / scale;
+		*add = (crit_chance * add_sum) / scale;
+		*mult_round = (crit_chance * mult_sum) % scale;
+		*add_round = (crit_chance * add_sum) % scale;
+		*scl_round = scale;
+	} else {
+		*mult = 100;
+		*add = 0;
+		*mult_round = 0;
+		*add_round = 0;
+		*scl_round = 1;
+	}
+}
+
+/**
+ * Missile crits follow the same approach as melee crits.
+ *
+ * \param state points to the state for the player of interest.
+ * \param obj is the missile of interest.
+ * \param launcher is the launcher of interest or NULL for a thrown missile.
+ * \param dice is dereferenced and set to 100 * crit chance * average number
+ * of dice added.
+ * \param frac_dice is dereferenced and set to the fractional part truncated
+ * from *dice when converted to an integer.
+ */
+static void o_calculate_missile_crits(struct player_state *state,
+		const struct object *obj, const struct object *launcher,
+		unsigned int *dice, struct my_rational *frac_dice)
+{
+	if (z_info->o_r_crit_level_head) {
+		/*
+		 * Pessimistically assume that the target is not debuffed.
+		 * Otherwise, these calculations must agree with those in
+		 * player-attack.c's o_critical_shot().
+		 */
+		struct player_state old_state = player->state;
+		int power, chance_num, chance_den;
+
+		if (z_info->o_r_max_added.n == 0) {
+			z_info->o_r_max_added =
+				sum_o_criticals(z_info->o_r_crit_level_head);
+		}
+
+		player->state = *state;
+		power = chance_of_missile_hit_base(player, obj, launcher);
+		player->state = old_state;
+		if (launcher) {
+			power = (power
+				* z_info->o_r_crit_power_launched_toh_scl_num)
+				/ z_info->o_r_crit_power_launched_toh_scl_den;
+		} else {
+			power = (power
+				* z_info->o_r_crit_power_thrown_toh_scl_num)
+				/ z_info->o_r_crit_power_thrown_toh_scl_den;
+		}
+		chance_num = power * z_info->o_r_crit_chance_power_scl_num;
+		chance_den = power * z_info->o_r_crit_chance_power_scl_den
+			+ z_info->o_r_crit_chance_add_den;
+		if (chance_den > 0 && chance_num > 0) {
+			unsigned int tr;
+
+			if (chance_num < chance_den) {
+				/*
+				 * Critical only happens some of the time.
+				 * Scale by the chance and 100.
+				 */
+				struct my_rational t = my_rational_construct(
+					chance_num, chance_den);
+
+				t = my_rational_product(&t,
+					&z_info->o_r_max_added);
+				*dice = my_rational_to_uint(&t, 100, &tr);
+				*frac_dice = my_rational_construct(tr, t.d);
+			} else {
+				/* Critical always happens.  Scale by 100. */
+				*dice = my_rational_to_uint(
+					&z_info->o_r_max_added, 100,
+					&tr);
+				*frac_dice = my_rational_construct(tr,
+					z_info->o_r_max_added.d);
+			}
+		} else {
+			/* No chance of happening so no additional damage. */
+			*dice = 0;
+			*frac_dice = my_rational_construct(0, 1);
+		}
+	} else {
+		/* No critical levels defined so no additional damage. */
+		*dice = 0;
+		*frac_dice = my_rational_construct(0, 1);
+	}
 }
 
 /**
@@ -711,36 +993,52 @@ static bool describe_blows(textblock *tb, const struct object *obj)
 
 /**
  * Gets information about the average damage/turn that can be inflicted if
- * the player wields the given weapon.
+ * the player uses the given weapon.  Uses the standard (not O) damage
+ * calculations.
  *
- * Fills in the damage against normal adversaries in `normal_damage`, as well
- * as the slays on the weapon in slay_list[] and corresponding damages in 
- * slay_damage[].  These must both be at least SL_MAX long to be safe.
- * `nonweap_slay` is set to whether other items being worn could add to the
- * damage done by branding attacks.
- *
- * Returns the number of slays populated in slay_list[] and slay_damage[].
+ * \param obj is the melee weapon or launched/thrown missile to evaluate.
+ * \param normal_damage is dereferenced and set to the average damage per
+ * turn times ten if no brands or slays are effective.
+ * \param brand_damage must point to z_info->brand_max ints.  brand_damage[i]
+ * is set to the average damage per turn times ten with the ith brand from the
+ * global brands array if that brand is present and is not overridden by a
+ * more powerful brand that is also present for the same element; otherwise,
+ * brand_damage[i] is not modified.
+ * \param slay_damage must point to z_info->slay_max ints.  slay_damage[i]
+ * is set to the average damage per turn times ten with the ith slay from the
+ * global slays array if that slay is present and is not overridden by a
+ * more powerful slay that is also present for the same monsters; otherwise,
+ * slay_damage[i] is not modified.
+ * \param nonweap_slay is dereferenced and set to true if an off-weapon slay
+ * or brand affects the damage or to false if no off-weapon slay or brand
+ * affects the damage.
+ * \param throw causes, if true, the damage to be calculated as if obj is
+ * thrown.
+ * \return true if there is at least one known brand or slay that could
+ * affect the damage; otherwise, return false.
  *
  * Note that the results are meaningless if called on a fake ego object as
  * the actual ego may have different properties.
  */
-static bool obj_known_damage(const struct object *obj, int *normal_damage,
+bool obj_known_damage(const struct object *obj, int *normal_damage,
 							 int *brand_damage, int *slay_damage,
-							 bool *nonweap_slay)
+							 bool *nonweap_slay, bool throw)
 {
 	int i;
 	int dice, sides, dam, total_dam, plus = 0;
 	int xtra_postcrit = 0, xtra_precrit = 0;
 	int crit_mult, crit_div, crit_add;
+	int crit_round_mult, crit_round_add, crit_scl_round;
+	int temp0, temp1, round;
 	int old_blows = 0;
 	bool *total_brands;
 	bool *total_slays;
 	bool has_brands_or_slays = false;
 
 	struct object *bow = equipped_item_by_slot_name(player, "shooting");
-	bool weapon = tval_is_melee_weapon(obj);
-	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow);
-	int melee_adj_mult = ammo ? 0 : 1;
+	bool weapon = tval_is_melee_weapon(obj) && !throw;
+	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow) && !throw;
+	int melee_adj_mult = (ammo || throw) ? 0 : 1;
 	int multiplier = 1;
 
 	struct player_state state;
@@ -768,23 +1066,30 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 	/* Calculate damage */
 	dam = ((sides + 1) * dice * 5);
 
+	plus += object_to_hit(obj->known);
 	if (weapon)	{
 		xtra_postcrit = state.to_d * 10;
-		xtra_precrit += obj->known->to_d * 10;
-		plus += obj->known->to_h;
+		xtra_precrit += object_to_dam(obj->known) * 10;
 
-		calculate_melee_crits(&state, obj->weight, plus, &crit_mult, &crit_add,
-							  &crit_div);
+		calculate_melee_crits(&state, object_weight_one(obj), plus,
+			&crit_mult, &crit_add, &crit_div,
+			&crit_round_mult, &crit_round_add, &crit_scl_round);
 
 		old_blows = state.num_blows;
-	} else { /* Ammo */
-		plus += obj->known->to_h;
+	} else if (ammo) {
+		calculate_missile_crits(&player->state, object_weight_one(obj),
+			plus, true, &crit_mult, &crit_add, &crit_div,
+			&crit_round_mult, &crit_round_add, &crit_scl_round);
 
-		calculate_missile_crits(&player->state, obj->weight, plus, &crit_mult,
-								&crit_add, &crit_div);
+		dam += (object_to_dam(obj->known) * 10);
+		dam += (object_to_dam(bow->known) * 10);
+	} else {
+		calculate_missile_crits(&player->state, object_weight_one(obj),
+			plus, false, &crit_mult, &crit_add, &crit_div,
+			&crit_round_mult, &crit_round_add, &crit_scl_round);
 
-		dam += (obj->known->to_d * 10);
-		dam += (bow->known->to_d * 10);
+		dam += (object_to_dam(obj->known) * 10);
+		dam *= 2 + object_weight_one(obj) / 12;
 	}
 
 	if (ammo) multiplier = player->state.ammo_mult;
@@ -801,7 +1106,10 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 	if (ammo && bow->known)
 		copy_slays(&total_slays, bow->known->slays);
 
-	/* Melee weapons may get slays and brands from other items */
+	/*
+	 * Melee weapons may get slays and brands from other items or from
+	 * temporary effects.
+	 */
 	*nonweap_slay = false;
 	if (weapon)	{
 		for (i = 2; i < player->body.count; i++) {
@@ -818,67 +1126,103 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 			copy_brands(&total_brands, slot_obj->known->brands);
 			copy_slays(&total_slays, slot_obj->known->slays);
 		}
+
+		for (i = 1; i < z_info->brand_max; i++) {
+			if (player_has_temporary_brand(player, i)
+					&& append_brand(&total_brands, i)) {
+				*nonweap_slay = true;
+			}
+		}
+
+		for (i = 1; i < z_info->slay_max; i++) {
+			if (player_has_temporary_slay(player, i)
+					&& append_slay(&total_slays, i)) {
+				*nonweap_slay = true;
+			}
+		}
 	}
 
-	/* Get damage for each brand on the objects */
+	/* Get damage for each brand that is active */
 	for (i = 1; i < z_info->brand_max; i++) {
-		/* Must have the brand */
-		if (total_brands[i])
-			has_brands_or_slays = true;
-		else
+		if (!total_brands[i]) {
 			continue;
+		}
+		has_brands_or_slays = true;
 
 		/* Include bonus damage and brand in stated average */
-		total_dam = dam * (multiplier + brands[i].multiplier - melee_adj_mult)
-			+ xtra_precrit;
-		total_dam = (total_dam * crit_mult + crit_add) / crit_div;
-		total_dam += xtra_postcrit;
+		temp0 = dam * (multiplier + brands[i].multiplier
+			- melee_adj_mult) + xtra_precrit;
+		temp1 = temp0 * crit_mult + 10 * crit_add
+			+ (temp0 * crit_round_mult + 10 * crit_round_add)
+			/ crit_scl_round;
+		total_dam = temp1 / crit_div + xtra_postcrit;
+		round = temp1 % crit_div;
 
 		if (weapon) {
-			total_dam = (total_dam * old_blows) / 100;
+			temp0 = total_dam * old_blows
+				+ (round * old_blows) / crit_div;
+			total_dam = temp0 / 100 + ((temp0 % 100 >= 50) ? 1 : 0);
+		} else if (ammo) {
+			temp0 = total_dam * player->state.num_shots
+				+ (round * player->state.num_shots) / crit_div;
+			total_dam = temp0 / 10 + ((temp0 % 10 >= 5) ? 1 : 0);
 		} else {
-			total_dam *= player->state.num_shots;
-			total_dam /= 10;
+			total_dam += (round > (crit_div + 1) / 2) ? 1 : 0;
 		}
 
 		brand_damage[i] = total_dam;
 	}
 
-	/* Get damage for each slay on the objects */
+	/* Get damage for each slay that is active */
 	for (i = 1; i < z_info->slay_max; i++) {
-		/* Must have the slay */
-		if (total_slays[i])
-			has_brands_or_slays = true;
-		else
+		if (!total_slays[i]) {
 			continue;
+		}
+		has_brands_or_slays = true;
 
 		/* Include bonus damage and slay in stated average */
-		total_dam = dam * (multiplier + slays[i].multiplier - melee_adj_mult)
-			+ xtra_precrit;
-		total_dam = (total_dam * crit_mult + crit_add) / crit_div;
-		total_dam += xtra_postcrit;
+		temp0 = dam * (multiplier + slays[i].multiplier
+			- melee_adj_mult) + xtra_precrit;
+		temp1 = temp0 * crit_mult + 10 * crit_add
+			+ (temp0 * crit_round_mult + 10 * crit_round_add)
+			/ crit_scl_round;
+		total_dam = temp1 / crit_div + xtra_postcrit;
+		round = temp1 % crit_div;
 
 		if (weapon) {
-			total_dam = (total_dam * old_blows) / 100;
+			temp0 = total_dam * old_blows
+				+ (round * old_blows) / crit_div;
+			total_dam = temp0 / 100 + ((temp0 % 100 >= 50) ? 1 : 0);
+		} else if (ammo) {
+			temp0 = total_dam * player->state.num_shots
+				+ (round * player->state.num_shots) / crit_div;
+			total_dam = temp0 / 10 + ((temp0 % 10 >= 5) ? 1 : 0);
 		} else {
-			total_dam *= player->state.num_shots;
-			total_dam /= 10;
+			total_dam += (round >= (crit_div + 1) / 2) ? 1 : 0;
 		}
 
 		slay_damage[i] = total_dam;
 	}
 
 	/* Include bonus damage in stated average */
-	total_dam = dam * multiplier + xtra_precrit;
-	total_dam = (total_dam * crit_mult + crit_add) / crit_div;
-	total_dam += xtra_postcrit;
+	temp0 = dam * multiplier + xtra_precrit;
+	temp1 = temp0 * crit_mult + 10 * crit_add
+		+ (temp0 * crit_round_mult + 10 * crit_round_add)
+		/ crit_scl_round;
+	total_dam = temp1 / crit_div + xtra_postcrit;
+	round = temp1 % crit_div;
 
 	/* Normal damage, not considering brands or slays */
 	if (weapon) {
-		total_dam = (total_dam * old_blows) / 100;
+		temp0 = total_dam * old_blows
+			+ (round * old_blows) / crit_div;
+		total_dam = temp0 / 100 + ((temp0 % 100 >= 50) ? 1 : 0);
+	} else if (ammo) {
+		temp0 = total_dam * player->state.num_shots
+			+ (round * player->state.num_shots) / crit_div;
+		total_dam = temp0 / 10 + ((temp0 % 10 >= 5) ? 1 : 0);
 	} else {
-		total_dam *= player->state.num_shots;
-		total_dam /= 10;
+		total_dam += (round > (crit_div + 1) / 2) ? 1 : 0;
 	}
 
 	*normal_damage = total_dam;
@@ -890,9 +1234,289 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 
 
 /**
+ * Gets information about the average damage/turn that can be inflicted if
+ * the player uses the given weapon.  Uses the OAngband damage calculations.
+ *
+ * \param obj is the melee weapon or launched/thrown missile to evaluate.
+ * \param normal_damage is dereferenced and set to the average damage per
+ * turn times ten if no brands or slays are effective.
+ * \param brand_damage must point to z_info->brand_max ints.  brand_damage[i]
+ * is set to the average damage per turn times ten with the ith brand from the
+ * global brands array if that brand is present and is not overridden by a
+ * more power brand that is also present for the same element; otherwise,
+ * brand_damage[i] is not modified.
+ * \param slay_damage must point to z_info->slay_max ints.  slay_damage[i]
+ * is set to the average damage times ten per turn with the ith slay from the
+ * global slays array if that slay is present and is not overridden by a
+ * more powerful slay that is also present for the same monsters; otherwise,
+ * slay_damage[i] is not modified.
+ * \param nonweap_slay is dereferenced and set to true if an off-weapon slay
+ * or brand affects the damage or to false if no off-weapon slay or brand
+ * affects the damage.
+ * \param throw causes, if true, the damage to be calculated as if obj is
+ * thrown.
+ * \return true if there is at least one known brand or slay that could
+ * affect the damage; otherwise, return false.
+ *
+ * Note that the results are meaningless if called on a fake ego object as
+ * the actual ego may have different properties.
+ */
+bool o_obj_known_damage(const struct object *obj, int *normal_damage,
+								 int *brand_damage, int *slay_damage,
+							   bool *nonweap_slay, bool throw)
+{
+	int i;
+	int dice, sides, die_average, total_dam;
+	unsigned int added_dice, remainder;
+	struct my_rational frac_dice, frac_temp;
+	int temp0, round;
+	int deadliness = object_to_dam(obj->known);
+	int old_blows = 0;
+	bool *total_brands;
+	bool *total_slays;
+	bool has_brands_or_slays = false;
+
+	struct object *bow = equipped_item_by_slot_name(player, "shooting");
+	bool weapon = tval_is_melee_weapon(obj) && !throw;
+	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow) && !throw;
+	int multiplier = 1;
+
+	struct player_state state;
+	int weapon_slot = slot_by_name(player, "weapon");
+	struct object *current_weapon = slot_object(player, weapon_slot);
+
+	/* Pretend we're wielding the object if it's a weapon */
+	if (weapon)
+		player->body.slots[weapon_slot].obj = (struct object *) obj;
+
+	/* Calculate the player's hypothetical state */
+	memcpy(&state, &player->state, sizeof(state));
+	state.stat_ind[STAT_STR] = 0; //Hack - NRM
+	state.stat_ind[STAT_DEX] = 0; //Hack - NRM
+	calc_bonuses(player, &state, true, false);
+
+	/* Stop pretending */
+	player->body.slots[weapon_slot].obj = current_weapon;
+
+	/* Finish if dice not known */
+	dice = obj->known->dd * 100;
+	sides = obj->known->ds;
+	if (!dice || !sides) return false;
+
+	/* Get the number of additional dice from criticals (x100) */
+	if (weapon)	{
+		o_calculate_melee_crits(&state, obj, &added_dice, &frac_dice);
+		dice += added_dice;
+		old_blows = state.num_blows;
+	} else if (ammo) {
+		o_calculate_missile_crits(&player->state, obj, bow,
+			&added_dice, &frac_dice);
+		dice += added_dice;
+	} else {
+		unsigned int thrown_scl = 2 + object_weight_one(obj) / 12;
+
+		o_calculate_missile_crits(&player->state, obj, NULL,
+			&added_dice, &frac_dice);
+		dice += added_dice;
+		dice *= thrown_scl;
+		dice += my_rational_to_uint(&frac_dice, thrown_scl, &remainder);
+		frac_dice = my_rational_construct(remainder, frac_dice.d);
+	}
+
+	if (ammo) multiplier = player->state.ammo_mult;
+
+	/* Get the average value of a single damage die. (x10) */
+	die_average = 5 * (sides + 1);
+
+	/* Apply the launcher multiplier. */
+	die_average *= multiplier;
+
+	/* Apply deadliness to average. (100x inflation) */
+	if (ammo) {
+		deadliness += object_to_dam(bow->known) + state.to_d;
+	} else {
+		deadliness += state.to_d;
+	}
+	apply_deadliness(&die_average, MIN(deadliness, 150));
+
+	/* Get the brands */
+	total_brands = mem_zalloc(z_info->brand_max * sizeof(bool));
+	copy_brands(&total_brands, obj->known->brands);
+	if (ammo && bow->known)
+		copy_brands(&total_brands, bow->known->brands);
+
+	/* Get the slays */
+	total_slays = mem_zalloc(z_info->slay_max * sizeof(bool));
+	copy_slays(&total_slays, obj->known->slays);
+	if (ammo && bow->known)
+		copy_slays(&total_slays, bow->known->slays);
+
+	/*
+	 * Melee weapons may get slays and brands from other items or from
+	 * temporary effects.
+	 */
+	*nonweap_slay = false;
+	if (weapon)	{
+		for (i = 2; i < player->body.count; i++) {
+			struct object *slot_obj = slot_object(player, i);
+			if (!slot_obj)
+				continue;
+
+			if (slot_obj->known->brands || slot_obj->known->slays)
+				*nonweap_slay = true;
+			else
+				continue;
+
+			/* Replace the old lists with new ones */
+			copy_brands(&total_brands, slot_obj->known->brands);
+			copy_slays(&total_slays, slot_obj->known->slays);
+		}
+
+		for (i = 1; i < z_info->brand_max; i++) {
+			if (player_has_temporary_brand(player, i)
+					&& append_brand(&total_brands, i)) {
+				*nonweap_slay = true;
+			}
+		}
+
+		for (i = 1; i < z_info->slay_max; i++) {
+			if (player_has_temporary_slay(player, i)
+					&& append_slay(&total_slays, i)) {
+				*nonweap_slay = true;
+			}
+		}
+	}
+
+	/* Increase die average for each active brand */
+	for (i = 1; i < z_info->brand_max; i++) {
+		int brand_average, add = brands[i].o_multiplier - 10;
+
+		if (!total_brands[i]) {
+			continue;
+		}
+		has_brands_or_slays = true;
+
+		/* Include brand in stated average (x10), deflate (/1000) */
+		brand_average = die_average * brands[i].o_multiplier;
+		round = brand_average % 1000;
+		brand_average /= 1000;
+
+		/* Damage per hit is now dice * die average, (still x1000) */
+		temp0 = dice * brand_average + (dice * round) / 1000
+			+ my_rational_to_uint(&frac_dice, brand_average,
+			&remainder);
+		frac_temp = my_rational_construct(remainder, frac_dice.d);
+		round = (dice * round) % 1000
+			+ my_rational_to_uint(&frac_temp, 1000, &remainder);
+		if (remainder >= (frac_temp.d + 1) / 2) {
+			++round;
+		}
+
+		/* Now adjust for blows and shots and deflate again */
+		if (weapon) {
+			total_dam = old_blows * temp0
+				+ (old_blows * round) / 1000;
+			round = total_dam % 10000;
+			total_dam /= 10000;
+			total_dam += (add * old_blows) / 10
+				+ ((round >= 5000) ? 1 : 0);
+		} else if (ammo) {
+			total_dam = player->state.num_shots * temp0
+				+ (player->state.num_shots * round) / 1000;
+			round = total_dam % 1000;
+			total_dam /= 1000;
+			total_dam += add * player->state.num_shots
+				+ ((round >= 500) ? 1 : 0);
+		} else {
+			total_dam = temp0 / 100 + add * 10
+				+ ((temp0 % 100 >= 50) ? 1 : 0);
+		}
+
+		brand_damage[i] = total_dam;
+	}
+
+	/* Get damage for each active slay */
+	for (i = 1; i < z_info->slay_max; i++) {
+		int slay_average, add = slays[i].o_multiplier - 10;
+
+		if (!total_slays[i]) {
+			continue;
+		}
+		has_brands_or_slays = true;
+
+		/* Include slay in stated average (x10), deflate (/1000) */
+		slay_average = die_average * slays[i].o_multiplier;
+		round = slay_average % 1000;
+		slay_average /= 1000;
+
+		/* Damage per hit is now dice * die average, (still x1000) */
+		temp0 = dice * slay_average + (dice * round) / 1000
+			+ my_rational_to_uint(&frac_dice, slay_average,
+			&remainder);
+		frac_temp = my_rational_construct(remainder, frac_dice.d);
+		round = (dice * round) % 1000
+			+ my_rational_to_uint(&frac_temp, 1000, &remainder);
+		if (remainder >= (frac_temp.d + 1) / 2) {
+			++round;
+		}
+
+		/* Now adjust for blows and shots and deflate again */
+		if (weapon) {
+			total_dam = old_blows * temp0
+				+ (old_blows * round) / 1000;
+			round = total_dam % 10000;
+			total_dam /= 10000;
+			total_dam += (add * old_blows) / 10
+				+ ((round >= 5000) ? 1 : 0);
+		} else if (ammo) {
+			total_dam = player->state.num_shots * temp0
+				+ (player->state.num_shots * round) / 1000;
+			round = total_dam % 1000;
+			total_dam /= 1000;
+			total_dam += add * player->state.num_shots
+				+ ((round >= 500) ? 1 : 0);
+		} else {
+			total_dam = temp0 / 100 + add * 10
+				+ ((temp0 % 100 >= 50) ? 1 : 0);
+		}
+
+		slay_damage[i] = total_dam;
+	}
+
+	/* Normal damage, not considering brands or slays */
+	temp0 = dice * die_average +
+		my_rational_to_uint(&frac_dice, die_average, &remainder);
+	if (remainder >= (frac_dice.d + 1) / 2) {
+		++temp0;
+	}
+	round = temp0 % 1000;
+	temp0 /= 1000;
+	if (weapon) {
+		total_dam = old_blows * temp0 + (old_blows * round) / 1000;
+		round = total_dam % 1000;
+		total_dam /= 1000;
+		total_dam += (round >= 500) ? 1 : 0;
+	} else if (ammo) {
+		total_dam = player->state.num_shots * temp0
+			+ (player->state.num_shots * round) / 1000;
+		round = total_dam % 100;
+		total_dam /= 100;
+		total_dam += (round >= 50) ? 1 : 0;
+	} else {
+		total_dam = temp0 / 10 + ((temp0 % 10 >= 5) ? 1 : 0);
+	}
+	*normal_damage = total_dam;
+
+	mem_free(total_brands);
+	mem_free(total_slays);
+	return has_brands_or_slays;
+}
+
+
+/**
  * Describe damage.
  */
-static bool describe_damage(textblock *tb, const struct object *obj)
+static bool describe_damage(textblock *tb, const struct object *obj, bool throw)
 {
 	int i;
 	bool nonweap_slay = false;
@@ -901,47 +1525,155 @@ static bool describe_damage(textblock *tb, const struct object *obj)
 	int *slay_damage = mem_zalloc(z_info->slay_max * sizeof(int));
 
 	/* Collect brands and slays */
-	bool has_brands_or_slays = obj_known_damage(obj, &normal_damage,
-												brand_damage, slay_damage,
-												&nonweap_slay);
+	bool has_brands_or_slays = OPT(player, birth_percent_damage) ?
+		o_obj_known_damage(obj, &normal_damage, brand_damage, slay_damage,
+						   &nonweap_slay, throw) :
+		obj_known_damage(obj, &normal_damage, brand_damage, slay_damage,
+						 &nonweap_slay, throw);
 
 	/* Mention slays and brands from other items */
 	if (nonweap_slay)
 		textblock_append(tb, "This weapon may benefit from one or more off-weapon brands or slays.\n");
 
-	textblock_append(tb, "Average damage/round: ");
+	if (throw) {
+		textblock_append(tb, "Average thrown damage: ");
+	} else {
+		textblock_append(tb, "Average damage/round: ");
+	}
 
 	if (has_brands_or_slays) {
-		/* Output damage for creatures effected by the brands */
-		for (i = 0; i < z_info->brand_max; i++) {
-			if (brand_damage[i] <= 0) {
-				continue;
-			} else if (brand_damage[i] % 10) {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d.%d",
-								   brand_damage[i] / 10, brand_damage[i] % 10);
-			} else {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d",
-								   brand_damage[i] / 10);
-			}
-			textblock_append(tb, " vs. creatures not resistant to %s, ",
-							 brands[i].name);
-		}
+		/*
+		 * Sort by decreasing damage so entries with the same damage
+		 * can be printed together.
+		 */
+		int *sortind = mem_alloc(
+			(z_info->brand_max + z_info->slay_max) *
+			sizeof(*sortind));
+		int nsort = 0;
+		const char *lastnm;
+		int lastdam, groupn;
+		bool last_is_brand;
 
-		/* Output damage for creatures effected by the slays */
+		/*
+		 * Assemble the indices.  Do the slays first so, if tied
+		 * for damage, they'll appear first.  That's easier to read.
+		 */
 		for (i = 0; i < z_info->slay_max; i++) {
-			if (slay_damage[i] <= 0) {
-				continue;
-			} else if (slay_damage[i] % 10) {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d.%d",
-								   slay_damage[i] / 10, slay_damage[i] % 10);
-			} else {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d",
-								   slay_damage[i] / 10);
+			if (slay_damage[i] > 0) {
+				sortind[nsort] = i + z_info->brand_max;
+				++nsort;
 			}
-			textblock_append(tb, " vs. %s, ", slays[i].name);
+		}
+		for (i = 0; i < z_info->brand_max; i++) {
+			if (brand_damage[i] > 0) {
+				sortind[nsort] = i;
+				++nsort;
+			}
+		}
+		/* Sort.  Since the number is small, insertion sort is fine. */
+		for (i = 0; i < nsort - 1; i++) {
+			int maxdam = (sortind[i] < z_info->brand_max) ?
+				brand_damage[sortind[i]] :
+				slay_damage[sortind[i] - z_info->brand_max];
+			int maxind = i;
+			int j;
+
+			for (j = i + 1; j < nsort; j++) {
+				int dam = (sortind[j] < z_info->brand_max) ?
+					brand_damage[sortind[j]] :
+					slay_damage[sortind[j] -
+						z_info->brand_max];
+
+				if (maxdam < dam) {
+					maxdam = dam;
+					maxind = j;
+				}
+			}
+			if (maxind != i) {
+				int tmp = sortind[maxind];
+
+				sortind[maxind] = sortind[i];
+				sortind[i] = tmp;
+			}
 		}
 
-		textblock_append(tb, "and ");
+		/* Output. */
+		lastdam = 0;
+		groupn = 0;
+		lastnm = NULL;
+		last_is_brand = false;
+		for (i = 0; i < nsort; i++) {
+			const char *tgt;
+			int dam;
+			bool is_brand;
+
+			if (sortind[i] < z_info->brand_max) {
+				is_brand = true;
+				tgt = brands[sortind[i]].name;
+				dam = brand_damage[sortind[i]];
+			} else {
+				is_brand = false;
+				tgt = slays[sortind[i] -
+					z_info->brand_max].name;
+				dam = slay_damage[sortind[i] -
+					z_info->brand_max];
+			}
+
+			if (groupn > 0) {
+				if (dam != lastdam) {
+					if (groupn > 2) {
+						textblock_append(tb, ", and");
+					} else if (groupn == 2) {
+						textblock_append(tb, " and");
+					}
+				} else if (groupn > 1) {
+					textblock_append(tb, ",");
+				}
+				if (last_is_brand) {
+					textblock_append(tb,
+						" creatures not resistant to");
+				}
+				textblock_append(tb, " %s", lastnm);
+			}
+			if (dam != lastdam) {
+				if (i != 0) {
+					textblock_append(tb, ", ");
+				}
+				if (dam % 10) {
+					textblock_append_c(tb, COLOUR_L_GREEN,
+						"%d.%d vs", dam / 10, dam % 10);
+				} else {
+					textblock_append_c(tb, COLOUR_L_GREEN,
+						"%d vs", dam / 10);
+				}
+				groupn = 1;
+				lastdam = dam;
+			} else {
+				assert(groupn > 0);
+				++groupn;
+			}
+			lastnm = tgt;
+			last_is_brand = is_brand;
+		}
+		if (groupn > 0) {
+			if (groupn > 2) {
+				textblock_append(tb, ", and");
+			} else if (groupn == 2) {
+				textblock_append(tb, " and");
+			}
+			if (last_is_brand) {
+				textblock_append(tb,
+					" creatures not resistant to");
+			}
+			textblock_append(tb, " %s", lastnm);
+		}
+
+		if (nsort == 0) {
+			has_brands_or_slays = false;
+		} else {
+			textblock_append(tb, (nsort == 1) ? " and " : ", and ");
+		}
+		mem_free(sortind);
 	}
 
 	if (normal_damage <= 0)
@@ -1022,13 +1754,15 @@ static bool describe_combat(textblock *tb, const struct object *obj)
 	struct object *bow = equipped_item_by_slot_name(player, "shooting");
 	bool weapon = tval_is_melee_weapon(obj);
 	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow);
+	bool throwing_weapon = weapon && of_has(obj->flags, OF_THROWING);
+	bool rock = tval_is_ammo(obj) && of_has(obj->flags, OF_THROWING);
 
 	int range, break_chance;
 	bool thrown_effect, heavy;
 
 	obj_known_misc_combat(obj, &thrown_effect, &range, &break_chance, &heavy);
 
-	if (!weapon && !ammo) {
+	if (!weapon && !ammo && !rock) {
 		if (thrown_effect) {
 			textblock_append(tb, "It can be thrown at creatures with damaging effect.\n");
 			return true;
@@ -1043,13 +1777,18 @@ static bool describe_combat(textblock *tb, const struct object *obj)
 
 	describe_blows(tb, obj);
 
-	if (!weapon) { /* Ammo */
-		textblock_append(tb, "Hits targets up to ");
-		textblock_append_c(tb, COLOUR_L_GREEN, format("%d", range));
+	if (ammo) {
+		textblock_append(tb, "When fired, hits targets up to ");
+		textblock_append_c(tb, COLOUR_L_GREEN, "%d", range);
 		textblock_append(tb, " feet away.\n");
 	}
 
-	describe_damage(tb, obj);
+	if (weapon || ammo) {
+		describe_damage(tb, obj, false);
+	}
+	if (throwing_weapon || rock) {
+		describe_damage(tb, obj, true);
+	}
 
 	if (ammo) {
 		textblock_append_c(tb, COLOUR_L_GREEN, "%d%%", break_chance);
@@ -1076,8 +1815,8 @@ static bool obj_known_digging(struct object *obj, int deciturns[])
 	struct player_state state;
 	int i;
 	int chances[DIGGING_MAX];
-	int slot = wield_slot(obj);
-	struct object *current = slot_object(player, slot);
+	int slot;
+	struct object *current;
 
 	/* Doesn't remotely resemble a digger */
 	if (!tval_is_wearable(obj) ||
@@ -1089,6 +1828,8 @@ static bool obj_known_digging(struct object *obj, int deciturns[])
 		return false;
 
 	/* Pretend we're wielding the object */
+	slot = wield_slot(obj);
+	current = slot_object(player, slot);
 	player->body.slots[slot].obj = obj;
 
 	/* Calculate the player's hypothetical state */
@@ -1224,7 +1965,7 @@ static bool describe_light(textblock *tb, const struct object *obj,
 
 	if (tval_is_light(obj)) {
 		textblock_append(tb, "Intensity ");
-		textblock_append_c(tb, COLOUR_L_GREEN, format("%d", intensity));
+		textblock_append_c(tb, COLOUR_L_GREEN, "%d", intensity);
 		textblock_append(tb, " light.");
 
 		if (!obj->artifact && !uses_fuel)
@@ -1319,7 +2060,6 @@ static bool obj_known_effect(const struct object *obj, struct effect **effect,
 static bool describe_effect(textblock *tb, const struct object *obj,
 		bool only_artifacts, bool subjective)
 {
-	char desc[200];
 	struct effect *effect = NULL;
 	bool aimed = false;
 	int min_time, max_time, failure_chance;
@@ -1354,246 +2094,34 @@ static bool describe_effect(textblock *tb, const struct object *obj,
 	/* Activations get a special message */
 	if (obj->activation && obj->activation->desc) {
 		textblock_append(tb, "When activated, it ");
-		textblock_append(tb, obj->activation->desc);
+		textblock_append(tb, "%s", obj->activation->desc);
 	} else {
-		int random_choices = 0;
-		bool random_breath = (effect && (effect->index == EF_RANDOM) &&
-							  effect->next &&
-							  (effect->next->index == EF_BREATH));
-		char breaths[120];
+		int level = obj->artifact ?
+			obj->artifact->level : (obj->activation ?
+			obj->activation->level : obj->kind->level);
+		int boost = MAX((player->state.skills[SKILL_DEVICE] - level) / 2, 0);
+		const char *prefix;
+		textblock *tbe;
 
-		my_strcpy(breaths, "", sizeof(breaths));
-
-		/* Get descriptions for all the effects */
-		effect = object_effect(obj);
-		if (!effect_desc(effect)) return false;
-
-		if (aimed)
-			textblock_append(tb, "When aimed, it ");
+		if (obj->activation)
+			prefix = "When activated, it ";
+		else if (aimed)
+			prefix = "When aimed, it ";
 		else if (tval_is_edible(obj))
-			textblock_append(tb, "When eaten, it ");
+			prefix = "When eaten, it ";
 		else if (tval_is_potion(obj))
-			textblock_append(tb, "When quaffed, it ");
+			prefix = "When quaffed, it ";
 		else if (tval_is_scroll(obj))
-			textblock_append(tb, "When read, it ");
+			prefix = "When read, it ";
 		else
-			textblock_append(tb, "When activated, it ");
+			prefix = "When activated, it ";
 
-		/* Print a colourised description */
-		while (effect) {
-			char *next_char = desc;
-			int roll = 0;
-			random_value value = { 0, 0, 0, 0 };
-			char dice_string[20];
-
-			int level = obj->artifact ? obj->artifact->level : obj->kind->level;
-			int boost = MAX(player->state.skills[SKILL_DEVICE] - level, 0);
-
-			if (effect->dice != NULL)
-				roll = dice_roll(effect->dice, &value);
-
-			/* Deal with special random effect */
-			if (effect->index == EF_RANDOM)
-				random_choices = roll + 1;
-
-			/* Get the possible dice strings */
-			if (value.dice && value.base)
-				strnfmt(dice_string, sizeof(dice_string), "%d+%dd%d",
-						value.base, value.dice, value.sides);
-			else if (value.dice)
-				strnfmt(dice_string, sizeof(dice_string), "%dd%d",
-						value.dice, value.sides);
-			else
-				strnfmt(dice_string, sizeof(dice_string), "%d", value.base);
-
-			/* Check all the possible types of description format */
-			switch (base_descs[effect->index].efinfo_flag) {
-				/* Healing sometimes has a minimum percentage */
-			case EFINFO_HEAL: {
-				char min_string[50];
-				if (value.m_bonus)
-					strnfmt(min_string, sizeof(min_string),
-							" (or %d%%, whichever is greater)", value.m_bonus);
-				else
-					strnfmt(min_string, sizeof(min_string), "");
-				strnfmt(desc, sizeof(desc), effect_desc(effect), dice_string,
-						min_string);
-				break;
-			}
-
-			/* Nourishment is just a flat amount */
-			case EFINFO_CONST: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect), value.base/2);
-				break;
-			}
-			case EFINFO_CURE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						timed_effects[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_TIMED: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						timed_effects[effect->subtype].desc, dice_string);
-				break;
-			}
-			case EFINFO_STAT: {
-				int stat = effect->subtype;
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						lookup_obj_property(OBJ_PROPERTY_STAT, stat)->name);
-				break;
-			}
-			case EFINFO_SEEN: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_SUMM: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						summon_desc(effect->subtype));
-				break;
-			}
-
-			/* Only currently used for the player, but can handle monsters */
-			case EFINFO_TELE: {
-				char *dist = value.m_bonus ?
-					" a level dependent distance" :
-					format(" %d grids", value.base);
-
-				if (effect->subtype) {
-					strnfmt(desc, sizeof(desc), effect_desc(effect),
-							"a monster", dist);
-				} else {
-					strnfmt(desc, sizeof(desc), effect_desc(effect), "you",
-							dist);
-				}
-				break;
-			}
-			case EFINFO_QUAKE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						effect->radius);
-				break;
-			}
-
-			/* Object generated balls are elemental */
-			case EFINFO_BALL: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].player_desc,
-						effect->radius, dice_string);
-				if (boost)
-					my_strcat(desc, format(", which your device skill increases by %d per cent", boost),
-							  sizeof(desc));
-				break;
-			}
-
-			/* Object generated breaths are elemental */
-			case EFINFO_BREATH: {
-				/* Special treatment for several random breaths */
-				if (random_breath) {
-					my_strcat(breaths,
-							  projections[effect->subtype].player_desc,
-							  sizeof(breaths));
-					if (random_choices > 3) {
-						my_strcat(breaths, ", ", sizeof(breaths));
-					} else if (random_choices == 3) {
-						my_strcat(breaths, " or ", sizeof(breaths));
-					}
-					random_choices--;
-
-					if ((!effect->next) || (effect->next->index != EF_BREATH)) {
-						random_breath = false;
-					}
-					strnfmt(desc, sizeof(desc), effect_desc(effect), breaths,
-							effect->other, dice_string);
-				} else {
-					strnfmt(desc, sizeof(desc), effect_desc(effect),
-							projections[effect->subtype].player_desc,
-							effect->other, dice_string);
-				}
-				break;
-			}
-
-			case EFINFO_SHORT: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect), 
-						projections[effect->subtype].player_desc,
-						effect->radius +
-						effect->other ? effect->other / player->lev : 0,
-						dice_string);
-				break;
-			}
-
-			/* Currently no object generated lashes */
-			case EFINFO_LASH: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].lash_desc,
-						effect->subtype);
-				break;
-			}
-
-			/* Bolts that inflict status */
-			case EFINFO_BOLT: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			/* Bolts and beams that damage */
-			case EFINFO_BOLTD: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc, dice_string);
-				if (boost)
-					my_strcat(desc, format(", which your device skill increases by %d per cent", boost),
-							  sizeof(desc));
-				break;
-			}
-			case EFINFO_TOUCH: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_TAP: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						dice_string);
-				break;
-			}
-			case EFINFO_NONE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect));
-				break;
-			}
-			default: {
-				msg("Bad effect description passed to describe_effect(). Please report this bug.");
-				return false;
-			}
-			}
-
-			do {
-				if (random_breath && effect->index != EF_RANDOM) break;
-				if (isdigit((unsigned char) *next_char))
-					textblock_append_c(tb, COLOUR_L_GREEN, "%c", *next_char);
-				else
-					textblock_append(tb, "%c", *next_char);
-			} while (*next_char++);
-
-			/* Random choices need special treatment - note that this code
-			 * assumes that RANDOM and the random choices will be the last
-			 * effect in the object/activation description */
-			if (random_breath) {
-				/* Handled in effect description */
-				;
-			} else if (random_choices >= 1) {
-				if (effect->index == EF_RANDOM)
-					;
-				else if (random_choices > 2)
-					textblock_append(tb, ", ");
-				else if (random_choices == 2)
-					textblock_append(tb, " or ");
-				random_choices--;
-			} else if (effect->next) {
-				if (effect->next->next && (effect->next->index != EF_RANDOM))
-					textblock_append(tb, ", ");
-				else
-					textblock_append(tb, " and ");
-			}
-			effect = effect->next;
+		tbe = effect_describe(effect, prefix, boost, false);
+		if (! tbe) {
+			return false;
 		}
+		textblock_append_textblock(tb, tbe);
+		textblock_free(tbe);
 	}
 
 	textblock_append(tb, ".\n");
@@ -1642,6 +2170,7 @@ static bool describe_origin(textblock *tb, const struct object *obj, bool terse)
 	const char *dropper = NULL;
 	const char *article;
 	bool unique = false;
+	bool comma = false;
 
 	/* Only give this info in chardumps if wieldable */
 	if (terse && !obj_can_wear(obj))
@@ -1666,6 +2195,9 @@ static bool describe_origin(textblock *tb, const struct object *obj, bool terse)
 		if (rf_has(obj->origin_race->flags, RF_UNIQUE)) {
 			unique = true;
 		}
+		if (rf_has(obj->origin_race->flags, RF_NAME_COMMA)) {
+			comma = true;
+		}
 	} else {
 		dropper = "monster lost to history";
 	}
@@ -1676,12 +2208,15 @@ static bool describe_origin(textblock *tb, const struct object *obj, bool terse)
 		my_strcpy(name, article, sizeof(name));
 		my_strcat(name, dropper, sizeof(name));
 	}
+	if (comma) {
+		my_strcat(name, ",", sizeof(name));
+	}
 
 	/* Print an appropriate description */
 	switch (origins[origin].args)
 	{
 		case -1: return false;
-		case 0: textblock_append(tb, origins[origin].desc); break;
+		case 0: textblock_append(tb, "%s", origins[origin].desc); break;
 		case 1: textblock_append(tb, origins[origin].desc, loot_spot);
 				break;
 		case 2:
@@ -1733,18 +2268,28 @@ static void describe_flavor_text(textblock *tb, const struct object *obj,
  */
 static bool describe_ego(textblock *tb, const struct ego_item *ego)
 {
-	if (kf_has(ego->kind_flags, KF_RAND_HI_RES))
-		textblock_append(tb, "It provides one random higher resistance.  ");
-	else if (kf_has(ego->kind_flags, KF_RAND_SUSTAIN))
-		textblock_append(tb, "It provides one random sustain.  ");
-	else if (kf_has(ego->kind_flags, KF_RAND_POWER))
-		textblock_append(tb, "It provides one random ability.  ");
-	else if (kf_has(ego->kind_flags, KF_RAND_RES_POWER))
-		textblock_append(tb, "It provides one random ability or base resistance.  ");
-	else
-		return false;
+	bool something = false;
 
-	return true;
+	if (kf_has(ego->kind_flags, KF_RAND_HI_RES)) {
+		something = true;
+		textblock_append(tb, "It provides one random higher resistance.  ");
+	} else if (kf_has(ego->kind_flags, KF_RAND_SUSTAIN)) {
+		something = true;
+		textblock_append(tb, "It provides one random sustain.  ");
+	} else if (kf_has(ego->kind_flags, KF_RAND_POWER)) {
+		something = true;
+		textblock_append(tb, "It provides one random ability.  ");
+	} else if (kf_has(ego->kind_flags, KF_RAND_RES_POWER)) {
+		something = true;
+		textblock_append(tb, "It provides one random ability or base resistance.  ");
+	}
+	if (of_has(ego->flags, OF_NO_FUEL)
+			&& of_has(ego->flags_off, OF_TAKES_FUEL)) {
+		something = true;
+		textblock_append(tb, "It burns forever without fuel.  ");
+	}
+
+	return something;
 }
 
 
@@ -1810,12 +2355,12 @@ static textblock *object_info_out(const struct object *obj, int mode)
 			something = true;
 			textblock_append(tb, "\n");
 		}
-		
+
 		if (subjective && describe_combat(tb, obj)) {
 			something = true;
 			textblock_append(tb, "\n");
 		}
-		
+
 		if (!terse && subjective && describe_digger(tb, obj)) something = true;
 	}
 
@@ -1846,14 +2391,30 @@ textblock *object_info_ego(struct ego_item *ego)
 {
 	struct object_kind *kind = NULL;
 	struct object obj = OBJECT_NULL, known_obj = OBJECT_NULL;
-	size_t i;
+	textblock *result;
 
-	for (i = 0; i < z_info->k_max; i++) {
-		kind = &k_info[i];
-		if (!kind->name)
-			continue;
-		if (i == ego->poss_items->kidx)
-			break;
+	if (ego->poss_items) {
+		size_t i;
+
+		for (i = 0; i < z_info->k_max; i++) {
+			kind = &k_info[i];
+			if (!kind->name)
+				continue;
+			if (i == ego->poss_items->kidx)
+				break;
+		}
+	}
+	if (!kind) {
+		result = textblock_new();
+		if (ego->poss_items) {
+			textblock_append(result, "Bug: the array of kinds of "
+				"objects no longer contains the first kind "
+				"that can have this ego.");
+		} else {
+			textblock_append(result,
+				"This ego does not appear on any items.");
+		}
+		return result;
 	}
 
 	obj.kind = kind;
@@ -1865,7 +2426,10 @@ textblock *object_info_ego(struct ego_item *ego)
 	object_copy(&known_obj, &obj);
 	obj.known = &known_obj;
 
-	return object_info_out(&obj, OINFO_NONE | OINFO_EGO);
+	result = object_info_out(&obj, OINFO_NONE | OINFO_EGO);
+	object_wipe(&known_obj);
+	object_wipe(&obj);
+	return result;
 }
 
 

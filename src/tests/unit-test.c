@@ -6,15 +6,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include "unit-test-types.h"
+#include "unit-test.h"
 #include "z-util.h"
 
 int verbose = 0;
-
-extern const char *suite_name;
-extern struct test tests[];
-extern int setup_tests(void **data);
-extern int teardown_tests(void **data);
+int forcepath = 0;
 
 int main(int argc, char *argv[]) {
 	void *state;
@@ -25,8 +21,20 @@ int main(int argc, char *argv[]) {
 	char *s = getenv("VERBOSE");
 	if (s && s[0]) {
 		verbose = 1;
-	} else if (argc > 1 && !strncmp(argv[1], "-v", 2)) {
-		verbose = 1;
+	}
+	s = getenv("FORCE_PATH");
+	if (s && s[0]) {
+		forcepath = 1;
+	}
+	for (i = 1; i < argc; ++i) {
+		if (argv[i][0] == '-') {
+			if (strchr(argv[i] + 1, 'v')) {
+				verbose = 1;
+			}
+			if (strchr(argv[i] + 1, 'f')) {
+				forcepath = 1;
+			}
+		}
 	}
 
 	if (verbose) {

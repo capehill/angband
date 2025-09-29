@@ -23,6 +23,7 @@
 #include "game-input.h"
 #include "obj-tval.h"
 #include "player.h"
+#include "player-birth.h"
 #include "player-spell.h"
 #include "ui-birth.h"
 #include "ui-display.h"
@@ -90,6 +91,7 @@ enum birth_rollers
 };
 
 
+static void finish_with_random_choices(enum birth_stage current);
 static void point_based_start(void);
 static bool quickstart_allowed = false;
 bool arg_force_name;
@@ -101,7 +103,7 @@ bool arg_force_name;
 static enum birth_stage textui_birth_quickstart(void)
 //phantom name change changes
 {
-	const char *prompt = "['Y' to use this character, 'N' to start afresh, 'C' to change name or history]";
+	const char *prompt = "['Y': use as is; 'N': redo; 'C': change name/history; '=': set birth options]";
 
 	enum birth_stage next = BIRTH_QUICKSTART;
 
@@ -120,6 +122,8 @@ static enum birth_stage textui_birth_quickstart(void)
 			quit(NULL);
 		} else if ( !arg_force_name && (ke.code == 'C' || ke.code == 'c')) {
 			next = BIRTH_NAME_CHOICE;
+		} else if (ke.code == '=') {
+			do_cmd_options_birth();
 		} else if (ke.code == 'Y' || ke.code == 'y') {
 			cmdq_push(CMD_ACCEPT_CHARACTER);
 			next = BIRTH_COMPLETE;
@@ -177,14 +181,16 @@ typedef void (*browse_f) (int oid, void *db, const region *l);
 /**
  * We have one of these structures for each menu we display - it holds
  * the useful information for the menu - text of the menu items, "help"
- * text, current (or default) selection, and whether random selection
- * is allowed.
+ * text, current (or default) selection, whether random selection is allowed,
+ * and the current stage of the process for setting up a context menu and
+ * relaying the reuslt of a selection in that menu.
  */
 struct birthmenu_data 
 {
 	const char **items;
 	const char *hint;
 	bool allow_random;
+	enum birth_stage stage_inout;
 };
 
 /**
@@ -197,7 +203,7 @@ static void birthmenu_display(struct menu *menu, int oid, bool cursor,
 {
 	struct birthmenu_data *data = menu->menu_data;
 
-	byte attr = curs_attrs[CURS_KNOWN][0 != cursor];
+	uint8_t attr = curs_attrs[CURS_KNOWN][0 != cursor];
 	c_put_str(attr, data->items[oid], row, col);
 }
 
@@ -210,7 +216,7 @@ static const menu_iter birth_iter = { NULL, NULL, birthmenu_display, NULL, NULL 
 
 static void skill_help(const int r_skills[], const int c_skills[], int mhp, int exp, int infra)
 {
-	s16b skills[SKILL_MAX];
+	int16_t skills[SKILL_MAX];
 	unsigned i;
 
 	for (i = 0; i < SKILL_MAX ; ++i)
@@ -231,54 +237,13 @@ static void skill_help(const int r_skills[], const int c_skills[], int mhp, int 
 		text_out_e("\n");
 }
 
-static const char *get_flag_desc(bitflag flag)
-{
-	switch (flag)
-	{
-		case OF_SUST_STR: return "Sustains strength";
-		case OF_SUST_DEX: return "Sustains dexterity";
-		case OF_SUST_CON: return "Sustains constitution";
-		case OF_PROT_BLIND: return "Resists blindness";
-		case OF_HOLD_LIFE: return "Sustains experience";
-		case OF_FREE_ACT: return "Resists paralysis";
-		case OF_REGEN: return "Regenerates quickly";
-		case OF_SEE_INVIS: return "Sees invisible creatures";
-
-		default: return "Undocumented flag";
-	}
-}
-
-static const char *get_resist_desc(int element)
-{
-	switch (element)
-	{
-		case ELEM_POIS: return "Resists poison";
-		case ELEM_LIGHT: return "Resists light damage";
-		case ELEM_DARK: return "Resists darkness damage";
-
-		default: return "Undocumented element";
-	}
-}
-
-static const char *get_pflag_desc(bitflag flag)
-{
-	switch (flag)
-	{
-		#define PF(a,b,c) case PF_##a: return c;
-		#include "list-player-flags.h"
-		#undef PF
-	default:
-		abort(); /* compilation consistency problem */
-	}
-}
-
 static void race_help(int i, void *db, const region *l)
 {
 	int j;
-	size_t k;
 	struct player_race *r = player_id2race(i);
 	int len = (STAT_MAX + 1) / 2;
 
+	struct player_ability *ability;
 	int n_flags = 0;
 	int flag_space = 3;
 
@@ -310,28 +275,23 @@ static void race_help(int i, void *db, const region *l)
 	skill_help(r->r_skills, NULL, r->r_mhp, r->r_exp, r->infra);
 	text_out_e("\n");
 
-	for (k = 1; k < OF_MAX; k++) {
+	for (ability = player_abilities; ability; ability = ability->next) {
 		if (n_flags >= flag_space) break;
-		if (!of_has(r->flags, k)) continue;
-		text_out_e("\n%s", get_flag_desc(k));
+		if (streq(ability->type, "object") &&
+			!of_has(r->flags, ability->index)) {
+			continue;
+		} else if (streq(ability->type, "player") &&
+				   !pf_has(r->pflags, ability->index)) {
+			continue;
+		} else if (streq(ability->type, "element") &&
+				   (r->el_info[ability->index].res_level != ability->value)) {
+			continue;
+		}
+		text_out_e("\n%s", ability->name);
 		n_flags++;
 	}
 
-	for (k = 0; k < ELEM_MAX; k++) {
-		if (n_flags >= flag_space) break;
-		if (r->el_info[k].res_level != 1) continue;
-		text_out_e("\n%s", get_resist_desc(k));
-		n_flags++;
-	}
-
-	for (k = 0; k < PF_MAX; k++) {
-		if (n_flags >= flag_space) break;
-		if (!pf_has(r->pflags, k)) continue;
-		text_out_e("\n%s", get_pflag_desc(k));
-		n_flags++;
-	}
-
-	while(n_flags < flag_space) {
+	while (n_flags < flag_space) {
 		text_out_e("\n");
 		n_flags++;
 	}
@@ -343,11 +303,11 @@ static void race_help(int i, void *db, const region *l)
 static void class_help(int i, void *db, const region *l)
 {
 	int j;
-	size_t k;
 	struct player_class *c = player_id2class(i);
 	const struct player_race *r = player->race;
 	int len = (STAT_MAX + 1) / 2;
 
+	struct player_ability *ability;
 	int n_flags = 0;
 	int flag_space = 5;
 
@@ -406,23 +366,126 @@ static void class_help(int i, void *db, const region *l)
 		text_out_e("\nLearns %s magic", buf);
 	}
 
-	for (k = 0; k < PF_MAX; k++) {
-		const char *s;
+	for (ability = player_abilities; ability; ability = ability->next) {
 		if (n_flags >= flag_space) break;
-		if (!pf_has(c->pflags, k)) continue;
-		s = get_pflag_desc(k);
-		if (!s) continue;
-		text_out_e("\n%s", s);
+		if (streq(ability->type, "object") &&
+			!of_has(c->flags, ability->index)) {
+			continue;
+		} else if (streq(ability->type, "player") &&
+				   !pf_has(c->pflags, ability->index)) {
+			continue;
+		} else if (streq(ability->type, "element")) {
+			continue;
+		}
+
+		text_out_e("\n%s", ability->name);
 		n_flags++;
 	}
 
-	while(n_flags < flag_space) {
+	while (n_flags < flag_space) {
 		text_out_e("\n");
 		n_flags++;
 	}
 
 	/* Reset text_out() indentation */
 	text_out_indent = 0;
+}
+
+/**
+ * Display and handle user interaction with a context menu appropriate for the
+ * current stage.  That way actions available with certain keys are also
+ * available if only using the mouse.
+ *
+ * \param current_menu is the standard (not contextual) menu for the stage.
+ * \param in is the event triggering the context menu.  in->type must be
+ * EVT_MOUSE.
+ * \param out is the event to be passed upstream (to internal handling in
+ * menu_select() or, potentially, menu_select()'s caller).
+ * \return true if the event was handled; otherwise, return false.
+ *
+ * The logic here overlaps with what's done to handle cmd_keys in
+ * menu_question().
+ */
+static bool use_context_menu_birth(struct menu *current_menu,
+		const ui_event *in, ui_event *out)
+{
+	enum {
+		ACT_CTX_BIRTH_OPT,
+		ACT_CTX_BIRTH_RAND,
+		ACT_CTX_BIRTH_FINISH_RAND,
+		ACT_CTX_BIRTH_QUIT,
+		ACT_CTX_BIRTH_HELP
+	};
+	struct birthmenu_data *menu_data = menu_priv(current_menu);
+	char *labels;
+	struct menu *m;
+	int selected;
+
+	assert(in->type == EVT_MOUSE);
+	if (in->mouse.y != QUESTION_ROW && in->mouse.y != QUESTION_ROW + 1) {
+		return false;
+	}
+
+	labels = string_make(lower_case);
+	m = menu_dynamic_new();
+
+	m->selections = labels;
+	menu_dynamic_add_label(m, "Show birth options", '=',
+		ACT_CTX_BIRTH_OPT, labels);
+	if (menu_data->allow_random) {
+		menu_dynamic_add_label(m, "Select one at random", '*',
+			ACT_CTX_BIRTH_RAND, labels);
+	}
+	menu_dynamic_add_label(m, "Finish with random choices", '@',
+		ACT_CTX_BIRTH_FINISH_RAND, labels);
+	menu_dynamic_add_label(m, "Quit", 'q', ACT_CTX_BIRTH_QUIT, labels);
+	menu_dynamic_add_label(m, "Help", '?', ACT_CTX_BIRTH_HELP, labels);
+
+	screen_save();
+
+	menu_dynamic_calc_location(m, in->mouse.x, in->mouse.y);
+	region_erase_bordered(&m->boundary);
+
+	selected = menu_dynamic_select(m);
+
+	menu_dynamic_free(m);
+	string_free(labels);
+
+	screen_load();
+
+	switch (selected) {
+	case ACT_CTX_BIRTH_OPT:
+		do_cmd_options_birth();
+		/* The stage remains the same so leave stage_inout as is. */
+		out->type = EVT_SWITCH;
+		break;
+
+	case ACT_CTX_BIRTH_RAND:
+		current_menu->cursor = randint0(current_menu->count);
+		out->type = EVT_SELECT;
+		break;
+
+	case ACT_CTX_BIRTH_FINISH_RAND:
+		finish_with_random_choices(menu_data->stage_inout);
+		menu_data->stage_inout = BIRTH_FINAL_CONFIRM;
+		out->type = EVT_SWITCH;
+		break;
+
+	case ACT_CTX_BIRTH_QUIT:
+		quit(NULL);
+		break;
+
+	case ACT_CTX_BIRTH_HELP:
+		do_cmd_help();
+		menu_data->stage_inout = BIRTH_RESET;
+		out->type = EVT_SWITCH;
+
+	default:
+		/* There's nothing to do. */
+		break;
+	}
+
+	return true;
 }
 
 /**
@@ -438,9 +501,10 @@ static void init_birth_menu(struct menu *menu, int n_choices,
 	/* Initialise a basic menu */
 	menu_init(menu, MN_SKIN_SCROLL, &birth_iter);
 
-	/* A couple of behavioural flags - we want selections letters in
-	   lower case and a double tap to act as a selection. */
-	menu->selections = lower_case;
+	/* A couple of behavioural flags - we want selections as letters
+	   skipping the rogue-like cardinal direction movements and a
+	   double tap to act as a selection. */
+	menu->selections = all_letters_nohjkl;
 	menu->flags = MN_DBL_TAP;
 
 	/* Copy across the game's suggested initial selection, etc. */
@@ -459,6 +523,13 @@ static void init_birth_menu(struct menu *menu, int n_choices,
 
 	/* Set up the "browse" hook to display help text (where applicable). */
 	menu->browse_hook = aux;
+
+	/*
+	 * All use the same hook to display a context menu so that
+	 * functionality driven by keyboard input (see how cmd_keys is used
+	 * in menu_question()) is also available using the mouse.
+	 */
+	menu->context_hook = use_context_menu_birth;
 
 	/* Lay out the menu appropriately */
 	menu_layout(menu, reg);
@@ -552,8 +623,9 @@ static void clear_question(void)
 	"{light blue}Please select your character traits from the menus below:{/}\n\n" \
 	"Use the {light green}movement keys{/} to scroll the menu, " \
 	"{light green}Enter{/} to select the current menu item, '{light green}*{/}' " \
-	"for a random menu item, '{light green}ESC{/}' to step back through the " \
-	"birth process, '{light green}={/}' for the birth options, '{light green}?{/}' " \
+	"for a random menu item, '{light green}@{/}' to finish the character with random selections, " \
+	"'{light green}ESC{/}' to step back through the birth process, " \
+	"'{light green}={/}' for the birth options, '{light green}?{/}' " \
 	"for help, or '{light green}Ctrl-X{/}' to quit."
 
 /**
@@ -579,6 +651,131 @@ static void print_menu_instructions(void)
 }
 
 /**
+ * Advance character generation to the confirmation step using random choices
+ * and a default point buy for the statistics.
+ *
+ * \param current is the current stage for character generation.
+ */
+static void finish_with_random_choices(enum birth_stage current)
+{
+	struct {
+		cmd_code code;
+		const char* arg_name;
+		int arg_choice;
+		char* arg_str;
+		bool arg_is_choice;
+	} cmds[4];
+	int ncmd = 0;
+	const struct player_race *pr;
+	char name[PLAYER_NAME_LEN];
+	char history[240];
+
+	if (current <= BIRTH_RACE_CHOICE) {
+		int n, i;
+
+		for (pr = races, n = 0; pr; pr = pr->next, ++n) {}
+		i = randint0(n);
+		pr = player_id2race(i);
+
+		assert(ncmd < (int)N_ELEMENTS(cmds));
+		cmds[ncmd].code = CMD_CHOOSE_RACE;
+		cmds[ncmd].arg_name = "choice";
+		cmds[ncmd].arg_choice = i;
+		cmds[ncmd].arg_is_choice = true;
+		++ncmd;
+	} else {
+		pr = player->race;
+	}
+
+	if (current <= BIRTH_CLASS_CHOICE) {
+		struct player_class *pc;
+		int n, i;
+
+		for (pc = classes, n = 0; pc; pc = pc->next, ++n) {}
+		i = randint0(n);
+
+		assert(ncmd < (int)N_ELEMENTS(cmds));
+		cmds[ncmd].code = CMD_CHOOSE_CLASS;
+		cmds[ncmd].arg_name = "choice";
+		cmds[ncmd].arg_choice = i;
+		cmds[ncmd].arg_is_choice = true;
+		++ncmd;
+	}
+
+	if (current <= BIRTH_NAME_CHOICE) {
+		/*
+		 * Mimic what happens in get_name_command() for the
+		 * arg_force_name case.
+		 */
+		if (arg_force_name) {
+			if (arg_name[0]) {
+				my_strcpy(player->full_name, arg_name,
+					sizeof(player->full_name));
+			}
+		} else {
+			int ntry = 0;
+
+			while (1) {
+				if (ntry > 100) {
+					quit("Likely bug:  could not generate "
+						"a random name that was not "
+						"in use for a savefile");
+				}
+				player_random_name(name, sizeof(name));
+				/*
+				 * We're good to go if the frontend specified
+				 * a savefile to use or the savefile name
+				 * corresponding to the random name is not
+				 * already in use.
+				 */
+				if (savefile[0] || !savefile_name_already_used(name, true, true)) {
+					break;
+				}
+				++ntry;
+			}
+			assert(ncmd < (int)N_ELEMENTS(cmds));
+			cmds[ncmd].code = CMD_NAME_CHOICE;
+			cmds[ncmd].arg_name = "name";
+			cmds[ncmd].arg_str = name;
+			cmds[ncmd].arg_is_choice = false;
+			++ncmd;
+		}
+	}
+
+	if (current <= BIRTH_HISTORY_CHOICE) {
+		char *buf;
+
+		buf = get_history(pr->history);
+		my_strcpy(history, buf, sizeof(history));
+		string_free(buf);
+
+		assert(ncmd < (int)N_ELEMENTS(cmds));
+		cmds[ncmd].code = CMD_HISTORY_CHOICE;
+		cmds[ncmd].arg_name = "history";
+		cmds[ncmd].arg_str = history;
+		cmds[ncmd].arg_is_choice = false;
+		++ncmd;
+	}
+
+	/* Push in reverse order:  the last pushed will be executed first. */
+	while (ncmd > 0) {
+		--ncmd;
+		cmdq_push(cmds[ncmd].code);
+		if (cmds[ncmd].arg_name) {
+			if (cmds[ncmd].arg_is_choice) {
+				cmd_set_arg_choice(cmdq_peek(),
+					cmds[ncmd].arg_name,
+					cmds[ncmd].arg_choice);
+			} else {
+				cmd_set_arg_string(cmdq_peek(),
+					cmds[ncmd].arg_name,
+					cmds[ncmd].arg_str);
+			}
+		}
+	}
+}
+
+/**
  * Allow the user to select from the current menu, and return the 
  * corresponding command to the game.  Some actions are handled entirely
  * by the UI (displaying help text, for instance).
@@ -596,10 +793,11 @@ static enum birth_stage menu_question(enum birth_stage current,
 	clear_question();
 	Term_putstr(QUESTION_COL, QUESTION_ROW, -1, COLOUR_YELLOW, menu_data->hint);
 
-	current_menu->cmd_keys = "?=*\x18";	 /* ?, =, *, <ctl-X> */
+	current_menu->cmd_keys = "?=*@\x18";	 /* ?, =, *, @, <ctl-X> */
 
 	while (next == BIRTH_RESET) {
 		/* Display the menu, wait for a selection of some sort to be made. */
+		menu_data->stage_inout = current;
 		cx = menu_select(current_menu, EVT_KBRD, false);
 
 		/* As all the menus are displayed in "hierarchical" style, we allow
@@ -632,6 +830,8 @@ static enum birth_stage menu_question(enum birth_stage current,
 				cmd_set_arg_choice(cmdq_peek(), "choice", current_menu->cursor);
 				next = current + 1;
 			}
+		} else if (cx.type == EVT_SWITCH) {
+			next = menu_data->stage_inout;
 		} else if (cx.type == EVT_KBRD) {
 			/* '*' chooses an option at random from those the game's provided */
 			if (cx.key.code == '*' && menu_data->allow_random) {
@@ -644,6 +844,12 @@ static enum birth_stage menu_question(enum birth_stage current,
 			} else if (cx.key.code == '=') {
 				do_cmd_options_birth();
 				next = current;
+			} else if (cx.key.code == '@') {
+				/*
+				 * Use random choices to complete the character.
+				 */
+				finish_with_random_choices(current);
+				next = BIRTH_FINAL_CONFIRM;
 			} else if (cx.key.code == KTRL('X')) {
 				quit(NULL);
 			} else if (cx.key.code == '?') {
@@ -661,10 +867,19 @@ static enum birth_stage menu_question(enum birth_stage current,
  * ------------------------------------------------------------------------ */
 static enum birth_stage roller_command(bool first_call)
 {
+	enum {
+		ACT_CTX_BIRTH_ROLL_NONE,
+		ACT_CTX_BIRTH_ROLL_ESCAPE,
+		ACT_CTX_BIRTH_ROLL_REROLL,
+		ACT_CTX_BIRTH_ROLL_PREV,
+		ACT_CTX_BIRTH_ROLL_ACCEPT,
+		ACT_CTX_BIRTH_ROLL_QUIT,
+		ACT_CTX_BIRTH_ROLL_HELP
+	};
 	char prompt[80] = "";
 	size_t promptlen = 0;
-
-	struct keypress ch;
+	int action = ACT_CTX_BIRTH_ROLL_NONE;
+	ui_event in;
 
 	enum birth_stage next = BIRTH_ROLLER;
 
@@ -686,32 +901,110 @@ static enum birth_stage roller_command(bool first_call)
 	/* Prompt for it */
 	prt(prompt, Term->hgt - 1, Term->wid / 2 - promptlen / 2);
 	
-	/* Prompt and get a command */
-	ch = inkey();
+	/*
+	 * Get the response.  Emulate what inkey_does() without coercing mouse
+	 * events to look like keystrokes.
+	 */
+	while (1) {
+		in = inkey_ex();
+		if (in.type == EVT_KBRD || in.type == EVT_MOUSE) {
+			break;
+		}
+		if (in.type == EVT_BUTTON) {
+			in.type = EVT_KBRD;
+			break;
+		}
+		if (in.type == EVT_ESCAPE) {
+			in.type = EVT_KBRD;
+			in.key.code = ESCAPE;
+			in.key.mods = 0;
+			break;
+		}
+	}
 
 	/* Analyse the command */
-	if (ch.code == ESCAPE) {
-		/* Back out */
+	if (in.type == EVT_KBRD) {
+		if (in.key.code == ESCAPE) {
+			action = ACT_CTX_BIRTH_ROLL_ESCAPE;
+		} else if (in.key.code == KC_ENTER) {
+			action = ACT_CTX_BIRTH_ROLL_ACCEPT;
+		} else if (in.key.code == ' ' || in.key.code == 'r') {
+			action = ACT_CTX_BIRTH_ROLL_REROLL;
+		} else if (prev_roll && in.key.code == 'p') {
+			action = ACT_CTX_BIRTH_ROLL_PREV;
+		} else if (in.key.code == KTRL('X')) {
+			action = ACT_CTX_BIRTH_ROLL_QUIT;
+		} else if (in.key.code == '?') {
+			action = ACT_CTX_BIRTH_ROLL_HELP;
+		} else {
+			/* Nothing handled directly here */
+			bell();
+		}
+	} else if (in.type == EVT_MOUSE) {
+		if (in.mouse.button == 2) {
+			action = ACT_CTX_BIRTH_ROLL_ESCAPE;
+		} else {
+			/* Present a context menu with the other actions. */
+			char *labels = string_make(lower_case);
+			struct menu *m = menu_dynamic_new();
+
+			m->selections = labels;
+			menu_dynamic_add_label(m, "Reroll", 'r',
+				ACT_CTX_BIRTH_ROLL_REROLL, labels);
+			if (prev_roll) {
+				menu_dynamic_add_label(m, "Retrieve previous",
+					'p', ACT_CTX_BIRTH_ROLL_PREV, labels);
+			}
+			menu_dynamic_add_label(m, "Accept", 'a',
+				ACT_CTX_BIRTH_ROLL_ACCEPT, labels);
+			menu_dynamic_add_label(m, "Quit", 'q',
+				ACT_CTX_BIRTH_ROLL_QUIT, labels);
+			menu_dynamic_add_label(m, "Help", '?',
+				ACT_CTX_BIRTH_ROLL_HELP, labels);
+
+			screen_save();
+
+			menu_dynamic_calc_location(m, in.mouse.x, in.mouse.y);
+			region_erase_bordered(&m->boundary);
+
+			action = menu_dynamic_select(m);
+
+			menu_dynamic_free(m);
+			string_free(labels);
+
+			screen_load();
+		}
+	}
+
+	switch (action) {
+	case ACT_CTX_BIRTH_ROLL_ESCAPE:
+		/* Back out to the previous birth stage. */
 		next = BIRTH_BACK;
-	} else if (ch.code == KC_ENTER) {
-		/* 'Enter' accepts the roll */
-		next = BIRTH_NAME_CHOICE;
-	} else if ((ch.code == ' ') || (ch.code == 'r')) {
-		/* Reroll this character */
+		break;
+
+	case ACT_CTX_BIRTH_ROLL_REROLL:
+		/* Reroll this character. */
 		cmdq_push(CMD_ROLL_STATS);
 		prev_roll = true;
-	} else if (prev_roll && (ch.code == 'p')) {
-		/* Previous character */
+		break;
+
+	case ACT_CTX_BIRTH_ROLL_PREV:
+		/* Swap with previous roll. */
 		cmdq_push(CMD_PREV_STATS);
-	} else if (ch.code == KTRL('X')) {
-		/* Quit */
+		break;
+
+	case ACT_CTX_BIRTH_ROLL_ACCEPT:
+		/* Accept the roll.  Go to the next stage. */
+		next = BIRTH_NAME_CHOICE;
+		break;
+
+	case ACT_CTX_BIRTH_ROLL_QUIT:
 		quit(NULL);
-	} else if (ch.code == '?') {
-		/* Help XXX */
+		break;
+
+	case ACT_CTX_BIRTH_ROLL_HELP:
 		do_cmd_help();
-	} else {
-		/* Nothing handled directly here */
-		bell("Illegal roller command!");
+		break;
 	}
 
 	return next;
@@ -726,6 +1019,12 @@ static enum birth_stage roller_command(bool first_call)
 #define COSTS_ROW 2
 #define COSTS_COL (42 + 32)
 #define TOTAL_COL (42 + 19)
+
+/*
+ * Remember what's possible for a given stat.  0 means can't buy or sell.
+ * 1 means can sell.  2 means can buy.  3 means can buy or sell.
+ */
+static int buysell[STAT_MAX];
 
 /**
  * This is called whenever a stat changes.  We take the easy road, and just
@@ -759,26 +1058,35 @@ static void point_based_points(game_event_type type, game_event_data *data,
 {
 	int i;
 	int sum = 0;
-	int *stats = data->birthstats.stats;
+	const int *spent = data->birthpoints.points;
+	const int *inc = data->birthpoints.inc_points;
+	int remaining = data->birthpoints.remaining;
 
 	/* Display the costs header */
 	put_str("Cost", COSTS_ROW - 1, COSTS_COL);
 	
-	/* Display the costs */
 	for (i = 0; i < STAT_MAX; i++) {
+		/* Remember what's allowed. */
+		buysell[i] = 0;
+		if (spent[i] > 0) {
+			buysell[i] |= 1;
+		}
+		if (inc[i] <= remaining) {
+			buysell[i] |= 2;
+		}
 		/* Display cost */
-		put_str(format("%4d", stats[i]), COSTS_ROW + i, COSTS_COL);
-		sum += stats[i];
+		put_str(format("%4d", spent[i]), COSTS_ROW + i, COSTS_COL);
+		sum += spent[i];
 	}
 	
-	put_str(format("Total Cost: %2d/%2d", sum,
-				   data->birthstats.remaining + sum), COSTS_ROW + STAT_MAX,
-			TOTAL_COL);
+	put_str(format("Total Cost: %2d/%2d", sum, remaining + sum),
+		COSTS_ROW + STAT_MAX, TOTAL_COL);
 }
 
 static void point_based_start(void)
 {
 	const char *prompt = "[up/down to move, left/right to modify, 'r' to reset, 'Enter' to accept]";
+	int i;
 
 	/* Clear */
 	Term_clear();
@@ -788,6 +1096,10 @@ static void point_based_start(void)
 	display_player_stat_info();
 
 	prt(prompt, Term->hgt - 1, Term->wid / 2 - strlen(prompt) / 2);
+
+	for (i = 0; i < STAT_MAX; ++i) {
+		buysell[i] = 0;
+	}
 
 	/* Register handlers for various events - cheat a bit because we redraw
 	   the lot at once rather than each bit at a time. */
@@ -806,48 +1118,173 @@ static void point_based_stop(void)
 static enum birth_stage point_based_command(void)
 {
 	static int stat = 0;
-	struct keypress ch;
+	enum {
+		ACT_CTX_BIRTH_PTS_NONE,
+		ACT_CTX_BIRTH_PTS_BUY,
+		ACT_CTX_BIRTH_PTS_SELL,
+		ACT_CTX_BIRTH_PTS_ESCAPE,
+		ACT_CTX_BIRTH_PTS_RESET,
+		ACT_CTX_BIRTH_PTS_ACCEPT,
+		ACT_CTX_BIRTH_PTS_QUIT
+	};
+	int action = ACT_CTX_BIRTH_PTS_NONE;
+	ui_event in;
 	enum birth_stage next = BIRTH_POINTBASED;
 
 	/* Place cursor just after cost of current stat */
 	Term_gotoxy(COSTS_COL + 4, COSTS_ROW + stat);
 
-	/* Get key */
-	ch = inkey();
-	
-	if (ch.code == KTRL('X')) {
-		quit(NULL);
-	} else if (ch.code == ESCAPE) {
-		/* Go back a step, or back to the start of this step */
+	/*
+	 * Get input.  Emulate what inkey() does without coercing mouse events
+	 * to look like keystrokes.
+	 */
+	while (1) {
+		in = inkey_ex();
+		if (in.type == EVT_KBRD || in.type == EVT_MOUSE) {
+			break;
+		}
+		if (in.type == EVT_BUTTON) {
+			in.type = EVT_KBRD;
+		}
+		if (in.type == EVT_ESCAPE) {
+			in.type = EVT_KBRD;
+			in.key.code = ESCAPE;
+			in.key.mods = 0;
+			break;
+		}
+	}
+
+	/* Figure out what to do. */
+	if (in.type == EVT_KBRD) {
+		if (in.key.code == KTRL('X')) {
+			action = ACT_CTX_BIRTH_PTS_QUIT;
+		} else if (in.key.code == ESCAPE) {
+			action = ACT_CTX_BIRTH_PTS_ESCAPE;
+		} else if (in.key.code == 'r' || in.key.code == 'R') {
+			action = ACT_CTX_BIRTH_PTS_RESET;
+		} else if (in.key.code == KC_ENTER) {
+			action = ACT_CTX_BIRTH_PTS_ACCEPT;
+		} else {
+			int dir;
+
+			if (in.key.code == '-') {
+				dir = 4;
+			} else if (in.key.code == '+') {
+				dir = 6;
+			} else {
+				dir = target_dir(in.key);
+			}
+
+			/*
+			 * Go to previous stat.  Loop back to the last if at
+			 * the first.
+			 */
+			if (dir == 8) {
+				stat = (stat + STAT_MAX - 1) % STAT_MAX;
+			}
+
+			/*
+			 * Go to next stat.  Loop back to the first if at the
+			 * last.
+			 */
+			if (dir == 2) {
+				stat = (stat + 1) % STAT_MAX;
+			}
+
+			/* Decrease stat (if possible). */
+			if (dir == 4) {
+				action = ACT_CTX_BIRTH_PTS_SELL;
+			}
+
+			/* Increase stat (if possible). */
+			if (dir == 6) {
+				action = ACT_CTX_BIRTH_PTS_BUY;
+			}
+		}
+	} else if (in.type == EVT_MOUSE) {
+		assert(stat >= 0 && stat < STAT_MAX);
+		if (in.mouse.button == 2) {
+			action = ACT_CTX_BIRTH_PTS_ESCAPE;
+		} else if (in.mouse.y >= COSTS_ROW
+				&& in.mouse.y < COSTS_ROW + STAT_MAX
+				&& in.mouse.y != COSTS_ROW + stat) {
+			/*
+			 * Make that stat the current one if buying or selling.
+			 */
+			stat = in.mouse.y - COSTS_ROW;
+		} else {
+			/* Present a context menu with the other actions. */
+			char *labels = string_make(lower_case);
+			struct menu *m = menu_dynamic_new();
+
+			m->selections = labels;
+			if (in.mouse.y == COSTS_ROW + stat
+					&& (buysell[stat] & 1)) {
+				menu_dynamic_add_label(m, "Sell", 's',
+					ACT_CTX_BIRTH_PTS_SELL, labels);
+			}
+			if (in.mouse.y == COSTS_ROW + stat
+					&& (buysell[stat] & 2)) {
+				menu_dynamic_add_label(m, "Buy", 'b',
+					ACT_CTX_BIRTH_PTS_BUY, labels);
+			}
+			menu_dynamic_add_label(m, "Accept", 'a',
+				ACT_CTX_BIRTH_PTS_ACCEPT, labels);
+			menu_dynamic_add_label(m, "Reset", 'r',
+				ACT_CTX_BIRTH_PTS_RESET, labels);
+			menu_dynamic_add_label(m, "Quit", 'q',
+				ACT_CTX_BIRTH_PTS_QUIT, labels);
+
+			screen_save();
+
+			menu_dynamic_calc_location(m, in.mouse.x, in.mouse.y);
+			region_erase_bordered(&m->boundary);
+
+			action = menu_dynamic_select(m);
+
+			menu_dynamic_free(m);
+			string_free(labels);
+
+			screen_load();
+		}
+	}
+
+	/* Do it. */
+	switch (action) {
+	case ACT_CTX_BIRTH_PTS_SELL:
+		assert(stat >= 0 && stat < STAT_MAX);
+		cmdq_push(CMD_SELL_STAT);
+		cmd_set_arg_choice(cmdq_peek(), "choice", stat);
+		break;
+
+	case ACT_CTX_BIRTH_PTS_BUY:
+		assert(stat >= 0 && stat < STAT_MAX);
+		cmdq_push(CMD_BUY_STAT);
+		cmd_set_arg_choice(cmdq_peek(), "choice", stat);
+		break;
+
+	case ACT_CTX_BIRTH_PTS_ESCAPE:
+		/* Go back a step or back to the start of this step. */
 		next = BIRTH_BACK;
-	} else if (ch.code == 'r' || ch.code == 'R') {
+		break;
+
+	case ACT_CTX_BIRTH_PTS_RESET:
 		cmdq_push(CMD_RESET_STATS);
 		cmd_set_arg_choice(cmdq_peek(), "choice", false);
-	} else if (ch.code == KC_ENTER) {
-		/* Done */
-		next = BIRTH_NAME_CHOICE;
-	} else {
-		int dir = target_dir(ch);
+		break;
 
-		/* Prev stat, looping round to the bottom when going off the top */
-		if (dir == 8)
-			stat = (stat + STAT_MAX - 1) % STAT_MAX;
-		
-		/* Next stat, looping round to the top when going off the bottom */
-		if (dir == 2)
-			stat = (stat + 1) % STAT_MAX;
-		
-		/* Decrease stat (if possible) */
-		if (dir == 4) {
-			cmdq_push(CMD_SELL_STAT);
-			cmd_set_arg_choice(cmdq_peek(), "choice", stat);
-		}
-		
-		/* Increase stat (if possible) */
-		if (dir == 6) {
-			cmdq_push(CMD_BUY_STAT);
-			cmd_set_arg_choice(cmdq_peek(), "choice", stat);
-		}
+	case ACT_CTX_BIRTH_PTS_ACCEPT:
+		/* Done with this stage.  Proceed to the next. */
+		next = BIRTH_NAME_CHOICE;
+		break;
+
+	case ACT_CTX_BIRTH_PTS_QUIT:
+		quit(NULL);
+		break;
+
+	default:
+		/* Do nothing and remain at this stage. */
+		break;
 	}
 
 	return next;
@@ -868,9 +1305,18 @@ static enum birth_stage get_name_command(void)
 		my_strcpy(player->full_name, arg_name, sizeof(player->full_name));
 	}
 
+	/*
+	 * If not forcing the character's name, the front end didn't set the
+	 * savefile to use, and the chosen name for the character would lead
+	 * to overwriting an existing savefile, confirm that's okay with the
+	 * player.
+	 */
 	if (arg_force_name) {
 		next = BIRTH_HISTORY_CHOICE;
-	} else if (get_character_name(name, sizeof(name))) {
+	} else if (get_character_name(name, sizeof(name))
+			&& (savefile[0]
+			|| !savefile_name_already_used(name, true, true)
+			|| get_check("A savefile for that name exists.  Overwrite it? "))) {
 		cmdq_push(CMD_NAME_CHOICE);
 		cmd_set_arg_string(cmdq_peek(), "name", name);
 		next = BIRTH_HISTORY_CHOICE;
@@ -882,10 +1328,14 @@ static enum birth_stage get_name_command(void)
 	return next;
 }
 
-void get_screen_loc(size_t cursor, int *x, int *y, size_t n_lines, size_t *line_starts, size_t *line_lengths)
+static void get_screen_loc(size_t cursor, int *x, int *y, size_t n_lines,
+	size_t *line_starts, size_t *line_lengths)
 {
 	size_t lengths_so_far = 0;
 	size_t i;
+
+	if (!line_starts || !line_lengths) return;
+
 	for (i = 0; i < n_lines; i++) {
 		if (cursor >= line_starts[i]) {
 			if (cursor <= (line_starts[i] + line_lengths[i])) {
@@ -899,7 +1349,7 @@ void get_screen_loc(size_t cursor, int *x, int *y, size_t n_lines, size_t *line_
 	}
 }
 
-int edit_text(char *buffer, int buflen) {
+static int edit_text(char *buffer, int buflen) {
 	int len = strlen(buffer);
 	bool done = false;
 	int cursor = 0;
@@ -913,14 +1363,23 @@ int edit_text(char *buffer, int buflen) {
 
 		size_t *line_starts = NULL, *line_lengths = NULL;
 		size_t n_lines;
+		/*
+		 * This is the total number of UTF-8 characters; can be less
+		 * less than len, the number of 8-bit units in the buffer,
+		 * if a single character is encoded with more than one 8-bit
+		 * unit.
+		 */
+		int ulen;
 
 		/* Display on screen */
 		clear_from(HIST_INSTRUCT_ROW);
-		textblock_append(tb, buffer);
+		textblock_append(tb, "%s", buffer);
 		textui_textblock_place(tb, area, NULL);
 
 		n_lines = textblock_calculate_lines(tb,
 				&line_starts, &line_lengths, area.width);
+		ulen = (n_lines > 0) ? line_starts[n_lines - 1] +
+			line_lengths[n_lines - 1]: 0;
 
 		/* Set cursor to current editing position */
 		get_screen_loc(cursor, &x, &y, n_lines, line_starts, line_lengths);
@@ -940,12 +1399,12 @@ int edit_text(char *buffer, int buflen) {
 				break;
 
 			case ARROW_RIGHT:
-				if (cursor < len) cursor++;
+				if (cursor < ulen) cursor++;
 				break;
 
 			case ARROW_DOWN: {
 				int add = line_lengths[y] + 1;
-				if (cursor + add < len) cursor += add;
+				if (cursor + add < ulen) cursor += add;
 				break;
 			}
 
@@ -957,7 +1416,7 @@ int edit_text(char *buffer, int buflen) {
 				break;
 
 			case KC_END:
-				cursor = MAX(0, len);
+				cursor = MAX(0, ulen);
 				break;
 
 			case KC_HOME:
@@ -966,21 +1425,38 @@ int edit_text(char *buffer, int buflen) {
 
 			case KC_BACKSPACE:
 			case KC_DELETE: {
+				char *ocurs, *oshift;
+
 				/* Refuse to backspace into oblivion */
 				if ((ke.code == KC_BACKSPACE && cursor == 0) ||
-						(ke.code == KC_DELETE && cursor >= len))
+						(ke.code == KC_DELETE && cursor >= ulen))
 					break;
 
-				/* Move the string from k to nul along to the left by 1 */
-				if (ke.code == KC_BACKSPACE)
-					memmove(&buffer[cursor - 1], &buffer[cursor], len - cursor);
-				else
-					memmove(&buffer[cursor], &buffer[cursor + 1], len - cursor - 1);
-
-				/* Decrement */
-				if (ke.code == KC_BACKSPACE)
-					cursor--;
-				len--;
+				/*
+				 * Move the string from k to nul along to the
+				 * left by 1.  First, have to get offset
+				 * corresponding to the cursor position.
+				 */
+				ocurs = utf8_fskip(buffer, cursor, NULL);
+				assert(ocurs);
+				if (ke.code == KC_BACKSPACE) {
+					/* Get offset of the previous character. */
+					oshift = utf8_rskip(ocurs, 1, buffer);
+					assert(oshift);
+					memmove(oshift, ocurs,
+						len - (ocurs - buffer));
+					/* Decrement */
+					--cursor;
+					len -= ocurs - oshift;
+				} else {
+					/* Get offset of the next character. */
+					oshift = utf8_fskip(ocurs, 1, NULL);
+					assert(oshift);
+					memmove(ocurs, oshift,
+						len - (oshift - buffer));
+					/* Decrement. */
+					len -= oshift - ocurs;
+				}
 
 				/* Terminate */
 				buffer[len] = '\0';
@@ -989,25 +1465,43 @@ int edit_text(char *buffer, int buflen) {
 			}
 			
 			default: {
-				bool atnull = (buffer[cursor] == 0);
+				bool atnull = (cursor == ulen);
+				char encoded[5];
+				int n_enc;
+				char *ocurs;
 
-				if (!isprint(ke.code))
+				if (!keycode_isprint(ke.code))
 					break;
 
-				if (atnull) {
-					/* Make sure we have enough room for a new character */
-					if ((cursor + 1) >= buflen) break;
-				} else {
-					/* Make sure we have enough room to add a new character */
-					if ((cursor + 1) >= buflen) break;
+				n_enc = utf32_to_utf8(encoded,
+					N_ELEMENTS(encoded), &ke.code, 1, NULL);
 
-					/* Move the rest of the buffer along to make room */
-					memmove(&buffer[cursor + 1], &buffer[cursor], len - cursor);
+				/*
+				 * Make sure we have something to add and have
+				 * enough space.
+				 */
+				if (n_enc == 0 || n_enc + len >= buflen) {
+					break;
 				}
 
-				/* Insert the character */
-				buffer[cursor++] = (char)ke.code;
-				len++;
+				/* Insert the encoded character. */
+				if (atnull) {
+					ocurs = buffer + len;
+				} else {
+					ocurs = utf8_fskip(buffer, cursor, NULL);
+					assert(ocurs);
+					/*
+					 * Move the rest of the buffer along
+					 * to make room.
+					 */
+					memmove(ocurs + n_enc, ocurs,
+						len - (ocurs - buffer));
+				}
+				memcpy(ocurs, encoded, n_enc);
+
+				/* Update cursor position and length. */
+				++cursor;
+				len += n_enc;
 
 				/* Terminate */
 				buffer[len] = '\0';
@@ -1016,6 +1510,8 @@ int edit_text(char *buffer, int buflen) {
 			}
 		}
 
+		mem_free(line_starts);
+		mem_free(line_lengths);
 		textblock_free(tb);
 	}
 
@@ -1051,7 +1547,7 @@ static enum birth_stage get_history_command(void)
 		switch (edit_text(history, sizeof(history))) {
 			case -1:
 				next = BIRTH_BACK;
-
+				break;
 			case 0:
 				cmdq_push(CMD_HISTORY_CHOICE);
 				cmd_set_arg_string(cmdq_peek(), "history", history);
@@ -1128,7 +1624,7 @@ int textui_do_birth(void)
 	bool done = false;
 
 	cmdq_push(CMD_BIRTH_INIT);
-	cmdq_execute(CMD_BIRTH);
+	cmdq_execute(CTX_BIRTH);
 
 	while (!done) {
 
@@ -1194,8 +1690,15 @@ int textui_do_birth(void)
 			{
 				roller = BIRTH_POINTBASED;
 		
-				if (prev > BIRTH_POINTBASED)
+				if (prev > BIRTH_POINTBASED) {
 					point_based_start();
+					/*
+					 * Force a redraw of the point
+					 * allocations but do not reset them.
+					 */
+					cmdq_push(CMD_REFRESH_STATS);
+					cmdq_execute(CTX_BIRTH);
+				}
 
 				next = point_based_command();
 
@@ -1267,7 +1770,7 @@ int textui_do_birth(void)
 		current_stage = next;
 
 		/* Execute whatever commands have been sent */
-		cmdq_execute(CMD_BIRTH);
+		cmdq_execute(CTX_BIRTH);
 	}
 
 	return 0;

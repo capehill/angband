@@ -8,6 +8,9 @@ walls, floor, objects, features, and creatures lurking about. In order to
 direct your character through their adventure, you will enter single
 character commands (see 'commands.txt').
 
+.. index::
+   single: map symbols
+
 Symbols On Your Map
 ===================
 
@@ -23,7 +26,8 @@ symbol (by default) is used to represent the character.
 
 It will not be necessary to remember all of the symbols and their meanings.
 The "slash" command (``/``) will identify any character appearing on your
-map (see 'commands.txt').
+map (see 'commands.txt'), and there is a comprehensive menu of terrain,
+objects, monsters and so on using the "tilde" (``~``) command.
 
 Note that you can use a "user pref file" to change any of these symbols to
 something you are more comfortable with.
@@ -83,11 +87,11 @@ Monsters
 ``e``     Floating Eye        ``E``    Elemental
 ``f``     Feline (Cat)        ``F``    Dragon Fly
 ``g``     Golem               ``G``    Ghost
-``h``     Humanoids           ``H``    Hybrid
+``h``     Humanoid            ``H``    Hybrid
 ``i``     Icky-Thing          ``I``    Insect
 ``j``     Jelly               ``J``    Snake
 ``k``     Kobold              ``K``    Killer Beetle
-``l``     Giant Louse         ``L``    Lich
+``l``     Tree/Ent            ``L``    Lich
 ``m``     Mold                ``M``    Multi-Headed Hydra
 ``n``     Naga                ``N``    (unused)
 ``o``     Orc                 ``O``    Ogre
@@ -109,8 +113,9 @@ The Town Level
 
 The town level is where you will begin your adventure. The town consists of
 eight buildings (each with an entrance), some townspeople, and a wall which
-surrounds the town. The first time you are in town it will be daytime, but
-note that the sun rises and falls (rather instantly) as time passes.
+surrounds the town and may contain streams of lava. The first time you are
+in town it will be daytime, but note that the sun rises and falls (rather
+instantly) as time passes.
 
 Townspeople
 ===========
@@ -135,14 +140,17 @@ acquire treasure.
 Town Buildings
 ==============
 
-Your character will begin their adventure with some basic supplies, and some
-extra gold with which to purchase more supplies at the town stores.
+Your character will begin their adventure with some basic supplies and some
+extra gold with which to purchase more supplies at the town stores. If you
+choose to play with the starting kit option on (it is on by default), your
+character will start with more items but with less gold.
 
 You may enter any open store to buy items of the appropriate type.
 The price the shopkeeper requests is dependent on the price of the item.
-By default stores will not buy items from the player.  If you choose to play
-with selling enabled, stores have a maximum value; they will not pay more
-than that for any item, regardless of how much it is actually worth.
+By default stores will not buy items from the player. If you choose to play
+with the no selling option off (it is on by default), they will buy, but
+each shopkeeper has a maximum amount she or he is willing to offer for any item,
+regardless of how much it is actually worth.
 
 Once inside a store, you will see the name and race of the store owner, the
 name of the store, the maximum amount of cash that the store owner will pay
@@ -169,11 +177,19 @@ If it is a good object, they will add it to their inventory. If it was a bad
 bargain, they simply throw the item away. You can use this feature to learn
 item flavors.
 
+.. index::
+   single: general store
+   seealso: store; general store
+
 The General Store (``1``)
   The General Store sells foods, some clothing, torches, oil, shovels and
   picks. All of these items and some others can be sold back to the general
   store for money. The general store restocks like every store, but the
   inventory types never change.
+
+.. index::
+   single: armoury
+   seealso: store; armoury
 
 The Armoury (``2``)
   The Armoury is where the town's armour is fashioned. All sorts of
@@ -182,28 +198,52 @@ The Armoury (``2``)
   armoury. However, some armour types will never appear here unless you
   sell them.
 
+.. index::
+   single: weaponsmith
+   seealso: store; weaponsmith
+
 The Weaponsmith's Shop (``3``)
   The Weaponsmith's Shop is where the town's weapons are fashioned. Hand
   and missile weapons may be purchased and sold here, along with arrows,
   bolts, and shots. As with the armoury, not all weapon types will be
   stocked here, unless they are sold to the shop by the player first.
 
+.. index::
+   single: bookseller
+   seealso: store; bookseller
+
 The Bookseller (``4``)
   The Bookseller holds supplies of the simpler books needed by magic users,
   and will buy the more advanced books which can be found in the dungeon.
 
+.. index::
+   single: alchemy shop
+   seealso: store; alchemy shop
+
 The Alchemy shop (``5``)
   The Alchemy Shop deals in all types of potions and scrolls.
+
+.. index::
+   single: magic user's shop
+   seealso: store; magic user's shop
 
 The Magic User's Shop (``6``)
   The Magic User's Shop deals in all sorts of rings, wands, amulets, and
   staves.
+
+.. index::
+   single: black market
+   seealso: store; black market
 
 The Black Market (``7``)
   The Black Market will sell and buy anything at extortionate prices.
   However it occasionally has **very** good items in it. With the exception
   of artifacts, every item found in the dungeon may appear in the black
   market.
+
+.. index::
+   single: home
+   seealse: store; home
 
 Your Home (``8``)
   This is your house where you can store objects that you cannot carry on
@@ -213,7 +253,7 @@ Within The Dungeon
 ==================
 
 Once your character is adequately supplied with food, light, armor, and
-weapons, they is ready to enter the dungeon. Move on top of the ``>`` symbol
+weapons, they are ready to enter the dungeon. Move on top of the ``>`` symbol
 and use the "Down" command (``>``).
 
 Your character will enter a maze of interconnecting staircases and finally
@@ -229,7 +269,7 @@ stairs.
 
 In the dungeon, there are many things to find, but your character must
 survive many horrible and challenging encounters to find the treasure lying
-about and take it safely back to the town to sell.
+about.
 
 There are two sources for light once inside the dungeon. Permanent light
 which has been magically placed within rooms, and a light source carried by
@@ -245,6 +285,11 @@ point. You may use the "Fuel" command (``F``) to refuel your lantern (with
 flasks of oil), and it is a good idea to carry extra torches or flasks of 
 oil, as appropriate. There are rumours of objects of exceptional power 
 which glow with their own never-ending light.
+
+These last two paragraphs apply to most classes, but not to necromancers.
+Necromancers dislike light, and shroud themselves in darkness.  They are
+usually better off not carrying a light, but also do not gain any of the
+bonuses that may come from magical light sources.
 
 Objects Found In The Dungeon
 ============================
@@ -416,12 +461,11 @@ commands to use them. A ``<`` represents an up staircase and a ``>``
 represents a down staircase. You must move your character over the
 staircase before you can use it.
 
-Each level has at least one up staircase and at least two down staircases.
-There are no exceptions to this rule. You may have trouble finding some
-well hidden secret doors, or you may have to dig through obstructions to
-get to them, but you can always find the stairs if you look hard enough.
-Stairs, like permanent rock, and shop entrances, cannot be destroyed by any
-means.
+Most levels have at least one up staircase and at least two down staircases.
+You may have trouble finding some well hidden secret doors, or you may have
+to dig through obstructions to get to them, but you can always find the stairs
+if you look hard enough.  Stairs, like permanent rock, and shop entrances,
+cannot be destroyed by any means.
 
 Many secret doors are used within the dungeon to confuse and demoralize
 adventurers foolish enough to enter, although all secret doors can be
@@ -435,6 +479,9 @@ Creatures in the dungeon will generally know and use these secret doors,
 and can often be counted on to leave them open behind them when they pass
 through.
 
+.. index::
+   single: level feelings
+
 Level and object feelings
 =========================
 
@@ -443,15 +490,19 @@ upon entering a dungeon giving you a general feel of how dangerous that
 level is.
 
 The possible messages are :
-1 - "This seems a quiet, peaceful place" 
-2 - "This seems a tame, sheltered place", 
-3 - "This place seems reasonably safe",   
-4 - "This place does not seem too risky", 
-5 - "You feel nervous about this place",  
-6 - "You feel anxious about this place",  
-7 - "This place seems terribly dangerous",
-8 - "This place seems murderous",
-9 - "Omens of death haunt this place",
+
+===   ========================================= 
+ 1    "This seems a quiet, peaceful place"
+ 2    "This seems a tame, sheltered place"
+ 3    "This place seems reasonably safe"  
+ 4    "This place does not seem too risky"
+ 5    "You feel nervous about this place"
+ 6    "You feel anxious about this place"
+ 7    "This place seems terribly dangerous"
+ 8    "This place seems murderous"
+ 9    "Omens of death haunt this place"
+===   ========================================= 
+
 This feeling depends only on the monsters present in the dungeon when you
 first enter it. It will not get reduced to safer feeling as you kill 
 monsters neither will it increase if new ones are summoned.
@@ -464,25 +515,33 @@ get a feeling about how good are the objects lying on the floor of the
 dungeon.
 
 The possible messages are :
-1 - "there are naught but cobwebs here."
-2 - "there are only scraps of junk here.",
-3 - "there aren't many treasures here.",  
-4 - "there may not be much interesting here.",
-5 - "there may be something worthwhile here.",
-6 - "there are good treasures here.",
-7 - "there are very good treasures here.",
-8 - "there are excellent treasures here.",
-9 - "there are superb treasures here.",   
-$ - "you sense an item of wondrous power!",
-The last message indicates an artifact is present and is only possible
-if the preserve option is disabled.
 
-You may review your level feeling any time by using the ^K command.
+===   ========================================= 
+ 1    "there is naught but cobwebs here."
+ 2    "there are only scraps of junk here."
+ 3    "there aren't many treasures here." 
+ 4    "there may not be much interesting here."
+ 5    "there may be something worthwhile here."
+ 6    "there are good treasures here."
+ 7    "there are very good treasures here."
+ 8    "there are excellent treasures here."
+ 9    "there are superb treasures here." 
+ $    "you sense an item of wondrous power!"
+===   ========================================= 
+
+The last message indicates an artifact is present and is only possible
+if the option to lose artifacts is on (if that option is off, an
+artifact will guarantee a feeling of 5 or better).
+
+You may review your level feeling any time by using the ^f command.
 You may also consult it by checking the LF: indicator at the bottom
 left of the screen. The first number after it is the level feeling
 and the second one is the object feeling. The second one will be ?
 if you need to explore more before getting a feeling about the value
 of the treasures present in the dungeon.
+
+.. index::
+   single: winning
 
 Winning The Game
 ================
@@ -506,6 +565,9 @@ When you are ready to retire, simply kill your character (using the ``Q`` key)
 to have your character entered into the high score list as a winner. Note
 that until you retire, you can still be killed, so you may want to retire
 before wandering into yet another horde of greater demons.
+
+.. index::
+   single: dying
 
 Upon Death and Dying
 ====================

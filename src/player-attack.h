@@ -21,10 +21,12 @@
 
 #include "cmd-core.h"
 
+struct player;
+
 struct attack_result {
     bool success;
     int dmg;
-    u32b msg_type;
+    uint32_t msg_type;
     char *hit_verb;
 };
 
@@ -32,7 +34,7 @@ struct attack_result {
  * A list of the different hit types and their associated special message
  */
 struct hit_types {
-	u32b msg_type;
+	uint32_t msg_type;
 	const char *text;
 };
 
@@ -53,8 +55,20 @@ extern void do_cmd_throw(struct command *cmd);
 
 
 extern int breakage_chance(const struct object *obj, bool hit_target);
-extern bool test_hit(int chance, int ac, int vis);
+int chance_of_missile_hit_base(const struct player *p,
+	const struct object *missile, const struct object *launcher);
+int chance_of_melee_hit_base(const struct player *p,
+	const struct object *weapon);
+extern bool test_hit(int to_hit, int ac);
+void hit_chance(random_chance *, int, int);
+void apply_deadliness(int *die_average, int deadliness);
 extern void py_attack(struct player *p, struct loc grid);
-int py_attack_hit_chance(const struct player *p, const struct object *weapon);
+extern bool py_attack_real(struct player *p, struct loc grid, bool *fear);
+
+/* These are public for use by unit test cases. */
+struct attack_result make_ranged_shot(struct player *p, struct object *ammo,
+		struct loc grid);
+struct attack_result make_ranged_throw(struct player *p, struct object *obj,
+		struct loc grid);
 
 #endif /* !PLAYER_ATTACK_H */

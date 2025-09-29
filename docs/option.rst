@@ -9,9 +9,6 @@ In the descriptions below, each option is listed as the textual summary
 which is shown on the "options" screen, plus the internal name of the
 option in brackets, followed by a textual description of the option.
 
-Note that the internal name of the option can be used in user pref files to
-force the option to a given setting, see "customize.txt" for more info.
-
 Various concepts are mentioned in the descriptions below, including
 "disturb", (cancel any running, resting, or repeated commands, which are in
 progress), "flush" (forget any keypresses waiting in the keypress queue),
@@ -25,8 +22,30 @@ below).
 User Interface Options
 ======================
 
+When setting the user interface options, there are a handful of commands
+to make it easier to get to a well-known state for all of those options.
+They are:  's' to save the current selections so that they will be used
+as the starting point for future characters, 'r' to reset the current
+selections to the defaults for a new character, and 'x' to reset the
+current selections to the Angband maintainer's defaults for the user
+interface options.
+
 Rogue-like commands ``rogue_like_commands``
-  Selects the "roguelike" command set (see "command.txt" for info).
+  Selects the "roguelike" command set.  See :ref:`Playing the Game` for
+  some description of the command sets.  The "roguelike" command set may
+  work better for you if use a keyboard which doesn't have a numeric
+  keypad.
+
+.. _autoexplore-commands-option:
+.. index::
+   single: autoexplore; commands option
+
+Autoexplore commands ``autoexplore_commands``
+  Modifies how the commands to use staircases work: if not already at
+  the appropriate staircase, attempt to move to the nearest known
+  staircase of the appropriate kind. Adds a command, ``p``, in both
+  the original and "roguelike" command sets to move to the nearest
+  unexplored location.
 
 Use sound ``use_sound``
   Turns on sound effects, if your system supports them.
@@ -54,11 +73,11 @@ Show flavors in object descriptions ``show_flavors``
 
 Highlight target with cursor ``show_target``
   Highlights the current targeted monster with a cursor.  Useful when 
-  combined with "use old target by default"
+  combined with "use old target by default".
 
 Highlight player with cursor between turns ``highlight_player``
   Highlights the player with a cursor.  Useful if you have trouble finding
-  the player
+  the player.
 
 Disturb whenever viewable monster moves ``disturb_near``
   Disturb the player when any viewable monster moves, whenever any monster
@@ -73,23 +92,23 @@ Show walls as solid blocks ``solid_walls``
 
 Show walls with shaded backgrounds ``hybrid_walls``
   Walls appear as # and % symbols overlaid on a gray background block.  
-  This overrides ``solid_walls]``
+  This overrides ``solid_walls``.
 
-Use special colors for torch-lit grids ``view_yellow_light``
+Color: Illuminate torchlight in yellow ``view_yellow_light``
   This option causes special colors to be used for "torch-lit" grids.
   Turning this option off will slightly improve game speed.
 
-Animate multi-coloured monsters and items ``animate_flicker``
+Color: Shimmer multi-colored things ``animate_flicker``
   Certain powerful monsters and items will shimmer in real time, i.e.
   between keypresses.  
 
 Center map continuously ``center_player``
   The map always centres on the player with this option on. With it off, it
   is divided into 25 sections, with coordinates (0,0) to (4,4), and will
-  how one section at a time - the display will "flip" to the next section
+  show one section at a time - the display will "flip" to the next section
   when the player nears the edge.
 
-Show unique monsters in a special colour ``purple_uniques``
+Color: Show unique monsters in purple ``purple_uniques``
   All "unique" monsters will be shown in a light purple colour, which is
   not used for any "normal" monsters - so you can tell at a glance that
   they are unique. If you like the idea but don't like the colour, you can
@@ -99,7 +118,7 @@ Automatically clear -more- prompts ``auto_more``
   The game does not wait for a keypress when it comes to a '-more-'
   prompt, but carries on going.  
 
-Player color indicates low hit points ``hp_changes_color``
+Color: Player color indicates low hit points ``hp_changes_color``
   This option makes the player ``@`` turn various shades of colour from
   white to red, depending on percentage of HP remaining.
 
@@ -121,7 +140,16 @@ Show effective speed as multiplier ``effective_speed``
 Birth options
 =============
 
-Randomize the artifacts (except a very few) ``birth_randarts``
+The birth options may only be changed when creating a character or using
+the quick restart option for a dead character.  When setting the birth
+options, there are a handful of commands to make it easier to get to a
+well-known state for all of the birth options.  They are:  's' to save the
+current selections so that they will be used as the starting point for
+future characters, 'r' to reset the current selections to the defaults
+for a new character, and 'x' to reset the current selections to the
+Angband maintainer's defaults for the birth options.
+
+Generate a new, random artifact set ``birth_randarts``
   A different set of artifacts will be created, in place of the standard
   ones. This is intended primarily for people who have played enough to
   know what most of the standard artifacts do and want some variety. The
@@ -136,7 +164,7 @@ Generate connected stairs ``birth_connect_stairs``
   With this option off, you will never start on a staircase - but other
   staircases up and down elsewhere on the level will still be generated.
 
-Force player descent ``birth_force_descend``
+Force player descent (never make up stairs) ``birth_force_descend``
   Upwards staircases do not work.  All downward staircases, including the
   one in town, transport the character one level below the previous maximum
   depth.  Recalling from the dungeon works and brings the character to the
@@ -152,7 +180,7 @@ Word of Recall has no effect ``birth_no_recall``
   Word of Recall scrolls have no effect.  When combined with the option
   to force player descent, this recreates the previous "ironman" option.
 
-Restrict the creation of artifacts ``birth_no_artifacts``
+Restrict creation of artifacts ``birth_no_artifacts``
   No artifacts will be created. Ever. Just *how* masochistic are you?
 
 Stack objects on the floor ``birth_stacking``
@@ -192,19 +220,24 @@ Monsters learn from their mistakes ``birth_ai_learn``
   use this information to choose the best attacks.  This option makes the
   game very difficult and is not recommended.
 
-Player can recognize all object properties at birth ``birth_know_runes``
+Know all runes on birth ``birth_know_runes``
   For players who don't enjoy the "identify by use" process for wearable
   items.  This option means all object properties are known at the outset, so
-  artifacts and ego items will identified on walking over them.
+  artifacts and ego items will be identified on walking over them.
 
-Player can recognize all object flavors at birth ``birth_know_flavors``
+Know all flavors on birth ``birth_know_flavors``
   For players who don't enjoy the "identify by use" process for consumable
   items.  This option means all object flavors are known at the outset.
 
-All dungeon levels are generated only once ``birth_levels_persist``
+Persistent levels (experimental) ``birth_levels_persist``
   Each level is generated for the first time when the player enters it, and 
   from then on when the player returns the level is as they last saw it, 
-  includeing monsters, items and traps.
+  including monsters, items and traps.
+
+To-damage is a percentage of dice (experimental) ``birth_percent_damage``
+  Instead of bonuses to damage being just added on to damage dealt, each +1
+  adds 5% to the value of the damage dice. This option is currently not
+  very balanced.
 
 Cheating options
 ================
@@ -261,7 +294,7 @@ Display overhead view
   Display an overhead view of the entire dungeon level.
 
 Display monster recall
-  Display a description of the most monster which has been most recently
+  Display a description of the monster which has been most recently
   attacked, targeted, or examined in some way.
 
 Display object recall
@@ -273,7 +306,8 @@ Display monster list
   Display a list of monsters you know about and their distance from you.
 
 Display status
-  ???
+  Display the current status of the player, with permanent or temporary boosts,
+  resistances and status ailments (also available on the main window).
 
 Display item list
   Display a list of items you know about and their distance from you.

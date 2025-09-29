@@ -46,6 +46,7 @@
 struct object_base *kb_info;
 struct object_kind *k_info;
 struct artifact *a_info;
+struct artifact_upkeep *aup_info;
 struct ego_item *e_info;
 struct flavor *flavors;
 
@@ -72,7 +73,7 @@ static void flavor_assign_fixed(void)
 }
 
 
-static void flavor_assign_random(byte tval)
+static void flavor_assign_random(uint8_t tval)
 {
 	int i;
 	int flavor_count = 0;
@@ -117,7 +118,7 @@ static void flavor_assign_random(byte tval)
  * Mainly useful for randarts so that fixed flavors for standards aren't
  * predictable. The One Ring is kept as fixed, since it lives through randarts.
  */
-void flavor_reset_fixed(void)
+static void flavor_reset_fixed(void)
 {
 	struct flavor *f;
 
@@ -145,7 +146,7 @@ void flavor_reset_fixed(void)
  * can happen is when the current title has 6 letters and the new word
  * has 8 letters, which would result in a 6 letter scroll title.
  *
- * Hack -- make sure everything stays the same for each saved game
+ * Make sure everything stays the same for each saved game
  * This is accomplished by the use of a saved "random seed", as in
  * "town_gen()".  Since no other functions are called while the special
  * seed is in effect, so this function is pretty "safe".
@@ -154,10 +155,10 @@ void flavor_init(void)
 {
 	int i, j;
 
-	/* Hack -- Use the "simple" RNG */
+	/* Use the "simple" RNG */
 	Rand_quick = true;
 
-	/* Hack -- Induce consistant flavors */
+	/* Induce consistant flavors */
 	Rand_value = seed_flavor;
 
 	/* Scrub all flavors and re-parse for new players */
@@ -223,7 +224,7 @@ void flavor_init(void)
 	}
 	flavor_assign_random(TV_SCROLL);
 
-	/* Hack -- Use the "complex" RNG */
+	/* Use the "complex" RNG */
 	Rand_quick = false;
 
 	/* Analyze every object */
@@ -233,8 +234,13 @@ void flavor_init(void)
 		/* Skip "empty" objects */
 		if (!kind->name) continue;
 
-		/* No flavor yields aware */
-		if (!kind->flavor) kind->aware = true;
+		/*
+		 * No flavor and not kind that only has one instance,
+		 * an artifact, yields aware
+		 */
+		if (!kind->flavor && kind->kidx < z_info->ordinary_kind_max) {
+			kind->aware = true;
+		}
 	}
 }
 
@@ -255,6 +261,88 @@ void flavor_set_all_aware(void)
 		/* Flavor yields aware */
 		if (kind->flavor) kind->aware = true;
 	}
+}
+
+/**
+ * Return the weight, in 1/10ths of pounds and including curses, of one object
+ * from a stack.
+ *
+ * obj->weight is only the base weight and does not include curses.
+ * Modifications to the weight from curses will not cause the weight to
+ * fall outside of the range of [0, 32767].
+ */
+int16_t object_weight_one(const struct object *obj)
+{
+	int16_t result = MAX(obj->weight, 0);
+
+	if (obj->curses) {
+		int i;
+
+		for (i = 1; i < z_info->curse_max; ++i) {
+			if (obj->curses[i].power) {
+				result = modify_weight_for_curse(i, result);
+			}
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Return the hit bonus for an object, including any of its curses.
+ */
+int object_to_hit(const struct object *obj)
+{
+	int result = obj->to_h;
+
+	if (obj->curses) {
+		int i;
+
+		for (i = 1; i < z_info->curse_max; ++i) {
+			if (obj->curses[i].power) {
+				result += curses[i].obj->to_h;
+			}
+		}
+	}
+	return result;
+}
+
+/**
+ * Return the damage bonus for an object, including any of its curses.
+ */
+int object_to_dam(const struct object *obj)
+{
+	int result = obj->to_d;
+
+	if (obj->curses) {
+		int i;
+
+		for (i = 1; i < z_info->curse_max; ++i) {
+			if (obj->curses[i].power) {
+				result += curses[i].obj->to_d;
+			}
+		}
+	}
+	return result;
+}
+
+/**
+ * Return the armor class bonus for an object, including any of its curses.
+ */
+int object_to_ac(const struct object *obj)
+{
+	int result = obj->to_a;
+
+	if (obj->curses) {
+		int i;
+
+		for (i = 1; i < z_info->curse_max; ++i) {
+			if (obj->curses[i].power) {
+				result += curses[i].obj->to_a;
+			}
+		}
+	}
+	return result;
 }
 
 /**
@@ -356,6 +444,44 @@ unsigned check_for_inscrip(const struct object *obj, const char *inscrip)
 	return i;
 }
 
+/**
+ * Looks if "inscrip" immediately followed by a decimal integer without a
+ * leading sign character is present on the given object.  Returns the number
+ * of times such an inscription occurs and, if that value is at least one,
+ * sets *ival to the value of the integer that followed the first such
+ * inscription.
+ */
+unsigned check_for_inscrip_with_int(const struct object *obj, const char *inscrip, int* ival)
+{
+	unsigned i = 0;
+	size_t inlen = strlen(inscrip);
+	const char *s;
+
+	if (!obj->note) return 0;
+
+	s = quark_str(obj->note);
+
+	/* Needing this implies there are bad instances of obj->note around,
+	 * but I haven't been able to track down their origins - NRM */
+	if (!s) return 0;
+
+	do {
+		s = strstr(s, inscrip);
+		if (!s) break;
+		if (isdigit(s[inlen])) {
+			if (i == 0) {
+				long inarg = strtol(s + inlen, 0, 10);
+
+				*ival = (inarg < INT_MAX) ? (int) inarg : INT_MAX;
+			}
+			i++;
+		}
+		s++;
+	} while (s);
+
+	return i;
+}
+
 /*** Object kind lookup functions ***/
 
 /**
@@ -389,14 +515,14 @@ struct object_kind *objkind_byid(int kidx) {
 /**
  * Return the a_idx of the artifact with the given name
  */
-struct artifact *lookup_artifact_name(const char *name)
+const struct artifact *lookup_artifact_name(const char *name)
 {
 	int i;
 	int a_idx = -1;
 
 	/* Look for it */
 	for (i = 0; i < z_info->a_max; i++) {
-		struct artifact *art = &a_info[i];
+		const struct artifact *art = &a_info[i];
 
 		/* Test for equality */
 		if (art->name && streq(name, art->name))
@@ -420,9 +546,11 @@ struct artifact *lookup_artifact_name(const char *name)
  */
 struct ego_item *lookup_ego_item(const char *name, int tval, int sval)
 {
+	struct object_kind *kind = lookup_kind(tval, sval);
 	int i;
 
 	/* Look for it */
+	if (!kind) return NULL;
 	for (i = 0; i < z_info->e_max; i++) {
 		struct ego_item *ego = &e_info[i];
 		struct poss_item *poss_item = ego->poss_items;
@@ -433,7 +561,6 @@ struct ego_item *lookup_ego_item(const char *name, int tval, int sval)
 
 		/* Check tval and sval */
 		while (poss_item) {
-			struct object_kind *kind = lookup_kind(tval, sval);
 			if (kind->kidx == poss_item->kidx) {
 				return ego;
 			}
@@ -451,24 +578,25 @@ struct ego_item *lookup_ego_item(const char *name, int tval, int sval)
 int lookup_sval(int tval, const char *name)
 {
 	int k;
-	unsigned int r;
+	char *pe;
+	unsigned long r = strtoul(name, &pe, 10);
 
-	if (sscanf(name, "%u", &r) == 1)
-		return r;
+	if (pe != name) {
+		return (contains_only_spaces(pe) && r < INT_MAX) ? (int)r : -1;
+	}
 
 	/* Look for it */
 	for (k = 0; k < z_info->k_max; k++) {
 		struct object_kind *kind = &k_info[k];
 		char cmp_name[1024];
 
-		if (!kind || !kind->name) continue;
+		if (!kind || !kind->name || kind->tval != tval) continue;
 
 		obj_desc_name_format(cmp_name, sizeof cmp_name, 0, kind->name, 0,
 							 false);
 
 		/* Found a match */
-		if (kind->tval == tval && !my_stricmp(cmp_name, name))
-			return kind->sval;
+		if (!my_stricmp(cmp_name, name)) return kind->sval;
 	}
 
 	return -1;
@@ -479,7 +607,7 @@ void object_short_name(char *buf, size_t max, const char *name)
 	size_t j, k;
 	/* Copy across the name, stripping modifiers & and ~) */
 	size_t len = strlen(name);
-	for (j = 0, k = 0; j < len && k < max; j++) {
+	for (j = 0, k = 0; j < len && k < max - 1; j++) {
 		if (j == 0 && name[0] == '&' && name[1] == ' ')
 			j += 2;
 		if (name[j] == '~')
@@ -516,9 +644,10 @@ static int compare_types(const struct object *o1, const struct object *o2)
 int compare_items(const struct object *o1, const struct object *o2)
 {
 	/* unknown objects go at the end, order doesn't matter */
-	if (is_unknown(o1) || is_unknown(o2)) {
-		if (!is_unknown(o1)) return -1;
-		return 1;
+	if (is_unknown(o1)) {
+		return (is_unknown(o2)) ? 0 : 1;
+	} else if (is_unknown(o2)) {
+		return -1;
 	}
 
 	/* known artifacts will sort first */
@@ -540,6 +669,23 @@ int compare_items(const struct object *o1, const struct object *o2)
 	/* otherwise, just compare tvals and svals */
 	/* NOTE: arguably there could be a better order than this */
 	return compare_types(o1, o2);
+}
+
+
+/**
+ * Convert a depth from a chunk or player to a value appropriate for an
+ * object's origin.
+ *
+ * \param depth is the value to convert.
+ *
+ * Necessary since savefiles use 16-bit type to record the depth of a player
+ * or chunk and uint8_t to record the origin depth.
+ */
+uint8_t convert_depth_to_origin(int depth)
+{
+	if (depth < 0) return 0;
+	if (depth > 255) return 255;
+	return (uint8_t) depth;
 }
 
 
@@ -581,8 +727,7 @@ bool obj_is_activatable(const struct object *obj)
  */
 bool obj_can_activate(const struct object *obj)
 {
-	if (obj_is_activatable(obj))
-	{
+	if (obj_is_activatable(obj)) {
 		/* Check the recharge */
 		if (!obj->timeout) return true;
 	}
@@ -618,7 +763,7 @@ bool obj_kind_can_browse(const struct object_kind *kind)
 
 	for (i = 0; i < player->class->magic.num_books; i++) {
 		struct class_book book = player->class->magic.books[i];
-		if (kind == lookup_kind(book.tval, book.sval))
+		if (kind->tval == book.tval && kind->sval == book.sval)
 			return true;
 	}
 
@@ -633,13 +778,13 @@ bool obj_can_browse(const struct object *obj)
 bool obj_can_cast_from(const struct object *obj)
 {
 	return obj_can_browse(obj) &&
-			spell_book_count_spells(obj, spell_okay_to_cast) > 0;
+		spell_book_count_spells(player, obj, spell_okay_to_cast) > 0;
 }
 
 bool obj_can_study(const struct object *obj)
 {
 	return obj_can_browse(obj) &&
-			spell_book_count_spells(obj, spell_okay_to_study) > 0;
+		spell_book_count_spells(player, obj, spell_okay_to_study) > 0;
 }
 
 
@@ -647,6 +792,16 @@ bool obj_can_study(const struct object *obj)
 bool obj_can_takeoff(const struct object *obj)
 {
 	return !obj_has_flag(obj, OF_STICKY);
+}
+
+/*
+ * Can only throw an item that is not equipped or the equipped weapon if it
+ * can be taken off.
+ */
+bool obj_can_throw(const struct object *obj)
+{
+	return !object_is_equipped(player->body, obj)
+		|| (tval_is_melee_weapon(obj) && obj_can_takeoff(obj));
 }
 
 /* Can only put on wieldable items */
@@ -659,6 +814,25 @@ bool obj_can_wear(const struct object *obj)
 bool obj_can_fire(const struct object *obj)
 {
 	return obj->tval == player->state.ammo_tval;
+}
+
+/**
+ * Determine if an object is designed for throwing
+ */
+bool obj_is_throwing(const struct object *obj)
+{
+	return of_has(obj->flags, OF_THROWING);
+}
+
+/**
+ * Determine if an object is a known artifact
+ */
+bool obj_is_known_artifact(const struct object *obj)
+{
+	if (!obj->artifact) return false;
+	if (!obj->known) return false;
+	if (!obj->known->artifact) return false;
+	return true;
 }
 
 /* Can has inscrip pls */
@@ -720,9 +894,9 @@ struct effect *object_effect(const struct object *obj)
 /**
  * Does the given object need to be aimed?
  */ 
-bool obj_needs_aim(struct object *obj)
+bool obj_needs_aim(const struct object *obj)
 {
-	struct effect *effect = object_effect(obj);
+	const struct effect *effect = object_effect(obj);
 
 	/* If the effect needs aiming, or if the object type needs
 	   aiming, this object needs aiming. */
@@ -744,38 +918,29 @@ bool obj_can_fail(const struct object *o)
 
 
 /**
- * Returns the number of times in 1000 that @ will FAIL
- * - thanks to Ed Graham for the formula
+ * Failure rate for magic devices.
+ * This has been rewritten for 4.2.3 following the discussions in the thread
+ * https://angband.live/forums/forum/angband/development/9911-please-help-md-negative-value
+ * It uses a scaled, shifted version of the sigmoid function x/(1+|x|), namely
+ * 380 - 370(x/(5+|x|)), where x is 2 * (device skill - device level) + 1,
+ * to give fail rates out of 1000.
  */
 int get_use_device_chance(const struct object *obj)
 {
-	int lev, fail, numerator, denominator;
-
+	int lev, fail, x;
 	int skill = player->state.skills[SKILL_DEVICE];
 
-	int skill_min = 10;
-	int skill_max = 141;
-	int diff_min  = 1;
-	int diff_max  = 100;
-
 	/* Extract the item level, which is the difficulty rating */
-	if (obj->artifact)
-		lev = obj->artifact->level;
-	else
-		lev = obj->kind->level;
+	lev = obj->artifact ? obj->artifact->level :
+		(obj->activation ? obj->activation->level : obj->kind->level);
 
-	/* TODO: maybe use something a little less convoluted? */
-	numerator   = (skill - lev) - (skill_max - diff_min);
-	denominator = (lev - skill) - (diff_max - skill_min);
+	/* Calculate x */
+	x = 2 * (skill - lev) + 1;
 
-	/* Make sure that we don't divide by zero */
-	if (denominator == 0) denominator = numerator > 0 ? 1 : -1;
-
-	fail = (100 * numerator) / denominator;
-
-	/* Ensure failure rate is between 1% and 75% */
-	if (fail > 750) fail = 750;
-	if (fail < 10) fail = 10;
+	/* Now calculate the failure rate */
+	fail = -370 * x;
+	fail /= (5 + ABS(x));
+	fail += 380;
 
 	return fail;
 }
@@ -787,40 +952,62 @@ int get_use_device_chance(const struct object *obj)
  * \param source is the source item
  * \param dest is the target item, must be of the same type as source
  * \param amt is the number of items that are transfered
+ * \param dest_new will, if true, ignore whatever charges or timeout, dest
+ * has (i.e. treat it as a new stack).
  */
-void distribute_charges(struct object *source, struct object *dest, int amt)
+void distribute_charges(struct object *source, struct object *dest, int amt,
+		bool dest_new)
 {
-	int charge_time = randcalc(source->time, 0, AVERAGE), max_time;
-
 	/*
-	 * Hack -- If rods, staves, or wands are dropped, the total maximum
+	 * If rods, staves, or wands are dropped, the total maximum
 	 * timeout or charges need to be allocated between the two stacks.
 	 * If all the items are being dropped, it makes for a neater message
 	 * to leave the original stack's pval alone. -LM-
 	 */
 	if (tval_can_have_charges(source)) {
-		dest->pval = source->pval * amt / source->number;
+		int change = source->pval * amt / source->number;
 
-		if (amt < source->number)
-			source->pval -= dest->pval;
+		if (dest_new) {
+			dest->pval = change;
+		} else {
+			dest->pval += change;
+		}
+		if (amt < source->number) {
+			source->pval -= change;
+		}
 	}
 
 	/*
-	 * Hack -- Rods also need to have their timeouts distributed.
+	 * Rods also need to have their timeouts distributed.
 	 *
 	 * The dropped stack will accept all time remaining to charge up to
 	 * its maximum.
 	 */
 	if (tval_can_have_timeout(source)) {
+		int charge_time = randcalc(source->time, 0, AVERAGE), max_time;
+
 		max_time = charge_time * amt;
+		if (dest_new) {
+			dest->timeout = (source->timeout > max_time)
+				? max_time : source->timeout;
+			if (amt < source->number) {
+				source->timeout -= dest->timeout;
+			}
+		} else {
+			int change = (source->timeout > max_time)
+				? max_time : source->timeout;
 
-		if (source->timeout > max_time)
-			dest->timeout = max_time;
-		else
-			dest->timeout = source->timeout;
-
-		if (amt < source->number)
-			source->timeout -= dest->timeout;
+			max_time = charge_time * (dest->number + amt);
+			if (dest->timeout < max_time) {
+				if (change > max_time - dest->timeout) {
+					change = max_time - dest->timeout;
+				}
+				dest->timeout += change;
+				if (amt < source->number) {
+					source->timeout -= change;
+				}
+			}
+		}
 	}
 }
 
@@ -882,14 +1069,15 @@ bool recharge_timeout(struct object *obj)
  *
  * The item can be negative to mean "item on floor".
  */
-bool verify_object(const char *prompt, struct object *obj)
+bool verify_object(const char *prompt, const struct object *obj,
+		const struct player *p)
 {
 	char o_name[80];
 
 	char out_val[160];
 
 	/* Describe */
-	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
+	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL, p);
 
 	/* Prompt */
 	strnfmt(out_val, sizeof(out_val), "%s %s? ", prompt, o_name);
@@ -925,7 +1113,8 @@ static msg_tag_t msg_tag_lookup(const char *tag)
 /**
  * Print a message from a string, customised to include details about an object
  */
-void print_custom_message(struct object *obj, const char *string, int msg_type)
+void print_custom_message(const struct object *obj, const char *string,
+		int msg_type, const struct player *p)
 {
 	char buf[1024] = "\0";
 	const char *next;
@@ -939,7 +1128,8 @@ void print_custom_message(struct object *obj, const char *string, int msg_type)
 	next = strchr(string, '{');
 	while (next) {
 		/* Copy the text leading up to this { */
-		strnfcat(buf, 1024, &end, "%.*s", next - string, string); 
+		strnfcat(buf, 1024, &end, "%.*s", (int) (next - string),
+			string);
 
 		s = next + 1;
 		while (*s && isalpha((unsigned char) *s)) s++;
@@ -954,7 +1144,7 @@ void print_custom_message(struct object *obj, const char *string, int msg_type)
 			case MSG_TAG_NAME:
 				if (obj) {
 					end += object_desc(buf, 1024, obj,
-									   ODESC_PREFIX | ODESC_BASE);
+						ODESC_PREFIX | ODESC_BASE, p);
 				} else {
 					strnfcat(buf, 1024, &end, "hands");
 				}
@@ -987,7 +1177,61 @@ void print_custom_message(struct object *obj, const char *string, int msg_type)
 
 		next = strchr(string, '{');
 	}
-	strnfcat(buf, 1024, &end, string);
+	strnfcat(buf, 1024, &end, "%s", string);
 
 	msgt(msg_type, "%s", buf);
+}
+
+/**
+ * Return if the given artifact has been created.
+ */
+bool is_artifact_created(const struct artifact *art)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	return aup_info[art->aidx].created;
+}
+
+/**
+ * Return if the given artifact has been seen.
+ */
+bool is_artifact_seen(const struct artifact *art)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	return aup_info[art->aidx].seen;
+}
+
+/**
+ * Return if the given artifact has ever been seen.
+ */
+bool is_artifact_everseen(const struct artifact *art)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	return aup_info[art->aidx].everseen;
+}
+
+/**
+ * Set whether the given artifact has been created or not.
+ */
+void mark_artifact_created(const struct artifact *art, bool created)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	aup_info[art->aidx].created = created;
+}
+
+/**
+ * Set whether the given artifact has been created or not.
+ */
+void mark_artifact_seen(const struct artifact *art, bool seen)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	aup_info[art->aidx].seen = seen;
+}
+
+/**
+ * Set whether the given artifact has been seen or not.
+ */
+void mark_artifact_everseen(const struct artifact *art, bool seen)
+{
+	assert(art->aidx == aup_info[art->aidx].aidx);
+	aup_info[art->aidx].everseen = seen;
 }

@@ -23,6 +23,8 @@
 #include "object.h"
 #include "z-type.h"
 
+struct player;
+
 /**
  * All valid game commands.  Not all implemented yet.
  */
@@ -45,6 +47,7 @@ typedef enum cmd_code {
 	CMD_BUY_STAT,
 	CMD_SELL_STAT,
 	CMD_RESET_STATS,
+	CMD_REFRESH_STATS,
 	CMD_ROLL_STATS,
 	CMD_PREV_STATS,
 	CMD_NAME_CHOICE,
@@ -89,18 +92,77 @@ typedef enum cmd_code {
 	CMD_OPEN,
 	CMD_CLOSE,
 	CMD_RUN,
+	CMD_EXPLORE,
+	CMD_NAVIGATE_UP,
+	CMD_NAVIGATE_DOWN,
 	CMD_HOLD,
 	CMD_ALTER,
+	CMD_STEAL,
 	CMD_SLEEP,
 
-    /* Store commands */	
+	/* Store commands */
 	CMD_SELL,
 	CMD_BUY,
 	CMD_STASH,
 	CMD_RETRIEVE,
 
+	/* Spoiler commands */
+	CMD_SPOIL_ARTIFACT,
+	CMD_SPOIL_MON,
+	CMD_SPOIL_MON_BRIEF,
+	CMD_SPOIL_OBJ,
+
+	/* Debugging commands */
+	CMD_WIZ_ACQUIRE,
+	CMD_WIZ_ADVANCE,
+	CMD_WIZ_BANISH,
+	CMD_WIZ_CHANGE_ITEM_QUANTITY,
+	CMD_WIZ_COLLECT_DISCONNECT_STATS,
+	CMD_WIZ_COLLECT_OBJ_MON_STATS,
+	CMD_WIZ_COLLECT_PIT_STATS,
+	CMD_WIZ_CREATE_ALL_ARTIFACT,
+	CMD_WIZ_CREATE_ALL_ARTIFACT_FROM_TVAL,
+	CMD_WIZ_CREATE_ALL_OBJ,
+	CMD_WIZ_CREATE_ALL_OBJ_FROM_TVAL,
+	CMD_WIZ_CREATE_ARTIFACT,
+	CMD_WIZ_CREATE_OBJ,
+	CMD_WIZ_CREATE_TRAP,
+	CMD_WIZ_CURE_ALL,
+	CMD_WIZ_CURSE_ITEM,
+	CMD_WIZ_DETECT_ALL_LOCAL,
+	CMD_WIZ_DETECT_ALL_MONSTERS,
+	CMD_WIZ_DISPLAY_KEYLOG,
+	CMD_WIZ_DUMP_LEVEL_MAP,
+	CMD_WIZ_EDIT_PLAYER_EXP,
+	CMD_WIZ_EDIT_PLAYER_GOLD,
+	CMD_WIZ_EDIT_PLAYER_START,
+	CMD_WIZ_EDIT_PLAYER_STAT,
+	CMD_WIZ_HIT_ALL_LOS,
+	CMD_WIZ_INCREASE_EXP,
+	CMD_WIZ_JUMP_LEVEL,
+	CMD_WIZ_LEARN_OBJECT_KINDS,
+	CMD_WIZ_MAGIC_MAP,
+	CMD_WIZ_PEEK_NOISE_SCENT,
+	CMD_WIZ_PERFORM_EFFECT,
+	CMD_WIZ_PLAY_ITEM,
+	CMD_WIZ_PUSH_OBJECT,
+	CMD_WIZ_QUERY_FEATURE,
+	CMD_WIZ_QUERY_SQUARE_FLAG,
+	CMD_WIZ_QUIT_NO_SAVE,
+	CMD_WIZ_RECALL_MONSTER,
+	CMD_WIZ_RERATE,
+	CMD_WIZ_REROLL_ITEM,
+	CMD_WIZ_STAT_ITEM,
+	CMD_WIZ_SUMMON_NAMED,
+	CMD_WIZ_SUMMON_RANDOM,
+	CMD_WIZ_TELEPORT_RANDOM,
+	CMD_WIZ_TELEPORT_TO,
+	CMD_WIZ_TWEAK_ITEM,
+	CMD_WIZ_WIPE_RECALL,
+	CMD_WIZ_WIZARD_LIGHT,
+
 	/* Hors categorie Commands */
-	CMD_SUICIDE,
+	CMD_RETIRE,
 
 	CMD_HELP,
 	CMD_REPEAT,
@@ -108,11 +170,11 @@ typedef enum cmd_code {
 } cmd_code;
 
 typedef enum cmd_context {
-	CMD_INIT,
-	CMD_BIRTH,
-	CMD_GAME,
-	CMD_STORE,
-	CMD_DEATH
+	CTX_INIT,
+	CTX_BIRTH,
+	CTX_GAME,
+	CTX_STORE,
+	CTX_DEATH
 } cmd_context;
 
 /**
@@ -182,6 +244,13 @@ struct command {
 	/* Number of times to attempt to repeat command. */
 	int nrepeats;
 
+	/*
+	 * 0: can be target for CMD_REPEAT and can trigger bloodlust
+	 * 1: can not be target for CMD_REPEAT and can trigger bloodlust
+	 * >1: can not be target for CMD_REPEAT and can not trigger bloodlust
+	 */
+	int background_command;
+
 	/* Arguments */
 	struct cmd_arg arg[CMD_MAX_ARGS];
 };
@@ -209,6 +278,9 @@ typedef void (*cmd_handler_fn)(struct command *cmd);
  * ------------------------------------------------------------------------
  * Command type functions
  * ------------------------------------------------------------------------ */
+
+void cmd_copy(struct command *dest, const struct command *src);
+void cmd_release(struct command *cmd);
 
 /* Return the verb that goes alongside the given command. */
 const char *cmd_verb(cmd_code cmd);
@@ -248,6 +320,13 @@ errr cmdq_push(cmd_code c);
 void cmdq_execute(cmd_context ctx);
 
 /**
+ * Remove all commands from the queue.  cmdq_release() also releases any
+ * resources allocated.
+ */
+void cmdq_flush(void);
+void cmdq_release(void);
+
+/**
  * ------------------------------------------------------------------------
  * Command repeat manipulation
  * ------------------------------------------------------------------------ */
@@ -269,6 +348,12 @@ void cmd_set_repeat(int nrepeats);
 void cmd_disable_repeat(void);
 
 /**
+ * Disallow current command from being repeated if it used item from
+ * the floor.
+ */
+void cmd_disable_repeat_floor_item(void);
+
+/**
  * Returns the number of repeats left for the current command.
  * i.e. zero if not repeating.
  */
@@ -288,7 +373,7 @@ void cmd_set_arg_choice(struct command *cmd, const char *arg, int choice);
 void cmd_set_arg_string(struct command *cmd, const char *arg, const char *str);
 void cmd_set_arg_direction(struct command *cmd, const char *arg, int dir);
 void cmd_set_arg_target(struct command *cmd, const char *arg, int target);
-void cmd_set_arg_point(struct command *cmd, const char *arg, int x, int y);
+void cmd_set_arg_point(struct command *cmd, const char *arg, struct loc grid);
 void cmd_set_arg_item(struct command *cmd, const char *arg, struct object *obj);
 void cmd_set_arg_number(struct command *cmd, const char *arg, int amt);
 
@@ -300,7 +385,7 @@ int cmd_get_arg_choice(struct command *cmd, const char *arg, int *choice);
 int cmd_get_arg_string(struct command *cmd, const char *arg, const char **str);
 int cmd_get_arg_direction(struct command *cmd, const char *arg, int *dir);
 int cmd_get_arg_target(struct command *cmd, const char *arg, int *target);
-int cmd_get_arg_point(struct command *cmd, const char *arg, int *x, int *y);
+int cmd_get_arg_point(struct command *cmd, const char *arg, struct loc *grid);
 int cmd_get_arg_item(struct command *cmd, const char *arg, struct object **obj);
 int cmd_get_arg_number(struct command *cmd, const char *arg, int *amt);
 
@@ -316,8 +401,13 @@ int cmd_get_item(struct command *cmd, const char *arg, struct object **obj,
 int cmd_get_quantity(struct command *cmd, const char *arg, int *amt, int max);
 int cmd_get_string(struct command *cmd, const char *arg, const char **str,
 				   const char *initial, const char *title, const char *prompt);
-int cmd_get_spell(struct command *cmd, const char *arg, int *spell,
-				  const char *verb, item_tester book_filter, const char *error,
-				  bool (*spell_filter)(int spell));
+int cmd_get_spell(struct command *cmd, const char *arg, struct player *p,
+	int *spell, const char *verb, item_tester book_filter,
+	const char *book_error,
+	bool (*spell_filter)(const struct player *p, int spell),
+	const char *spell_error);
+int cmd_get_effect_from_list(struct command *cmd, const char *arg, int *choice,
+	const char *prompt, struct effect *effect, int count,
+	bool allow_random);
 
 #endif

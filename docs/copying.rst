@@ -15,7 +15,7 @@ With the following exceptions:
 * The SDL runtime libraries (if provided with your copy of the game) are under
   the following licence:
 
-    The Simple DirectMedia Layer (SDL for short) is a cross-platfrom library designed to make it easy to write multi-media software, such as games and emulators.
+    The Simple DirectMedia Layer (SDL for short) is a cross-platform library designed to make it easy to write multi-media software, such as games and emulators.
 
     The Simple DirectMedia Layer library source code is available from: http://www.libsdl.org/
 
@@ -43,7 +43,7 @@ With the following exceptions:
 
   Currently some of the tiles in the 64x64.png tilesheet were resized from tiles made by David Gervais for the 32x32 set.
 
-* The sounds are licenced under the Creative Commons Attribution-NonCommercial-Sharealike licence.  They were created by Dubtrain <angband@dubtrain.com>. You can find them in Wave format at http://www.dubtrain.com/angband/.
+* The sounds are licenced under the Creative Commons Attribution 4.0 licence.  They were created by Dubtrain <angband@dubtrain.com>. You can find them in Wave format at http://www.dubtrain.com/angband/.
 
 * The font files are all by Leon Marrick and/or Sheldon Simms III and/or Nick McConnell, all of whom have agreed to their Angband work being released under the GPL.
 

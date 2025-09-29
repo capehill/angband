@@ -129,20 +129,20 @@ static dice_state_t dice_parse_state_transition(dice_state_t state,
 												dice_input_t input)
 {
 	static unsigned char state_table[DICE_STATE_MAX][DICE_INPUT_MAX] = {
-		/* Input:								&-+dm$DU0 */
-		/*[DICE_STATE_START] = */	   /* A */ ".B.EHKB..",
-		/*[DICE_STATE_BASE_DIGIT] = */  /* B */ "..CE..B.C",
-		/*[DICE_STATE_FLUSH_BASE] = */  /* C */ "...EHKD..",
-		/*[DICE_STATE_DICE_DIGIT] = */  /* D */ "...E..D..",
-		/*[DICE_STATE_FLUSH_DICE] = */  /* E */ ".....KF..",
-		/*[DICE_STATE_SIDE_DIGIT] = */  /* F */ "G...H.F.G",
-		/*[DICE_STATE_FLUSH_SIDE] = */  /* G */ "....H....",
-		/*[DICE_STATE_BONUS] = */	   /* H */ ".....KI..",
-		/*[DICE_STATE_BONUS_DIGIT] = */ /* I */ "......I.J",
-		/*[DICE_STATE_FLUSH_BONUS] = */ /* J */ ".........",
-		/*[DICE_STATE_VAR] = */		 /* K */ ".......L.",
-		/*[DICE_STATE_VAR_CHAR] = */	/* L */ "G.CEH..LM",
-		/*[DICE_STATE_FLUSH_ALL] = */   /* M */ "........."
+		/* Input:			        { '&', '-', '+', 'd', 'm', '$', 'D', 'U', '0' */
+		/*[DICE_STATE_START] = */	/* A */ { '.', 'B', '.', 'E', 'H', 'K', 'B', '.', '.' },
+		/*[DICE_STATE_BASE_DIGIT] = */	/* B */ { '.', '.', 'C', 'E', '.', '.', 'B', '.', 'C' },
+		/*[DICE_STATE_FLUSH_BASE] = */  /* C */ { '.', '.', '.', 'E', 'H', 'K', 'D', '.', '.' },
+		/*[DICE_STATE_DICE_DIGIT] = */  /* D */ { '.', '.', '.', 'E', '.', '.', 'D', '.', '.' },
+		/*[DICE_STATE_FLUSH_DICE] = */  /* E */ { '.', '.', '.', '.', '.', 'K', 'F', '.', '.' },
+		/*[DICE_STATE_SIDE_DIGIT] = */  /* F */ { 'G', '.', '.', '.', 'H', '.', 'F', '.', 'G' },
+		/*[DICE_STATE_FLUSH_SIDE] = */  /* G */ { '.', '.', '.', '.', 'H', '.', '.', '.', '.' },
+		/*[DICE_STATE_BONUS] = */	/* H */ { '.', '.', '.', '.', '.', 'K', 'I', '.', '.' },
+		/*[DICE_STATE_BONUS_DIGIT] = */ /* I */ { '.', '.', '.', '.', '.', '.', 'I', '.', 'J' },
+		/*[DICE_STATE_FLUSH_BONUS] = */ /* J */ { '.', '.', '.', '.', '.', '.', '.', '.', '.' },
+		/*[DICE_STATE_VAR] = */		/* K */ { '.', '.', '.', '.', '.', '.', '.', 'L', '.' },
+		/*[DICE_STATE_VAR_CHAR] = */	/* L */ { 'G', '.', 'C', 'E', 'H', '.', '.', 'L', 'M' },
+		/*[DICE_STATE_FLUSH_ALL] = */	/* M */ { '.', '.', '.', '.', '.', '.', '.', '.', '.' }
 	};
 
 	if (state == DICE_STATE_MAX || input == DICE_INPUT_MAX)
@@ -503,7 +503,7 @@ bool dice_parse_string(dice_t *dice, const char *string)
  * \param dice is the object to get the random_value from.
  * \param v is the random_value to place the values into.
  */
-void dice_random_value(dice_t *dice, random_value *v)
+void dice_random_value(const dice_t *dice, random_value *v)
 {
 	if (v == NULL)
 		return;
@@ -551,10 +551,10 @@ void dice_random_value(dice_t *dice, random_value *v)
  *
  * \param dice is the dice object to evaluate.
  * \param level is the level value that is passed to randcalc().
- * \param aspect is the aspect that is passed to randcalc().
+ * \param asp is the aspect that is passed to randcalc().
  * \param v is a pointer used to return the random_value used.
  */
-int dice_evaluate(dice_t *dice, int level, aspect aspect, random_value *v)
+int dice_evaluate(const dice_t *dice, int level, aspect asp, random_value *v)
 {
 	random_value rv;
 	dice_random_value(dice, &rv);
@@ -566,7 +566,7 @@ int dice_evaluate(dice_t *dice, int level, aspect aspect, random_value *v)
 		v->m_bonus = rv.m_bonus;
 	}
 
-	return randcalc(rv, level, aspect);
+	return randcalc(rv, level, asp);
 }
 
 /**
@@ -576,7 +576,7 @@ int dice_evaluate(dice_t *dice, int level, aspect aspect, random_value *v)
  * \param dice is the dice object to evaluate.
  * \param v is a pointer used to return the random_value used.
  */
-int dice_roll(dice_t *dice, random_value *v)
+int dice_roll(const dice_t *dice, random_value *v)
 {
 	random_value rv;
 	dice_random_value(dice, &rv);
@@ -594,8 +594,8 @@ int dice_roll(dice_t *dice, random_value *v)
 /**
  * Test the dice object against the given values.
  */
-bool dice_test_values(dice_t *dice, int base, int dice_count, int sides,
-					  int bonus)
+bool dice_test_values(const dice_t *dice, int base, int dice_count, int sides,
+		int bonus)
 {
 	bool success = true;
 	success &= dice->b == base;
@@ -608,8 +608,8 @@ bool dice_test_values(dice_t *dice, int base, int dice_count, int sides,
 /**
  * Check that the dice object has the given variables for the component.
  */
-bool dice_test_variables(dice_t *dice, const char *base, const char *dice_name,
-						 const char *sides, const char *bonus)
+bool dice_test_variables(const dice_t *dice, const char *base,
+		const char *dice_name, const char *sides, const char *bonus)
 {
 	bool success = true;
 

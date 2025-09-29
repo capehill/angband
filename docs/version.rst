@@ -2,12 +2,12 @@
 Version Information
 ===================
 
-Angband has been maintained and developed by a succession of volunteers since it was written in the early 1990s. The current maintainer is Nick McConnell.
+Angband has been maintained and developed by a succession of volunteers since
+it was written in the early 1990s. The current maintainer is Nick McConnell.
 
-The current version is 4.1.3. Detailed information about this version and
-previous versions can be found at http://rephial.org.  Also additional
-information can be found at the angband forums (http://angband.oook.cz)
-or the newsgroup (rec.games.roguelike.angband).
+The current version is 4.2.5. Detailed information about this version and
+previous versions can be found at http://angband.github.io/angband.  Also additional
+information can be found at the angband forums (https://angband.live/forums/).
 
 This file was last updated for Angband 3.1.2 and remains here mainly
 for historical purposes.
@@ -22,8 +22,7 @@ time, and more than six different primary developers. Without such files,
 we must rely on simpler methods, such as change logs, source file diffs,
 and word of mouth. Some of this information is summarised in this file.
 
-Please be sure to read the copyright information contained in the file
-'copying.txt'.
+Please be sure to read the 'Copying and licence information'.
 
 Brief Version History
 =====================
@@ -330,8 +329,8 @@ A Posting from the Original Author
   contained many neat enhancements, features, you name it. It had water,
   streams, lakes, pools, with water monsters. It had 'mysterious orbs'
   which could be carried like torches for light but also gave off magical
-  aura's (like protection from fire, or aggrivate monster...). It had new
-  weapons and treasures... I left it with the tudent assistants at OU to be
+  aura's (like protection from fire, or aggravate monster...). It had new
+  weapons and treasures... I left it with the student assistants at OU to be
   finished, but I guess it soon died on the vine. As far as I know, that
   source was lost...
 
@@ -457,6 +456,6 @@ Peter Berger, "Prfnoff", Arcum Dagsson, Ed Cogburn, Matthias Kurzke,
 Ben Harrison, Steven Fuerst, Julian Lighton, Andrew Hill, Werner Baer,
 Tom Morton, "Cyric the Mad", Chris Kern, Tim Baker, Jurriaan Kalkman,
 Alexander Wilkins, Mauro Scarpa, John I'anson-Holton, "facade",
-Dennis van Es, Kenneth A. Strom, Wei-Hwa Huang, Nikodemus, Timo Pietil‰,
+Dennis van Es, Kenneth A. Strom, Wei-Hwa Huang, Nikodemus, Timo Pietil√§,
 Greg Wooledge, Keldon Jones, Shayne Steele, Dr. Andrew White, Musus Umbra,
 Jonathan Ellis

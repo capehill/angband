@@ -1,3 +1,5 @@
+.. _Playing the Game:
+
 ================
 Playing the Game
 ================
@@ -33,8 +35,8 @@ the game that you wish to do the command multiple times, unless you press a
 key or are otherwise disturbed. To enter a "repeat count", type ``0``,
 followed by the numerical count, followed by the command. You must type
 'space' before entering certain commands. Skipping the numerical count
-yields a count of 99. An option allows certain commands (open, disarm,
-alter, etc) to auto-repeat.
+yields a count of 99 for the open, tunnel, disarm, alter, and close
+commands. All other commands do not repeat unless requested.
 
 Some commands will prompt for extra information, such as a direction, an
 inventory or equipment item, a spell, a textual inscription, the symbol of
@@ -51,6 +53,10 @@ inscription contains '@#' or '@x#', where ``x`` is the current
 "underlying command". You may only specify items which are "legal" for the
 command. Whenever an item inscription contains '!*' or '!x' (with ``x``
 as above) you must verify its selection.
+
+.. index::
+   single: original keyset; directions
+   single: roguelike keyset; directions
 
 Some commands will prompt for a direction. You may enter a "compass"
 direction using any of the "direction keys" shown below. Sometimes, you may
@@ -82,130 +88,164 @@ direction key, instead of using the "run" or "alter" command plus a
 direction. Both keysets allow the use of the ``5`` key to "stand still",
 which is most convenient when using the original keyset.
 
+.. index::
+   single: original keyset
+   see: keyset; original keyset
+
 Original Keyset Command Summary
 ===============================
 
 ====== ============================= ====== ============================
-``a``  Aim a wand                    ``A``  Activate an object 
+``a``  Aim a wand                    ``A``  Activate an object
 ``b``  Browse a book                 ``B``  (unused)
-``c``  Close a door                  ``C``  Character description
+``c``  Close a door                  ``C``  Display character sheet
 ``d``  Drop an item                  ``D``  Disarm a trap or lock a door
-``e``  Equipment list                ``E``  Eat some food
+``e``  List equipped items           ``E``  Eat some food
 ``f``  Fire an item                  ``F``  Fuel your lantern/torch
 ``g``  Get objects on floor          ``G``  Gain new spells/prayers
 ``h``  Fire default ammo at target   ``H``  (unused)
-``i``  Inventory list                ``I``  Observe an item
+``i``  List contents of pack         ``I``  Inspect an item
 ``j``  (unused)                      ``J``  (unused)
 ``k``  Ignore an item                ``K``  Toggle ignore
 ``l``  Look around                   ``L``  Locate player on map
-``m``  Cast a spell                  ``M``  Full dungeon map
+``m``  Cast a spell                  ``M``  Display map of entire level
 ``n``  Repeat previous command       ``N``  (unused)
 ``o``  Open a door or chest          ``O``  (unused)
-``p``  Cast a spell                  ``P``  (unused)
-``q``  Quaff a potion                ``Q``  End character & quit
+``p``  (normally unused; see note)   ``P``  (unused)
+``q``  Quaff a potion                ``Q``  Kill character & quit
 ``r``  Read a scroll                 ``R``  Rest for a period
-``s``  (unused)                      ``S``  (unused)
+``s``  Steal (rogues only)           ``S``  See abilities
 ``t``  Take off equipment            ``T``  Dig a tunnel
 ``u``  Use a staff                   ``U``  Use an item
-``v``  Throw an item                 ``V``  Version info
+``v``  Throw an item                 ``V``  Display version info
 ``w``  Wear/wield equipment          ``W``  Walk into a trap
 ``x``  (unused)                      ``X``  (unused)
 ``y``  (unused)                      ``Y``  (unused)
 ``z``  Zap a rod                     ``Z``  (unused)
-``!``  (unused)                      ``^A`` Debug mode
-``@``  (unused)                      ``^B`` (unused)
-``#``  (unused)                      ``^C`` (special - break)
-``$``  (unused)                      ``^D`` (unused)
-``%``  (unused)                      ``^E`` Toggle inven/equip window
-``^``  (special - control key)       ``^F`` Repeat level feeling
-``&``  (unused)                      ``^G`` Do autopickup
-``\*`` Target monster or location    ``^H`` (unused)
-``(``  Load screen dump              ``^I`` (special - tab)
-``)``  Dump screen dump              ``^J`` (special - linefeed)
-``{``  Inscribe an object            ``^K`` (unused)
-``}``  Uninscribe an object          ``^L`` Center map
-``[``  Display visible monster list  ``^M`` (special - return)
-``]``  Display visible object list   ``^N`` (unused)
-``\-`` (unused)                      ``^O`` Show previous message
-``_``  Enter store                   ``^P`` Show previous messages
-``\+`` Alter grid                    ``^Q`` (unused)
-``=``  Set options                   ``^R`` Redraw the screen
-``;``  Walk (with pickup)            ``^S`` Save and don't quit
-``:``  Take notes                    ``^T`` (unused)
-``'``  Target closest monster        ``^U`` (unused)
-``"``  Enter a user pref command     ``^V`` (unused)
-``,``  Stay still (with pickup)      ``^W`` (special - wizard mode)
-``<``  Go up staircase               ``^X`` Save and quit
-``.``  Run                           ``^Y`` (unused)
-``>``  Go down staircase             ``^Z`` (unused)
+``!``  (unused)                      ``^a`` (special - debug command)
+``@``  (unused)                      ``^b`` (unused)
+``#``  (unused)                      ``^c`` (special - break)
+``$``  (unused)                      ``^d`` (unused)
+``%``  (unused)                      ``^e`` Toggle inven/equip window
+``^``  (special - control key)       ``^f`` Repeat level feeling
+``&``  (unused)                      ``^g`` Do autopickup
+``*``  Target monster or location    ``^h`` (unused)
+``(``  (unused)                      ``^i`` (special - tab)
+``)``  Dump screen to a file         ``^j`` (special - linefeed)
+``{``  Inscribe an object            ``^k`` (unused)
+``}``  Uninscribe an object          ``^l`` Center map
+``[``  Display visible monster list  ``^m`` (special - return)
+``]``  Display visible object list   ``^n`` (unused)
+``-``  (unused)                      ``^o`` Show previous message
+``_``  (unused)                      ``^p`` Show previous messages
+``+``  Alter grid                    ``^q`` (unused)
+``=``  Set options                   ``^r`` Redraw the screen
+``;``  Walk (with pickup)            ``^s`` Save and don't quit
+``:``  Take notes                    ``^t`` (unused)
+``'``  Target closest monster        ``^u`` (unused)
+``"``  Enter a user pref command     ``^v`` (unused)
+``,``  Stay still (with pickup)      ``^w`` (special - wizard mode)
+``<``  Go up staircase (see note)    ``^x`` Save and quit
+``.``  Run                           ``^y`` (unused)
+``>``  Go down staircase (see note)  ``^z`` Borg commands (if available)
 ``\``  (special - bypass keymap)     ``~``  Check knowledge
-``\``` (special - escape)            ``?``  Help
+ \`    (special - escape)            ``?``  Display help
 ``/``  Identify symbol
-``|``  Quiver list
+``|``  List contents of quiver
 ====== ============================= ====== ============================
+
+.. index::
+   single: autoexplore; original keyset
+
+Note that the ``<``, ``>``, and ``p`` commands are affected by the
+autoexplore_commands option (see
+:ref:`Autoexplore Commands Option <autoexplore-commands-option>`). When that
+option is off (that is the default), the commands act as described above.
+When that option is on, ``<`` or ``>`` will use the staircase at the player's
+location if it is the appropriate kind of staircase or will move to the
+nearest known staircase of the appropriate kind if the player is not already
+at that kind of staircase. ``p`` will move to the nearest unexplored location
+when the autoexplore_commands option is on.
+
+.. index::
+   single: roguelike keyset
+   see: keyset; roguelike keyset
 
 Roguelike Keyset Command Summary
 ================================
 
-====== ============================= ====== ============================
-  a    Zap a rod (Activate)            A    Activate an object
-  b    (walk - south west)             B    (run - south west)
-  c    Close a door                    C    Character description
-  d    Drop an item                    D    Disarm a trap or lock a door
-  e    Equipment list                  E    Eat some food
-  f    (unused)                        F    Fuel your lantern/torch
-  g    Get objects on floor            G    Gain new spells/prayers
-  h    (walk - west)                   H    (run - west)
-  i    Inventory list                  I    Observe an item
-  j    (walk - south)                  J    (run - south)
-  k    (walk - north)                  K    (run - north)
-  l    (walk - east)                   L    (run - east)
-  m    Cast a spell                    M    Full dungeon map
-  n    (walk - south east)             N    (run - south east)
-  o    Open a door or chest            O    Toggle ignore
-  p    Cast a spell                    P    Browse a book
-  q    Quaff a potion                  Q    End character & quit
-  r    Read a scroll                   R    Rest for a period
-  s    (unused)                        S    (unused)
-  t    Fire an item                    T    Take off equipment
-  u    (walk - north east)             U    (run - north east)
-  v    Throw an item                   V    Version info
-  w    Wear/wield equipment            W    Locate player on map (Where)
-  x    Look around                     X    Use an item
-  y    (walk - north west)             Y    (run - north west)
-  z    Aim a wand (Zap)                Z    Use a staff (Zap)
-  !    (unused)                        ^A   (special - debug command)
-  @    Center map                      ^B   (alter - south west)
-  #    (unused)                        ^C   (special - break)
-  $    (unused)                        ^D   Ignore an item
-  %    (unused)                        ^E   Toggle inven/equip window
-  ^    (special - control key)         ^F   Repeat level feeling
-  &    (unused)                        ^G   Do autopickup
-  |*|    Target monster or location      ^H   (alter - west)
-  (    Load screen dump                ^I   (special - tab)
-  )    Dump screen dump                ^J   alter - south)
-  {    Inscribe an object              ^K   (alter - north)
-  }    Uninscribe an object            ^L   (alter - east)
-  [    Display visible monster list    ^M   (special - return)
-  ]    Display visible object list     ^N   (alter - south east)
-  |-|    Walk into a trap                ^O   Show previous message
-  _    Enter store                     ^P   Show previous messages
-  |+|    Alter grid                      ^Q   (unused)
-  =    Set options                     ^R   Redraw the screen
-  ;    Walk (with pickup)              ^S   Save and don't quit
-  :    Take notes                      ^T   Dig a tunnel
-  '    Target closest monster          ^U   (alter - north east)
-  "    Enter a user pref command       ^V   Repeat previous command
-  ,    Run                             ^W   (special - wizard mode)
-  <    Go up staircase                 ^X   Save and quit
-  .    Stay still (with pickup)        ^Y   (alter - north west)
-  >    Go down staircase               ^Z   (unused)
-  \\    (special - bypass keymap)       ~    Check knowledge 
-  \`    (special - escape)              ?    Help
-  /    Identify symbol                 
-  TAB  Fire default ammo at target 
-  \|    Quiver list
-====== ============================= ====== ============================
+======= ============================= ====== ============================
+ ``a``  Zap a rod (Activate)          ``A``  Activate an object
+ ``b``  (walk - south west)           ``B``  (run - south west)
+ ``c``  Close a door                  ``C``  Display character sheet
+ ``d``  Drop an item                  ``D``  Disarm a trap or lock a door
+ ``e``  List equipped items           ``E``  Eat some food
+ ``f``  (unused)                      ``F``  Fuel your lantern/torch
+ ``g``  Get objects on floor          ``G``  Gain new spells/prayers
+ ``h``  (walk - west)                 ``H``  (run - west)
+ ``i``  List contents of pack         ``I``  Inspect an item
+ ``j``  (walk - south)                ``J``  (run - south)
+ ``k``  (walk - north)                ``K``  (run - north)
+ ``l``  (walk - east)                 ``L``  (run - east)
+ ``m``  Cast a spell                  ``M``  Display map of entire level
+ ``n``  (walk - south east)           ``N``  (run - south east)
+ ``o``  Open a door or chest          ``O``  Toggle ignore
+ ``p``  (normally unused; see note)   ``P``  Browse a book
+ ``q``  Quaff a potion                ``Q``  Kill character & quit
+ ``r``  Read a scroll                 ``R``  Rest for a period
+ ``s``  Steal (rogues only)           ``S``  See abilities
+ ``t``  Fire an item                  ``T``  Take off equipment
+ ``u``  (walk - north east)           ``U``  (run - north east)
+ ``v``  Throw an item                 ``V``  Display version info
+ ``w``  Wear/wield equipment          ``W``  Locate player on map (Where)
+ ``x``  Look around                   ``X``  Use an item
+ ``y``  (walk - north west)           ``Y``  (run - north west)
+ ``z``  Aim a wand (Zap)              ``Z``  Use a staff (Zap)
+ ``!``  (unused)                      ``^a`` (special - debug command)
+ ``@``  Center map                    ``^b`` (alter - south west)
+ ``#``  (unused)                      ``^c`` (special - break)
+ ``$``  (unused)                      ``^d`` Ignore an item
+ ``%``  (unused)                      ``^e`` Toggle inven/equip window
+ ``^``  (special - control key)       ``^f`` Repeat level feeling
+ ``&``  (unused)                      ``^g`` Do autopickup
+ ``*``  Target monster or location    ``^h`` (alter - west)
+ ``(``  (unused)                      ``^i`` (special - tab)
+ ``)``  Dump screen to a file         ``^j`` (alter - south)
+ ``{``  Inscribe an object            ``^k`` (alter - north)
+ ``}``  Uninscribe an object          ``^l`` (alter - east)
+ ``[``  Display visible monster list  ``^m`` (special - return)
+ ``]``  Display visible object list   ``^n`` (alter - south east)
+ ``-``  Walk into a trap              ``^o`` Show previous message
+ ``_``  (unused)                      ``^p`` Show previous messages
+ ``+``  Alter grid                    ``^q`` (unused)
+ ``=``  Set options                   ``^r`` Redraw the screen
+ ``;``  Walk (with pickup)            ``^s`` Save and don't quit
+ ``:``  Take notes                    ``^t`` Dig a tunnel
+ ``'``  Target closest monster        ``^u`` (alter - north east)
+ ``"``  Enter a user pref command     ``^v`` Repeat previous command
+ ``,``  Run                           ``^w`` (special - wizard mode)
+ ``<``  Go up staircase (see note)    ``^x`` Save and quit
+ ``.``  Stay still (with pickup)      ``^y`` (alter - north west)
+ ``>``  Go down staircase (see note)  ``^z`` Borg commands (if available)
+ ``\``  (special - bypass keymap)     ``~``  Check knowledge
+  \`    (special - escape)            ``?``  Display help
+ ``/``  Identify symbol
+``TAB`` Fire default ammo at target
+ ``|``  List contents of quiver
+======= ============================= ====== ============================
+
+.. index::
+   single: autoexplore; roguelike keyset
+
+Note that the ``<``, ``>``, and ``p`` commands are affected by the
+autoexplore_commands option (see
+:ref:`Autoexplore Commands Option <autoexplore-commands-option>`). When that
+option is off (that is the default), the commands act as described above. When
+that option is on, ``<`` or ``>`` will use the staircase at the player's
+location if it is the appropriate kind of staircase or will move to the
+nearest known staircase of the appropriate kind if the player is not already
+at that kind of staircase. ``p`` will move to the nearest unexplored location
+when the autoexplore_commands option is on.
 
 Special Keys
 ============
@@ -214,15 +254,15 @@ Certain special keys may be intercepted by the operating system or the host
 machine, causing unexpected results. In general, these special keys are
 control keys, and often, you can disable their special effects.
 
-If you are playing on a UNIX or similar system, then 'Ctrl-C' will
+If you are playing on a UNIX or similar system, then 'Ctrl-c' will
 interrupt Angband. The second and third interrupt will induce a warning
 bell, and the fourth will induce both a warning bell and a special message,
-since the fifth will quit the game, after killing your character. Also,
-'Ctrl-Z' will suspend the game, and return you to the original command
-shell, until you resume the game with the 'fg' command. There is now a
-compilation option to force the game to prevent the "double 'ctrl-z'
-escape death trick". The 'Ctrl-\\' and 'Ctrl-D' and 'Ctrl-S' keys
-should not be intercepted.
+since the fifth will either quit without saving (if Angband was compiled
+without the SETGID option which puts the save files in a shared location for
+all users) or kill your character (if Angband was compiled with the SETGID
+option). Also, 'Ctrl-z' will suspend the game, and return you to the original
+command shell, until you resume the game with the 'fg' command. The 'Ctrl-\\'
+and 'Ctrl-d' and 'Ctrl-s' keys should not be intercepted.
  
 It is often possible to specify "control-keys" without actually pressing
 the control key, by typing a caret (``^``) followed by the key. This is
@@ -262,7 +302,9 @@ be repeated will flash by on the line at the bottom of the screen.
 To give a count to a command, type 0, the repeat count, and then the
 command. If you want to give a movement command and you are using the
 original command set (where the movement commands are digits), press space
-after the count and you will be prompted for the command.
+after the count and you will be prompted for the command.  The open, tunnel,
+disarm, alter, and close commands default to having a repeat count of 99;
+all other commands default to not repeating at all.
  
 Counted commands are very useful for time consuming commands, as they
 automatically terminate on success, or if you are attacked. You may also
@@ -271,10 +313,6 @@ character. This character is ignored, but it is safest to use a 'SPACE'
 or 'ESCAPE' which are always ignored as commands in case you type the
 command just after the count expires.
 
-You can tell Angband to automatically use a repeat count of 99 with
-commands you normally want to repeat (open, disarm, tunnel, bash, alter,
-etc) by setting the 'always_repeat' option.
-  
 Selection of Objects
 ====================
  
@@ -295,4 +333,16 @@ upper case is used, then the particular option is described, and you are
 given the option of confirming or retracting that choice. Upper case
 selection is thus safer, but requires an extra key stroke.
 
-For more information on selecting object, see the file 'customize.txt'.
+Shape Changes
+=============
+
+Some classes, objects, or races may allow your character to change shape:
+becoming, for instance, a fox or a wolf.  While in the alternate shape,
+your character will not have access to items in the pack or quiver and
+will not be able to access items on the floor except for eating or pickup.
+The items your character was wearing upon changing shape will remain
+equipped and continue to affect the character's statistics, resistances,
+number of blows, and damage.  Your character will not be able to activate
+any equipped items while in the alternate shape.  To have your character
+change back to normal, cast a spell or use one of the commands, like drop,
+that uses an item.

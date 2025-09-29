@@ -19,11 +19,22 @@
 #ifndef INCLUDED_SCORE_H
 #define INCLUDED_SCORE_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <time.h>
+
+struct player;
+
 /**
  * Maximum number of high scores in the high score file
  */
 #define MAX_HISCORES    100
 
+/**
+ * What the how field of a score record or died_from field of struct player
+ * contains for a winner
+ */
+#define WINNING_HOW "Ripe Old Age"
 
 /**
  * Semi-Portable High Score List Entry (128 bytes)
@@ -35,8 +46,7 @@
  *
  * Note that "string comparisons" are thus valid on "pts".
  */
-typedef struct
-{
+struct high_score {
 	char what[8];		/* Version info (string) */
 	char pts[10];		/* Total Score (number) */
 	char gold[10];		/* Total Gold (number) */
@@ -51,15 +61,21 @@ typedef struct
 	char max_lev[4];	/* Max Player Level (number) */
 	char max_dun[4];	/* Max Dungeon Level (number) */
 	char how[32];		/* Method of death (string) */
-} high_score;
+};
 
 
 
-size_t highscore_read(high_score scores[], size_t sz);
-size_t highscore_where(const high_score *entry, const high_score scores[],
-					   size_t sz);
-size_t highscore_add(const high_score *entry, high_score scores[], size_t sz);
-void build_score(high_score *entry, const char *died_from, time_t *death_time);
-void enter_score(time_t *death_time);
+size_t highscore_read(struct high_score scores[], size_t sz);
+size_t highscore_add(const struct high_score *entry, struct high_score scores[],
+					 size_t sz);
+void build_score(struct high_score *entry, const struct player *p,
+		const char *died_from, const time_t *death_time);
+void enter_score(const struct player *p, const time_t *death_time);
+
+/* From score-util.c */
+size_t highscore_where(const struct high_score *entry,
+		const struct high_score scores[], size_t sz);
+bool highscore_valid(const struct high_score *s);
+bool highscore_regularize(struct high_score scores[], size_t sz);
 
 #endif /* INCLUDED_SCORE_H */

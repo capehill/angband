@@ -42,7 +42,7 @@ enum {
  */
 enum
 {
-	#define PF(a,b,c) PF_##a,
+	#define PF(a) PF_##a,
 	#include "list-player-flags.h"
 	#undef PF
 	PF_MAX
@@ -95,6 +95,9 @@ enum
 #define NOSCORE_WIZARD		0x0002
 #define NOSCORE_DEBUG		0x0008
 #define NOSCORE_JUMPING     0x0010
+#ifdef ALLOW_BORG
+#define NOSCORE_BORG		0x0020
+#endif
 
 /**
  * Terrain that the player has a chance of digging through
@@ -133,12 +136,12 @@ enum {
 struct quest
 {
 	struct quest *next;
-	byte index;
+	uint8_t index;
 	char *name;
-	byte level;					/* Dungeon level */
+	uint8_t level;			/* Dungeon level */
 	struct monster_race *race;	/* Monster race */
-	int cur_num;				/* Number killed (unused) */
-	int max_num;				/* Number required (unused) */
+	int cur_num;			/* Number killed (unused) */
+	int max_num;			/* Number required (unused) */
 };
 
 /**
@@ -147,7 +150,7 @@ struct quest
 struct equip_slot {
 	struct equip_slot *next;
 
-	u16b type;
+	uint16_t type;
 	char *name;
 	struct object *obj;
 };
@@ -159,7 +162,7 @@ struct player_body {
 	struct player_body *next;
 
 	char *name;
-	u16b count;
+	uint16_t count;
 	struct equip_slot *slots;
 };
 
@@ -241,7 +244,7 @@ struct start_item {
 	int sval;	/**< Object sub-type  */
 	int min;	/**< Minimum starting amount */
 	int max;	/**< Maximum starting amount */
-
+	int *eopts;     /**< Indices (zero terminated array) for birth options which can exclude item */
 	struct start_item *next;
 };
 
@@ -330,6 +333,19 @@ struct player_class {
 };
 
 /**
+ * Info for player abilities
+ */
+struct player_ability {
+	struct player_ability *next;
+	uint16_t index;			/* PF_*, OF_* or element index */
+	char *type;			/* Ability type */
+	char *name;			/* Ability name */
+	char *desc;			/* Ability description */
+	int group;			/* Ability group (set locally when viewing) */
+	int value;			/* Resistance value for elements */
+};
+
+/**
  * Histories are a graph of charts; each chart contains a set of individual
  * entries for that chart, and each entry contains a text description and a
  * successor chart to move history generation to.
@@ -394,13 +410,14 @@ struct player_state {
 
 	int num_blows;		/**< Number of blows x100 */
 	int num_shots;		/**< Number of shots x10 */
-	int num_moves;		/**< Number of movement actions */
+	int num_moves;		/**< Number of extra movement actions */
 
 	int ammo_mult;		/**< Ammo multiplier */
 	int ammo_tval;		/**< Ammo variety */
 
 	int ac;				/**< Base ac */
 	int dam_red;		/**< Damage reduction */
+	int perc_dam_red;	/**< Percentage damage reduction */
 	int to_a;			/**< Bonus to ac */
 	int to_h;			/**< Bonus to hit */
 	int to_d;			/**< Bonus to dam */
@@ -442,11 +459,11 @@ struct player_upkeep {
 	struct object *object;				/* Object trackee */
 	struct object_kind *object_kind;	/* Object kind trackee */
 
-	u32b notice;			/* Bit flags for pending actions such as
+	uint32_t notice;		/* Bit flags for pending actions such as
 							 * reordering inventory, ignoring, etc. */
-	u32b update;			/* Bit flags for recalculations needed
+	uint32_t update;		/* Bit flags for recalculations needed
 							 * such as HP, or visible area */
-	u32b redraw;			/* Bit flags for things that /have/ changed,
+	uint32_t redraw;		/* Bit flags for things that /have/ changed,
 							 * and just need to be redrawn by the UI,
 							 * such as HP, Speed, etc.*/
 
@@ -463,7 +480,6 @@ struct player_upkeep {
 	int resting;			/* Resting counter */
 
 	int running;				/* Running counter */
-	bool running_withpathfind;	/* Are we using the pathfinder ? */
 	bool running_firststep;		/* Is this our first step running? */
 
 	struct object **quiver;	/* Quiver objects */
@@ -473,6 +489,9 @@ struct player_upkeep {
 	int equip_cnt;			/* Number of items in equipment */
 	int quiver_cnt;			/* Number of items in the quiver */
 	int recharge_pow;		/* Power of recharge effect */
+	int step_count;			/* Pathfinding: number of steps left */
+	int16_t *steps;			/* Pathfinding: steps in reverse order */
+	struct loc path_dest;		/* Pathfinding: destination grid */
 };
 
 /**
@@ -490,76 +509,84 @@ struct player {
 	const struct player_race *race;
 	const struct player_class *class;
 
-	struct loc grid;/* Player location */
+	struct loc grid;	/* Player location */
+	struct loc old_grid;/* Player location before leaving for an arena */
 
-	byte hitdie;	/* Hit dice (sides) */
-	byte expfact;	/* Experience factor */
+	uint8_t hitdie;		/* Hit dice (sides) */
+	uint8_t expfact;	/* Experience factor */
 
-	s16b age;		/* Characters age */
-	s16b ht;		/* Height */
-	s16b wt;		/* Weight */
+	int16_t age;		/* Characters age */
+	int16_t ht;		/* Height */
+	int16_t wt;		/* Weight */
 
-	s32b au;		/* Current Gold */
+	int32_t au;		/* Current Gold */
 
-	s16b max_depth;	/* Max depth */
-	s16b recall_depth;	/* Recall depth */
-	s16b depth;		/* Cur depth */
+	int16_t max_depth;	/* Max depth */
+	int16_t recall_depth;	/* Recall depth */
+	int16_t depth;		/* Cur depth */
 
-	s16b max_lev;	/* Max level */
-	s16b lev;		/* Cur level */
+	int16_t max_lev;	/* Max level */
+	int16_t lev;		/* Cur level */
 
-	s32b max_exp;	/* Max experience */
-	s32b exp;		/* Cur experience */
-	u16b exp_frac;	/* Cur exp frac (times 2^16) */
+	int32_t max_exp;	/* Max experience */
+	int32_t exp;		/* Cur experience */
+	uint16_t exp_frac;	/* Cur exp frac (times 2^16) */
 
-	s16b mhp;		/* Max hit pts */
-	s16b chp;		/* Cur hit pts */
-	u16b chp_frac;	/* Cur hit frac (times 2^16) */
+	int16_t mhp;		/* Max hit pts */
+	int16_t chp;		/* Cur hit pts */
+	uint16_t chp_frac;	/* Cur hit frac (times 2^16) */
 
-	s16b msp;		/* Max mana pts */
-	s16b csp;		/* Cur mana pts */
-	u16b csp_frac;	/* Cur mana frac (times 2^16) */
+	int16_t msp;		/* Max mana pts */
+	int16_t csp;		/* Cur mana pts */
+	uint16_t csp_frac;	/* Cur mana frac (times 2^16) */
 
-	s16b stat_max[STAT_MAX];	/* Current "maximal" stat values */
-	s16b stat_cur[STAT_MAX];	/* Current "natural" stat values */
-	s16b stat_map[STAT_MAX];	/* Tracks remapped stats from temp stat swap */
+	int16_t stat_max[STAT_MAX];	/* Current "maximal" stat values */
+	int16_t stat_cur[STAT_MAX];	/* Current "natural" stat values */
+	int16_t stat_map[STAT_MAX];	/* Tracks remapped stats from temp stat swap */
 
-	s16b *timed;				/* Timed effects */
+	int16_t *timed;				/* Timed effects */
 
-	s16b word_recall;			/* Word of recall counter */
-	s16b deep_descent;			/* Deep Descent counter */
+	int16_t word_recall;			/* Word of recall counter */
+	int16_t deep_descent;			/* Deep Descent counter */
 
-	s16b energy;				/* Current energy */
-	u32b total_energy;			/* Total energy used (including resting) */
-	u32b resting_turn;			/* Number of player turns spent resting */
+	int16_t energy;				/* Current energy */
+	uint32_t total_energy;			/* Total energy used (including resting) */
+	uint32_t resting_turn;			/* Number of player turns spent resting */
 
-	s16b food;					/* Current nutrition */
+	int16_t food;				/* Current nutrition */
 
-	byte unignoring;			/* Unignoring */
+	uint8_t unignoring;			/* Unignoring */
 
-	byte *spell_flags;			/* Spell flags */
-	byte *spell_order;			/* Spell order */
-	byte searching;		/* Currently searching */
+	uint8_t skip_cmd_coercion;		/* True if bloodlust check
+							should be skipped on
+							the next command
+							(previous command
+							successfully passed
+							the bloodlust check
+							but then was canceled
+							by the user) */
+	uint8_t *spell_flags;			/* Spell flags */
+	uint8_t *spell_order;			/* Spell order */
 
 	char full_name[PLAYER_NAME_LEN];	/* Full name */
 	char died_from[80];					/* Cause of death */
 	char *history;						/* Player history */
 	struct quest *quests;				/* Quest history */
-	u16b total_winner;					/* Total winner */
+	uint16_t total_winner;			/* Total winner */
 
-	u16b noscore;				/* Cheating flags */
+	uint16_t noscore;			/* Cheating flags */
 
 	bool is_dead;				/* Player is dead */
 
 	bool wizard;				/* Player is in wizard mode */
 
-	s16b player_hp[PY_MAX_LEVEL];		/* HP gained per level */
+	int16_t player_hp[PY_MAX_LEVEL];	/* HP gained per level */
 
 	/* Saved values for quickstart */
-	s32b au_birth;						/* Birth gold when option birth_money is false */
-	s16b stat_birth[STAT_MAX];			/* Birth "natural" stat values */
-	s16b ht_birth;						/* Birth Height */
-	s16b wt_birth;						/* Birth Weight */
+	int32_t au_birth;			/* Birth gold when option birth_money is false */
+	int16_t stat_birth[STAT_MAX];		/* Birth "natural" stat values */
+	int16_t ht_birth;			/* Birth Height */
+	int16_t wt_birth;			/* Birth Weight */
 
 	struct player_options opts;			/* Player options */
 	struct player_history hist;			/* Player history (see player-history.c) */
@@ -588,9 +615,10 @@ extern struct player_body *bodies;
 extern struct player_race *races;
 extern struct player_shape *shapes;
 extern struct player_class *classes;
+extern struct player_ability *player_abilities;
 extern struct magic_realm *realms;
 
-extern const s32b player_exp[PY_MAX_LEVEL];
+extern const int32_t player_exp[PY_MAX_LEVEL];
 extern struct player *player;
 
 /* player-class.c */
@@ -602,13 +630,16 @@ const char *stat_idx_to_name(int type);
 const struct magic_realm *lookup_realm(const char *code);
 bool player_stat_inc(struct player *p, int stat);
 bool player_stat_dec(struct player *p, int stat, bool permanent);
-void player_exp_gain(struct player *p, s32b amount);
-void player_exp_lose(struct player *p, s32b amount, bool permanent);
+void player_exp_gain(struct player *p, int32_t amount);
+void player_exp_lose(struct player *p, int32_t amount, bool permanent);
 void player_flags(struct player *p, bitflag f[OF_SIZE]);
-byte player_hp_attr(struct player *p);
-byte player_sp_attr(struct player *p);
+void player_flags_timed(struct player *p, bitflag f[OF_SIZE]);
+uint8_t player_hp_attr(struct player *p);
+uint8_t player_sp_attr(struct player *p);
 bool player_restore_mana(struct player *p, int amt);
+size_t player_random_name(char *buf, size_t buflen);
 void player_safe_name(char *safe, size_t safelen, const char *name, bool strip_suffix);
+void player_cleanup_members(struct player *p);
 
 /* player-race.c */
 struct player_race *player_id2race(guid id);

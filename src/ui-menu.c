@@ -26,7 +26,7 @@
 /**
  * Cursor colours
  */
-const byte curs_attrs[2][2] =
+const uint8_t curs_attrs[2][2] =
 {
 	{ COLOUR_SLATE, COLOUR_BLUE },      /* Greyed row */
 	{ COLOUR_WHITE, COLOUR_L_BLUE }     /* Valid row */
@@ -38,6 +38,7 @@ const byte curs_attrs[2][2] =
 const char lower_case[] = "abcdefghijklmnopqrstuvwxyz";
 const char upper_case[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const char all_letters[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const char all_letters_nohjkl[] = "abcdefgimnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /**
  * Forward declarations
@@ -52,7 +53,8 @@ static bool no_valid_row(struct menu *menu, int count);
 /**
  * Display an event, with possible preference overrides
  */
-static void display_action_aux(menu_action *act, byte color, int row, int col, int wid)
+static void display_action_aux(menu_action *act, uint8_t color,
+		int row, int col, int wid)
 {
 	/* TODO: add preference support */
 	/* TODO: wizard mode should show more data */
@@ -88,7 +90,7 @@ static int menu_action_valid(struct menu *m, int oid)
 static void menu_action_display(struct menu *m, int oid, bool cursor, int row, int col, int width)
 {
 	menu_action *acts = menu_priv(m);
-	byte color = curs_attrs[!(acts[oid].flags & (MN_ACT_GRAYED))][0 != cursor];
+	uint8_t color = curs_attrs[!(acts[oid].flags & (MN_ACT_GRAYED))][0 != cursor];
 
 	display_action_aux(&acts[oid], color, row, col, width);
 }
@@ -102,6 +104,8 @@ static bool menu_action_handle(struct menu *m, const ui_event *event, int oid)
 			acts[oid].action(acts[oid].name, m->cursor);
 			return true;
 		}
+	} else if (m->keys_hook && event->type == EVT_KBRD) {
+		return m->keys_hook(m, event, oid);
 	}
 
 	return false;
@@ -125,14 +129,23 @@ static const menu_iter menu_iter_actions =
  * MN_STRINGS HELPER FUNCTIONS
  *
  * MN_STRINGS is the type of menu iterator that displays a simple list of 
- * strings - no action is associated, as selection will just return the index.
+ * strings - an action is associated, but only for cmd_keys and switch_keys
+ * handling via keys_hook as selection will just return the index.
  * ------------------------------------------------------------------------ */
 static void display_string(struct menu *m, int oid, bool cursor,
 		int row, int col, int width)
 {
 	const char **items = menu_priv(m);
-	byte color = curs_attrs[CURS_KNOWN][0 != cursor];
+	uint8_t color = curs_attrs[CURS_KNOWN][0 != cursor];
 	Term_putstr(col, row, width, color, items[oid]);
+}
+
+static bool handle_string(struct menu *m, const ui_event *event, int oid)
+{
+	if (m->keys_hook && event->type == EVT_KBRD) {
+		return m->keys_hook(m, event, oid);
+	}
+	return false;
 }
 
 /* Virtual function table for displaying arrays of strings */
@@ -141,7 +154,7 @@ static const menu_iter menu_iter_strings =
 	NULL,              /* get_tag() */
 	NULL,              /* valid_row() */
 	display_string,    /* display_row() */
-	NULL, 	           /* row_handler() */
+	handle_string, 	   /* row_handler() */
 	NULL
 };
 
@@ -564,7 +577,7 @@ static void display_menu_row(struct menu *menu, int pos, int top,
 
 	if (sel) {
 		menu_row_style_t style = menu_row_style_for_validity(row_valid);
-		byte color = curs_attrs[style][0 != (cursor)];
+		uint8_t color = curs_attrs[style][0 != (cursor)];
 		Term_putstr(col, row, 3, color, format("%c) ", sel));
 		col += 3;
 		width -= 3;
@@ -622,9 +635,12 @@ bool menu_handle_mouse(struct menu *menu, const ui_event *in,
 		out->type = EVT_ESCAPE;
 	} else if (!region_inside(&menu->active, in)) {
 		/* A click to the left of the active region is 'back' */
-		if (!region_inside(&menu->active, in) &&
-				in->mouse.x < menu->active.col)
+		if (!region_inside(&menu->active, in)
+				&& in->mouse.x < menu->active.col) {
 			out->type = EVT_ESCAPE;
+		} else if (menu->context_hook) {
+			return (*menu->context_hook)(menu, in, out);
+		}
 	} else {
 		int count = menu->filter_list ? menu->filter_count : menu->count;
 
@@ -638,6 +654,8 @@ bool menu_handle_mouse(struct menu *menu, const ui_event *in,
 				out->type = EVT_MOVE;
 
 			menu->cursor = new_cursor;
+		} else if (menu->context_hook) {
+			return (*menu->context_hook)(menu, in, out);
 		}
 	}
 
@@ -711,9 +729,12 @@ bool menu_handle_keypress(struct menu *menu, const ui_event *in,
 		out->type = EVT_SELECT;
 	} else {
 		/* Try directional movement */
-		int dir = target_dir(in->key);
+		int dir = target_dir_allow(in->key, false,
+			menu->flags & MN_KEYMAP_ESC);
 
-		if (dir && !no_valid_row(menu, count)) {
+		if (dir == ESCAPE) {
+			out->type = EVT_ESCAPE;
+		} else if (dir && !no_valid_row(menu, count)) {
 			*out = menu->skin->process_dir(menu, dir);
 
 			if (out->type == EVT_MOVE) {
@@ -758,6 +779,7 @@ ui_event menu_select(struct menu *menu, int notify, bool popup)
 	/* Stop on first unhandled event */
 	while (!(in.type & notify)) {
 		ui_event out = EVENT_EMPTY;
+		int cursor = menu->cursor;
 
 		menu_refresh(menu, popup);
 		in = inkey_ex();
@@ -791,7 +813,10 @@ ui_event menu_select(struct menu *menu, int notify, bool popup)
 				menu->row_funcs->resize(menu);
 		}
 
-		/* XXX should redraw menu here if cursor has moved */
+		/* Redraw menu here if cursor has moved */
+		if (cursor != menu->cursor) {
+			menu_refresh(menu, popup);
+		}
 
 		/* If we've selected an item, then send that event out */
 		if (out.type == EVT_SELECT && !no_act && menu_handle_action(menu, &out))
@@ -935,9 +960,9 @@ void *menu_priv(struct menu *menu)
 	return menu->menu_data;
 }
 
-void menu_init(struct menu *menu, skin_id skin_id, const menu_iter *iter)
+void menu_init(struct menu *menu, skin_id id, const menu_iter *iter)
 {
-	const menu_skin *skin = menu_find_skin(skin_id);
+	const menu_skin *skin = menu_find_skin(id);
 	assert(skin && "menu skin not found!");
 	assert(iter && "menu iter not found!");
 
@@ -951,10 +976,10 @@ void menu_init(struct menu *menu, skin_id skin_id, const menu_iter *iter)
 	menu->cursor_x_offset = 0;
 }
 
-struct menu *menu_new(skin_id skin_id, const menu_iter *iter)
+struct menu *menu_new(skin_id id, const menu_iter *iter)
 {
 	struct menu *m = mem_alloc(sizeof *m);
-	menu_init(m, skin_id, iter);
+	menu_init(m, id, iter);
 	return m;
 }
 
@@ -1002,7 +1027,7 @@ static void dynamic_display(struct menu *m, int oid, bool cursor,
 		int row, int col, int width)
 {
 	struct menu_entry *entry;
-	byte color = curs_attrs[MN_ROW_STYLE_ENABLED][0 != cursor];
+	uint8_t color = curs_attrs[MN_ROW_STYLE_ENABLED][0 != cursor];
 
 	/* Hack? While row_funcs is private, we need to be consistent with what the menu will do. */
 	if (m->row_funcs->valid_row) {

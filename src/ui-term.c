@@ -195,6 +195,7 @@
  *   Term->wipe_hook = Draw some blank spaces
  *   Term->text_hook = Draw some text in the window
  *   Term->pict_hook = Draw some attr/chars in the window
+ *   Term->dblh_hook = Test if attr/char pair represents a double-height tile
  *
  * The "Term->xtra_hook" hook provides a variety of different functions,
  * based on the first parameter (which should be taken from the various
@@ -236,6 +237,15 @@
  * be used to implement transparency when using graphics by drawing
  * the terrain values as a background and the "ap", "cp" values in
  * the foreground.
+ *
+ * The "Term->dblh_hook" hook provides this package a way to query whether
+ * an attr/char pair corresponds to a double-height tile when it determines what
+ * has changed and needs to be redrawn.  This hook is optional.  Set to NULL,
+ * if no pairs correspond to a double-height tile.  Non-NULL values will only
+ * be used if either the "always_pict" or "higher_pict" flags are are on.
+ * Another, less efficient way to handle double-height tiles is to use
+ * Term_mark() to force a position affected by a double-height tile to be
+ * redrawn at the next refresh.
  *
  * The game "Angband" uses a set of files called "main-xxx.c", for
  * various "xxx" suffixes.  Most of these contain a function called
@@ -288,10 +298,11 @@ char angband_term_name[ANGBAND_TERM_MAX][16] =
 	"Term-7"
 };
 
-u32b window_flag[ANGBAND_TERM_MAX];
+uint32_t window_flag[ANGBAND_TERM_MAX];
 
-
-
+int row_top_map[SIDEBAR_MAX] = {1, 4, 1};
+int row_bottom_map[SIDEBAR_MAX] = {1, 0, 0};
+int col_map[SIDEBAR_MAX] = {13, 0, 0};
 
 /**
  * The current "term"
@@ -316,20 +327,20 @@ struct keypress keylog[KEYLOG_SIZE];
 static errr term_win_nuke(term_win *s)
 {
 	/* Free the window access arrays */
-	mem_free(s->a);
-	mem_free(s->c);
+	mem_free_alt(s->a);
+	mem_free_alt(s->c);
 
 	/* Free the window content arrays */
-	mem_free(s->va);
-	mem_free(s->vc);
+	mem_free_alt(s->va);
+	mem_free_alt(s->vc);
 
 	/* Free the terrain access arrays */
-	mem_free(s->ta);
-	mem_free(s->tc);
+	mem_free_alt(s->ta);
+	mem_free_alt(s->tc);
 
 	/* Free the terrain content arrays */
-	mem_free(s->vta);
-	mem_free(s->vtc);
+	mem_free_alt(s->vta);
+	mem_free_alt(s->vtc);
 
 	/* Success */
 	return (0);
@@ -344,20 +355,20 @@ static errr term_win_init(term_win *s, int w, int h)
 	int y;
 
 	/* Make the window access arrays */
-	s->a = mem_zalloc(h * sizeof(int*));
-	s->c = mem_zalloc(h * sizeof(wchar_t*));
+	s->a = mem_zalloc_alt(h * sizeof(int*));
+	s->c = mem_zalloc_alt(h * sizeof(wchar_t*));
 
 	/* Make the window content arrays */
-	s->va = mem_zalloc(h * w * sizeof(int));
-	s->vc = mem_zalloc(h * w * sizeof(wchar_t));
+	s->va = mem_zalloc_alt(h * w * sizeof(int));
+	s->vc = mem_zalloc_alt(h * w * sizeof(wchar_t));
 
 	/* Make the terrain access arrays */
-	s->ta = mem_zalloc(h * sizeof(int*));
-	s->tc = mem_zalloc(h * sizeof(wchar_t*));
+	s->ta = mem_zalloc_alt(h * sizeof(int*));
+	s->tc = mem_zalloc_alt(h * sizeof(wchar_t*));
 
 	/* Make the terrain content arrays */
-	s->vta = mem_zalloc(h * w * sizeof(int));
-	s->vtc = mem_zalloc(h * w * sizeof(wchar_t));
+	s->vta = mem_zalloc_alt(h * w * sizeof(int));
+	s->vtc = mem_zalloc_alt(h * w * sizeof(wchar_t));
 
 	/* Prepare the window access arrays */
 	for (y = 0; y < h; y++) {
@@ -404,6 +415,8 @@ static errr term_win_copy(term_win *s, term_win *f, int w, int h)
 	}
 
 	/* Copy cursor */
+	s->cnx = f->cnx;
+	s->cny = f->cny;
 	s->cx = f->cx;
 	s->cy = f->cy;
 	s->cu = f->cu;
@@ -414,6 +427,37 @@ static errr term_win_copy(term_win *s, term_win *f, int w, int h)
 }
 
 
+
+/**
+ * ------------------------------------------------------------------------
+ * Public functions operating on all terminals
+ * ------------------------------------------------------------------------
+ */
+
+
+/**
+ * Redraw all the terminals.
+ */
+extern errr Term_redraw_all(void)
+{
+	term *old = Term;
+	errr combined = 0;
+	int j;
+
+	for (j = 0; j < ANGBAND_TERM_MAX; j++) {
+		errr one_result;
+
+		if (!angband_term[j]) continue;
+		(void) Term_activate(angband_term[j]);
+		one_result = Term_redraw();
+		if (!one_result) {
+			combined = one_result;
+		}
+	}
+	(void) Term_activate(old);
+
+	return combined;
+}
 
 /**
  * ------------------------------------------------------------------------
@@ -440,7 +484,7 @@ errr Term_xtra(int n, int v)
 
 
 /**
- * Hack -- fake hook for "Term_curs()" (see above)
+ * HACK fake hook for "Term_curs()" (see above)
  */
 static errr Term_curs_hack(int x, int y)
 {
@@ -452,7 +496,7 @@ static errr Term_curs_hack(int x, int y)
 }
 
 /**
- * Hack -- fake hook for "Term_wipe()" (see above)
+ * HACK fake hook for "Term_wipe()" (see above)
  */
 static errr Term_wipe_hack(int x, int y, int n)
 {
@@ -464,7 +508,7 @@ static errr Term_wipe_hack(int x, int y, int n)
 }
 
 /**
- * Hack -- fake hook for "Term_text()" (see above)
+ * HACK fake hook for "Term_text()" (see above)
  */
 static errr Term_text_hack(int x, int y, int n, int a, const wchar_t *cp)
 {
@@ -477,7 +521,7 @@ static errr Term_text_hack(int x, int y, int n, int a, const wchar_t *cp)
 
 
 /**
- * Hack -- fake hook for "Term_pict()" (see above)
+ * HACK fake hook for "Term_pict()" (see above)
  */
 static errr Term_pict_hack(int x, int y, int n, const int *ap,
 						   const wchar_t *cp, const int *tap,
@@ -521,7 +565,7 @@ void Term_queue_char(term *t, int x, int y, int a, wchar_t c, int ta,
 	if (!ta) ta = ota;
 	if (!tc) tc = otc;
 
-	/* Hack -- Ignore non-changes */
+	/* Ignore non-changes */
 	if ((oa == a) && (oc == c) && (ota == ta) && (otc == tc)) return;
 
 	/* Save the "literal" information */
@@ -538,56 +582,100 @@ void Term_queue_char(term *t, int x, int y, int a, wchar_t c, int ta,
 	/* Check for new min/max col info for this row */
 	if (x < t->x1[y]) t->x1[y] = x;
 	if (x > t->x2[y]) t->x2[y] = x;
+
+	if (t->dblh_hook) {
+		/*
+		 * If the previous contents are a double-height tile also
+		 * adjust the modified bounds to encompass the position on
+		 * the previous row of tiles so it can be included when
+		 * redrawing at the next refresh.
+		 */
+		if (y >= tile_height) {
+			int ofg_dbl = (*t->dblh_hook)(oa, oc);
+			int obg_dbl = (*t->dblh_hook)(ota, otc);
+
+			if (ofg_dbl || obg_dbl) {
+				int yp = y - tile_height;
+
+				if (yp < t->y1) t->y1 = yp;
+				if (x < t->x1[yp]) t->x1[yp] = x;
+				if (x > t->x2[yp]) t->x2[yp] = x;
+			}
+		}
+		/*
+		 * If the next row had a double-height tile, expand the modified
+		 * bounds to encompass it as well since at least its upper
+		 * half will need to be redrawn for the change here.
+		 */
+		if (y < t->hgt - tile_height) {
+			int yn = y + tile_height;
+			int ofg_dbl_nr = (*t->dblh_hook)(
+				t->old->a[yn][x], t->old->c[yn][x]);
+			int obg_dbl_nr = (*t->dblh_hook)(
+				t->old->ta[yn][x], t->old->tc[yn][x]);
+
+			if (ofg_dbl_nr || obg_dbl_nr) {
+				if (yn > t->y2) t->y2 = yn;
+				if (x < t->x1[yn]) t->x1[yn] = x;
+				if (x > t->x2[yn]) t->x2[yn] = x;
+			}
+		}
+	}
 }
 
 /**
- * Queue a large-sized tile
+ * Queue a large-sized tile.
+ * \param t Is the terminal to modify.
+ * \param x Is the column for the upper left corner of the tile.
+ * \param y Is the row for the upper left corner of the tile.
+ * \param clipy Is the lower bound for rows that should not be modified when
+ * writing the large-sized tile.
+ * \param a Is the foreground attribute.
+ * \param c Is the foreground character.
+ * \param a1 Is the background attribute.
+ * \param c1 Is the background character.
  */
-void Term_big_queue_char(term *t, int x, int y, int a, wchar_t c, int a1,
-						 wchar_t c1)
+void Term_big_queue_char(term *t, int x, int y, int clipy,
+	int a, wchar_t c, int a1, wchar_t c1)
 {
-        int hor, vert;
+	int vmax;
+	int hor, vert;
 
 	/* Avoid warning */
 	(void)c;
 
+	/* Leave space on bottom if requested */
+	vmax = (y + tile_height <= clipy) ? tile_height : clipy - y;
+
 	/* No tall skinny tiles */
 	if (tile_width > 1) {
-	        /* Horizontal first */
-	        for (hor = 0; hor <= tile_width; hor++) {
+	        /* Horizontal first; skip already marked upper left corner */
+	        for (hor = 1; hor < tile_width; hor++) {
 		        /* Queue dummy character */
-		        if (hor != 0) {
-			        if (a & 0x80)
-				        Term_queue_char(t, x + hor, y, 255, -1, 0, 0);
-					else
-				        Term_queue_char(t, x + hor, y, COLOUR_WHITE, ' ', a1, c1);
-				}
+			if (a & 0x80)
+				Term_queue_char(t, x + hor, y, 255, -1, 0, 0);
+			else
+				Term_queue_char(t, x + hor, y, COLOUR_WHITE, L' ', a1, c1);
+		}
 
-				/* Now vertical */
-				for (vert = 1; vert <= tile_height; vert++){
-			
-					/* Leave space on bottom for status */
-					if (y + vert + 1 < t-> hgt) {
-						/* Queue dummy character */
-						if (a & 0x80)
-							Term_queue_char(t, x + hor, y + vert, 255, -1, 0, 0);
-						else
-							Term_queue_char(t, x + hor, y + vert, COLOUR_WHITE, ' ', a1, c1);
-					}
-				}
-			}
-	} else {
-		/* Only vertical */
-		for (vert = 1; vert <= tile_height; vert++) {	
-			
-			/* Leave space on bottom for status */
-			if (y + vert + 1 < t->hgt) {
+		/* Now vertical */
+		for (vert = 1; vert < vmax; vert++) {
+			for (hor = 0; hor < tile_width; hor++) {
 				/* Queue dummy character */
 				if (a & 0x80)
-					Term_queue_char(t, x, y + vert, 255, -1, 0, 0);
+					Term_queue_char(t, x + hor, y + vert, 255, -1, 0, 0);
 				else
-					Term_queue_char(t, x, y + vert, COLOUR_WHITE, ' ', a1, c1);
+					Term_queue_char(t, x + hor, y + vert, COLOUR_WHITE, L' ', a1, c1);
 			}
+		}
+	} else {
+		/* Only vertical */
+		for (vert = 1; vert < vmax; vert++) {
+			/* Queue dummy character */
+			if (a & 0x80)
+				Term_queue_char(t, x, y + vert, 255, -1, 0, 0);
+			else
+				Term_queue_char(t, x, y + vert, COLOUR_WHITE, L' ', a1, c1);
 		}
 	}
 }
@@ -618,7 +706,7 @@ void Term_queue_chars(int x, int y, int n, int a, const wchar_t *s)
 		int ota = scr_taa[x];
 		wchar_t otc = scr_tcc[x];
 
-		/* Hack -- Ignore non-changes */
+		/* Ignore non-changes */
 		if ((oa == a) && (oc == *s) && (ota == 0) && (otc == 0)) continue;
 
 		/* Save the "literal" information */
@@ -744,6 +832,226 @@ static void Term_fresh_row_pict(int y, int x1, int x2)
 }
 
 
+/**
+ * Flush a row of the current window when checking for double-height tiles
+ * (see "Term_fresh")
+ *
+ * Display text using "Term_pict()"
+ */
+static void Term_fresh_row_pict_dblh(int y, int x1, int x2, int *pr_drw)
+{
+	int x;
+
+	int *old_aa = Term->old->a[y];
+	wchar_t *old_cc = Term->old->c[y];
+
+	const int *scr_aa = Term->scr->a[y];
+	const wchar_t *scr_cc = Term->scr->c[y];
+
+	int *old_taa = Term->old->ta[y];
+	wchar_t *old_tcc = Term->old->tc[y];
+
+	const int *scr_taa = Term->scr->ta[y];
+	const wchar_t *scr_tcc = Term->scr->tc[y];
+
+	const int *scr_aa_nr;
+	const wchar_t *scr_cc_nr;
+	const int *scr_taa_nr;
+	const wchar_t *scr_tcc_nr;
+	const int *old_aa_nr;
+	const wchar_t *old_cc_nr;
+	const int *old_taa_nr;
+	const wchar_t *old_tcc_nr;
+
+	/* Pending length */
+	int fn = 0;
+
+	/* Pending start */
+	int fx = 0;
+
+	if (y < Term->hgt - tile_height) {
+		scr_aa_nr = Term->scr->a[y + tile_height];
+		scr_cc_nr = Term->scr->c[y + tile_height];
+		scr_taa_nr = Term->scr->ta[y + tile_height];
+		scr_tcc_nr = Term->scr->tc[y + tile_height];
+		old_aa_nr = Term->old->a[y + tile_height];
+		old_cc_nr = Term->old->c[y + tile_height];
+		old_taa_nr = Term->old->ta[y + tile_height];
+		old_tcc_nr = Term->old->tc[y + tile_height];
+	} else {
+		/*
+		 * Can't examine the next row of tiles because it would be
+		 * out of bounds.  To avoid writing much the same code but
+		 * with the checks on the next row skipped, fake it so the
+		 * next row looks unmodified.
+		 */
+		scr_aa_nr = scr_aa;
+		scr_cc_nr = scr_cc;
+		scr_taa_nr = scr_taa;
+		scr_tcc_nr = scr_tcc;
+		old_aa_nr = scr_aa_nr;
+		old_cc_nr = scr_cc_nr;
+		old_taa_nr = scr_taa_nr;
+		old_tcc_nr = scr_tcc_nr;
+	}
+
+	/*
+	 * For unmodified columns at the start, set flags so processing of the
+	 * next row knows they were not redrawn.
+	 */
+	for (x = 0; x < x1; x++) {
+		pr_drw[x] = 0;
+	}
+
+	/* Scan "modified" columns */
+	for (x = x1; x <= x2; x++) {
+		/* See what is currently here. */
+		int oa = old_aa[x];
+		wchar_t oc = old_cc[x];
+		int ota = old_taa[x];
+		wchar_t otc = old_tcc[x];
+
+		/* See what is desired here. */
+		int na = scr_aa[x];
+		wchar_t nc = scr_cc[x];
+		int nta = scr_taa[x];
+		wchar_t ntc = scr_tcc[x];
+
+		int draw;
+
+		if (na == oa && nc == oc && nta == ota && ntc == otc) {
+			/*
+			 * That element did not change.  If it is double-height
+			 * and the previous row was drawn will have to redraw
+			 * to get the upper half of this one drawn correctly.
+			 */
+			if (pr_drw[x] &&
+					((*Term->dblh_hook)(na, nc) ||
+					(*Term->dblh_hook)(nta, ntc))) {
+				draw = 1;
+			} else {
+				/*
+				 * If the next row had double-height tiles and
+				 * those have changed, also have to redraw
+				 * (either to clear what was there if now gone
+				 * or to get the correct backdrop for the new
+				 * double-height tile there now).
+				 */
+				/* See what is in the next row. */
+				int oa_nr = old_aa_nr[x];
+				wchar_t oc_nr = old_cc_nr[x];
+				int ota_nr = old_taa_nr[x];
+				wchar_t otc_nr = old_tcc_nr[x];
+
+				/* See what is desired in the next row. */
+				int na_nr = scr_aa_nr[x];
+				wchar_t nc_nr = scr_cc_nr[x];
+				int nta_nr = scr_taa_nr[x];
+				wchar_t ntc_nr = scr_tcc_nr[x];
+
+				if (((*Term->dblh_hook)(oa_nr, oc_nr) ||
+						(*Term->dblh_hook)(ota_nr, otc_nr)) &&
+						(na_nr != oa_nr ||
+						nc_nr != oc_nr ||
+						nta_nr != ota_nr ||
+						ntc_nr != otc_nr)) {
+					draw = 1;
+				} else {
+					draw = 0;
+				}
+			}
+
+			/* Remember if this element was redrawn or not. */
+			pr_drw[x] = draw;
+		} else {
+			draw = 1;
+			/* Remember that this element was redrawn. */
+			pr_drw[x] = 1;
+		}
+
+		/* Handle grids that don't have to be drawn. */
+		if (!draw) {
+			/* Flush */
+			if (fn) {
+				/* Draw pending attr/char pairs */
+				(void)((*Term->pict_hook)(fx, y, fn,
+					&scr_aa[fx], &scr_cc[fx], &scr_taa[fx],
+					&scr_tcc[fx]));
+
+				/* Forget */
+				fn = 0;
+			}
+
+			/* Skip */
+			continue;
+		}
+
+		/* Save new contents */
+		old_aa[x] = na;
+		old_cc[x] = nc;
+
+		old_taa[x] = nta;
+		old_tcc[x] = ntc;
+
+		/* Restart and Advance */
+		if (fn++ == 0) fx = x;
+	}
+
+	/* Flush */
+	if (fn) {
+		/* Draw pending attr/char pairs */
+		(void)((*Term->pict_hook)(fx, y, fn, &scr_aa[fx], &scr_cc[fx],
+			&scr_taa[fx], &scr_tcc[fx]));
+	}
+
+	/*
+	 * For unmodified columns at the end, set flags so processing of the
+	 * next row knows they weren't redrawn.
+	 */
+	for (x = x2 + 1; x < Term->wid; x++) {
+		pr_drw[x] = 0;
+	}
+}
+
+
+/**
+ * Helper function for Term_fresh_row_both() and Term_fresh_row_both_dblh():
+ * check padding of big tile for changes.
+ * \param t Is the terminal to check.
+ * \param y Is the row coordinate for the upper left corner of the big tile.
+ * \param x Is the column coordinate for the upper left corner of the big tile.
+ * \return Returns a nonzero value if there is a change in one or more grids
+ * whose desired contents are padding for the big tile.
+ */
+static int is_padding_changed(term *t, int y, int x)
+{
+	int xsl = MIN(x + tile_width, t->wid);
+	int ysl = MIN(y + tile_height, t->hgt);
+	int xs, ys;
+
+	for (xs = x + 1; xs < xsl; ++xs) {
+		if (t->scr->a[y][xs] == 255 &&
+				(t->scr->a[y][xs] != t->old->a[y][xs] ||
+				t->scr->c[y][xs] != t->old->c[y][xs] ||
+				t->scr->ta[y][xs] != t->old->ta[y][xs] ||
+				t->scr->tc[y][xs] != t->old->tc[y][xs])) {
+			return 1;
+		}
+	}
+	for (ys = y + 1; ys < ysl; ++ys) {
+		for (xs = x; xs < xsl; ++xs) {
+			if (t->scr->a[ys][xs] == 255 &&
+					(t->scr->a[ys][xs] != t->old->a[ys][xs] ||
+					t->scr->c[ys][xs] != t->old->c[ys][xs] ||
+					t->scr->ta[ys][xs] != t->old->ta[ys][xs] ||
+					t->scr->tc[ys][xs] != t->old->tc[ys][xs])) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
 
 /**
  * Flush a row of the current window (see "Term_fresh")
@@ -780,7 +1088,7 @@ static void Term_fresh_row_both(int y, int x1, int x2)
 	int fx = 0;
 
 	/* Pending attr */
-	int fa = Term->attr_blank;
+	int fa = COLOUR_WHITE;
 
 	int oa;
 	wchar_t oc;
@@ -806,6 +1114,18 @@ static void Term_fresh_row_both(int y, int x1, int x2)
 
 		/* Handle unchanged grids */
 		if ((na == oa) && (nc == oc) && (nta == ota) && (ntc == otc)) {
+			int draw;
+
+			/*
+			 * If (x,y) is the upper left corner of a big tile,
+			 * check for change in its padded area.
+			 */
+			if ((na & 0x80) && na != 255) {
+				draw = is_padding_changed(Term, y, x);
+			} else {
+				draw = 0;
+			}
+
 			/* Flush */
 			if (fn) {
 				/* Draw pending chars (normal or black) */
@@ -816,6 +1136,16 @@ static void Term_fresh_row_both(int y, int x1, int x2)
 
 				/* Forget */
 				fn = 0;
+			}
+
+			if (draw) {
+				/*
+				 * Since a change occurred in the padded area,
+				 * redraw the whole tile even though the upper
+				 * left is unchanged.
+				 */
+				(void)((*Term->pict_hook)(x, y, 1, &na, &nc,
+					&nta, &ntc));
 			}
 
 			/* Skip */
@@ -845,7 +1175,7 @@ static void Term_fresh_row_both(int y, int x1, int x2)
 			/* 2nd byte of bigtile */
 			if (na == 255) continue;
 
-			/* Hack -- Draw the special attr/char pair */
+			/* Draw the special attr/char pair */
 			(void)((*Term->pict_hook)(x, y, 1, &na, &nc, &nta, &ntc));
 
 			/* Skip */
@@ -886,6 +1216,254 @@ static void Term_fresh_row_both(int y, int x1, int x2)
 
 
 /**
+ * Flush a row of the current window when checking for double-height tiles
+ * (see "Term_fresh")
+ *
+ * Display text using "Term_text()" and "Term_wipe()",
+ * but use "Term_pict()" for high-bit attr/char pairs
+ */
+static void Term_fresh_row_both_dblh(int y, int x1, int x2, int *pr_drw)
+{
+	int x;
+
+	int *old_aa = Term->old->a[y];
+	wchar_t *old_cc = Term->old->c[y];
+	const int *scr_aa = Term->scr->a[y];
+	const wchar_t *scr_cc = Term->scr->c[y];
+
+	int *old_taa = Term->old->ta[y];
+	wchar_t *old_tcc = Term->old->tc[y];
+	const int *scr_taa = Term->scr->ta[y];
+	const wchar_t *scr_tcc = Term->scr->tc[y];
+
+	const int *scr_aa_nr;
+	const wchar_t *scr_cc_nr;
+	const int *scr_taa_nr;
+	const wchar_t *scr_tcc_nr;
+	const int *old_aa_nr;
+	const wchar_t *old_cc_nr;
+	const int *old_taa_nr;
+	const wchar_t *old_tcc_nr;
+
+	/* The "always_text" flag */
+	int always_text = Term->always_text;
+
+	/* Pending length */
+	int fn = 0;
+
+	/* Pending start */
+	int fx = 0;
+
+	/* Pending attr */
+	int fa = COLOUR_WHITE;
+
+	if (y < Term->hgt - tile_height) {
+		scr_aa_nr = Term->scr->a[y + tile_height];
+		scr_cc_nr = Term->scr->c[y + tile_height];
+		scr_taa_nr = Term->scr->ta[y + tile_height];
+		scr_tcc_nr = Term->scr->tc[y + tile_height];
+		old_aa_nr = Term->old->a[y + tile_height];
+		old_cc_nr = Term->old->c[y + tile_height];
+		old_taa_nr = Term->old->ta[y + tile_height];
+		old_tcc_nr = Term->old->tc[y + tile_height];
+	} else {
+		/*
+		 * Can't examine the next row of tiles because it would be
+		 * out of bounds.  To avoid writing much the same code but
+		 * with the checks on the next row skipped, fake it so the
+		 * next row looks unmodified.
+		 */
+		scr_aa_nr = scr_aa;
+		scr_cc_nr = scr_cc;
+		scr_taa_nr = scr_taa;
+		scr_tcc_nr = scr_tcc;
+		old_aa_nr = scr_aa_nr;
+		old_cc_nr = scr_cc_nr;
+		old_taa_nr = scr_taa_nr;
+		old_tcc_nr = scr_tcc_nr;
+	}
+
+	/*
+	 * For unmodified columns at the start, set flags so processing of the
+	 * next row knows they weren't redrawn.
+	 */
+	for (x = 0; x < x1; x++) {
+		pr_drw[x] = 0;
+	}
+
+	/* Scan "modified" columns */
+	for (x = x1; x <= x2; x++) {
+		/* See what is currently here. */
+		int oa = old_aa[x];
+		wchar_t oc = old_cc[x];
+		int ota = old_taa[x];
+		wchar_t otc = old_tcc[x];
+
+		/* See what is desired here. */
+		int na = scr_aa[x];
+		wchar_t nc = scr_cc[x];
+		int nta = scr_taa[x];
+		wchar_t ntc = scr_tcc[x];
+
+		int draw;
+
+		if (na == oa && nc == oc && nta == ota && ntc == otc) {
+			/*
+			 * That element did not change.  If it is double-height
+			 * and the previous row was drawn, still have to redraw
+			 * to get the upper half of this one drawn correctly.
+			 */
+			if (pr_drw[x] &&
+					((*Term->dblh_hook)(na, nc) ||
+					(*Term->dblh_hook)(nta, ntc))) {
+				draw = 1;
+			} else {
+				/*
+				 * If the next row had double-height tiles and
+				 * those have changed, also have to redraw
+				 * (either to clear what was where if now gone
+				 * or to get the correct background for the new
+				 * double-height tile there now).
+				 */
+				/* See what is in the next row. */
+				int oa_nr = old_aa_nr[x];
+				wchar_t oc_nr = old_cc_nr[x];
+				int ota_nr = old_taa_nr[x];
+				wchar_t otc_nr = old_tcc_nr[x];
+
+				/* See what is desired in the next row. */
+				int na_nr = scr_aa_nr[x];
+				wchar_t nc_nr = scr_cc_nr[x];
+				int nta_nr = scr_taa_nr[x];
+				wchar_t ntc_nr = scr_tcc_nr[x];
+
+				if (((*Term->dblh_hook)(oa_nr, oc_nr) ||
+						(*Term->dblh_hook)(ota_nr, otc_nr)) &&
+						(na_nr != oa_nr ||
+						nc_nr != oc_nr ||
+						nta_nr != ota_nr ||
+						ntc_nr != otc_nr)) {
+					draw = 1;
+				} else {
+					/*
+					 * If (x,y) is the upper left corner of
+					 * a big tile, check for change in its
+					 * padded area.
+					 */
+					if ((na & 0x80) && na != 255) {
+						draw = is_padding_changed(
+							Term, y, x);
+					} else {
+						draw = 0;
+					}
+				}
+			}
+
+			/* Remember if this element was redrawn or not. */
+			pr_drw[x] = draw;
+		} else {
+			draw = 1;
+			/* Remember that this element was redrawn. */
+			pr_drw[x] = 1;
+		}
+
+		/* Handle grids that don't have to be drawn. */
+		if (!draw) {
+			/* Flush */
+			if (fn) {
+				/* Draw pending chars (normal or black) */
+				if (fa || always_text) {
+					(void)((*Term->text_hook)(fx, y, fn, fa,
+						&scr_cc[fx]));
+				} else {
+					(void)((*Term->wipe_hook)(fx, y, fn));
+				}
+				/* Forget */
+				fn = 0;
+			}
+
+			/* Skip */
+			continue;
+		}
+
+		/* Save new contents */
+		old_aa[x] = na;
+		old_cc[x] = nc;
+		old_taa[x] = nta;
+		old_tcc[x] = ntc;
+
+		/* Handle high-bit attr/chars */
+		if ((na & 0x80)) {
+			/* Flush */
+			if (fn) {
+				/* Draw pending chars (normal or black) */
+				if (fa || always_text) {
+					(void)((*Term->text_hook)(fx, y, fn, fa,
+						&scr_cc[fx]));
+				} else {
+					(void)((*Term->wipe_hook)(fx, y, fn));
+				}
+				/* Forget */
+				fn = 0;
+			}
+
+			/* Skip padding element for big tiles. */
+			if (na == 255) continue;
+
+			/* Draw the special attr/char pair */
+			(void)((*Term->pict_hook)(x, y, 1, &na, &nc, &nta,
+				&ntc));
+
+			/* Skip */
+			continue;
+		}
+
+		/* Notice new color */
+		if (fa != na) {
+			/* Flush */
+			if (fn) {
+				/*
+				 * Draw the pending chars, erase leading spaces
+				 */
+				if (fa || always_text) {
+					(void)((*Term->text_hook)(fx, y, fn, fa,
+						&scr_cc[fx]));
+				} else {
+					(void)((*Term->wipe_hook)(fx, y, fn));
+				}
+				/* Forget */
+				fn = 0;
+			}
+
+			/* Save the new color */
+			fa = na;
+		}
+
+		/* Restart and Advance */
+		if (fn++ == 0) fx = x;
+	}
+
+	/* Flush */
+	if (fn) {
+		/* Draw pending chars (normal or black) */
+		if (fa || always_text) {
+			(void)((*Term->text_hook)(fx, y, fn, fa, &scr_cc[fx]));
+		} else {
+			(void)((*Term->wipe_hook)(fx, y, fn));
+		}
+	}
+
+	/*
+	 * For unmodified columns at end, set flags so processing of the next
+	 * knows they weren't redrawn.
+	 */
+	for (x = x2 + 1; x < Term->wid; x++) {
+		pr_drw[x] = 0;
+	}
+}
+
+
+/**
  * Flush a row of the current window (see "Term_fresh")
  *
  * Display text using "Term_text()" and "Term_wipe()"
@@ -910,7 +1488,7 @@ static void Term_fresh_row_text(int y, int x1, int x2)
 	int fx = 0;
 
 	/* Pending attr */
-	int fa = Term->attr_blank;
+	int fa = COLOUR_WHITE;
 
 	int oa;
 	wchar_t oc;
@@ -1004,11 +1582,17 @@ errr Term_mark(int x, int y)
 	old_taa[x] = 0x80;
 	old_tcc[x] = 0;
 
+	/* Update bounds for modified region. */
+	if (y < Term->y1) Term->y1 = y;
+	if (y > Term->y2) Term->y2 = y;
+	if (x < Term->x1[y]) Term->x1[y] = x;
+	if (x > Term->x2[y]) Term->x2[y] = x;
+
 	return (0);
 }
 
-byte tile_width = 1;            /* Tile width in units of font width */
-byte tile_height = 1;           /* Tile height in units of font height */
+uint8_t tile_width = 1;            /* Tile width in units of font width */
+uint8_t tile_height = 1;           /* Tile height in units of font height */
 
 /**
  * Helper variables for large cursor
@@ -1087,12 +1671,10 @@ bool smlcurs = true;
  * high-bit set) to be sent (one pair at a time) to the "Term->pict_hook"
  * hook, which can draw these pairs in whatever way it would like.
  *
- * Normally, the "Term_wipe()" function is used only to display "blanks"
- * that were induced by "Term_clear()" or "Term_erase()", and then only
- * if the "attr_blank" and "char_blank" fields have not been redefined
- * to use "white space" instead of the default "black space".  Actually,
- * the "Term_wipe()" function is used to display all "black" text, such
- * as the default "spaces" created by "Term_clear()" and "Term_erase()".
+ * Normally, the "Term_wipe()" function is used only to display "blanks" that
+ * were induced by "Term_clear()" or "Term_erase()". Actually, the
+ * "Term_wipe()" function is used to display all "black" text, such as the
+ * default "spaces" created by "Term_clear()" and "Term_erase()".
  *
  * Note that the "Term->always_text" flag will disable the use of the
  * "Term_wipe()" function hook entirely, and force all text, even text
@@ -1102,10 +1684,6 @@ bool smlcurs = true;
  * Note that the "Term->always_pict" flag will disable the use of the
  * "Term_wipe()" function entirely, and force everything, even text
  * drawn in the attr "black", to be explicitly drawn.
- *
- * Note that if no "black" text is ever drawn, and if "attr_blank" is
- * not "zero", then the "Term_wipe" hook will never be used, even if
- * the "Term->always_text" flag is not set.
  *
  * This function does nothing unless the "Term" is "mapped", which allows
  * certain systems to optimize the handling of "closed" windows.
@@ -1153,6 +1731,8 @@ errr Term_fresh(void)
 	    (scr->cv == old->cv) &&
 	    (scr->cx == old->cx) &&
 	    (scr->cy == old->cy) &&
+	    (scr->cnx == old->cnx) &&
+	    (scr->cny == old->cny) &&
 	    !(Term->total_erase)) {
 		/* Nothing */
 		return (1);
@@ -1169,15 +1749,13 @@ errr Term_fresh(void)
 
 	/* Handle "total erase" */
 	if (Term->total_erase) {
-		int na = Term->attr_blank;
-		wchar_t nc = Term->char_blank;
-
 		/* Physically erase the entire window */
 		Term_xtra(TERM_XTRA_CLEAR, 0);
 
-		/* Hack -- clear all "cursor" data */
+		/* Clear all "cursor" data */
 		old->cv = old->cu = false;
 		old->cx = old->cy = 0;
+		old->cnx = old->cny = 1;
 
 		/* Wipe each row */
 		for (y = 0; y < h; y++) {
@@ -1189,11 +1767,11 @@ errr Term_fresh(void)
 			/* Wipe each column */
 			for (x = 0; x < w; x++) {
 				/* Wipe each grid */
-				*aa++ = na;
-				*cc++ = nc;
+				*aa++ = COLOUR_WHITE;
+				*cc++ = ' ';
 
-				*taa++ = na;
-				*tcc++ = nc;
+				*taa++ = COLOUR_WHITE;
+				*tcc++ = ' ';
 			}
 		}
 
@@ -1216,30 +1794,36 @@ errr Term_fresh(void)
 	if (Term->soft_cursor) {
 		/* Cursor was visible */
 		if (!old->cu && old->cv) {
-			int tx = old->cx;
-			int ty = old->cy;
+		        /*
+		         * Fake a change at the old cursor position so that
+		         * position will be redrawn along with any other
+			 * changes.
+			 */
+			int mty = MAX(old->cy,
+				MIN(old->cy + old->cny - 1, h - 1));
+			int mtx = MAX(old->cx,
+				MIN(old->cx + old->cnx - 1, w - 1));
+			int ty;
 
-			int *scr_aa = scr->a[ty];
-			wchar_t *scr_cc = scr->c[ty];
+			for (ty = old->cy; ty <= mty; ++ty) {
+				int tx;
 
-			int sa = scr_aa[tx];
-			wchar_t sc = scr_cc[tx];
-
-			int *scr_taa = scr->ta[ty];
-			wchar_t *scr_tcc = scr->tc[ty];
-
-			int sta = scr_taa[tx];
-			wchar_t stc = scr_tcc[tx];
-
-			/* Graphics, character (fallback or intended), or erase */
-			if (Term->always_pict)
-				(void)((*Term->pict_hook)(tx, ty, 1, &sa, &sc, &sta, &stc));
-			else if (Term->higher_pict && (sa & 0x80))
-				(void)((*Term->pict_hook)(tx, ty, 1, &sa, &sc, &sta, &stc));
-			else if (sa || Term->always_text)
-				(void)((*Term->text_hook)(tx, ty, 1, sa, &sc));
-			else
-				(void)((*Term->wipe_hook)(tx, ty, 1));
+				for (tx = old->cx; tx <= mtx; ++tx) {
+					old->c[ty][tx] = ~scr->c[ty][tx];
+				}
+				if (Term->x1[ty] > old->cx) {
+					Term->x1[ty] = old->cx;
+				}
+				if (Term->x2[ty] < mtx) {
+					Term->x2[ty] = mtx;
+				}
+			}
+			if (y1 > old->cy) {
+			    y1 = old->cy;
+			}
+			if (y2 < mty) {
+			    y2 = mty;
+			}
 		}
 	} else {
 		/* Cursor will be invisible */
@@ -1250,41 +1834,97 @@ errr Term_fresh(void)
 
 	/* Something to update */
 	if (y1 <= y2) {
+		int **pr_drw;
+		int ipr;
+
+		if (Term->dblh_hook && (Term->always_pict ||
+				Term->higher_pict)) {
+			/*
+			 * Have to track whether each location in the previous
+			 * tile_height rows was redrawn.  First dimension in
+			 * pr_drw will be treated circularly so there's no
+			 * need for copying or swapping pointers.
+			 */
+			pr_drw = mem_alloc(tile_height * sizeof(*pr_drw));
+			for (y = 0; y < tile_height; ++y) {
+				pr_drw[y] = mem_zalloc(w * sizeof(**pr_drw));
+			}
+		} else {
+			pr_drw = NULL;
+		}
+
 		/* Handle "icky corner" */
 		if ((Term->icky_corner) && (y2 >= h - 1) && (Term->x2[h - 1] > w - 2))
 			Term->x2[h - 1] = w - 2;
 
 
+		/*
+		 * Make the stored y bounds for the modified region empty.
+		 * Do so before drawing so that Term_mark() calls from within
+		 * the drawing hooks will adjust the bounds on the modified
+		 * region for the next update.
+		 */
+		Term->y1 = h;
+		Term->y2 = 0;
+
 		/* Scan the "modified" rows */
+		ipr = 0;
 		for (y = y1; y <= y2; ++y) {
 			int x1 = Term->x1[y];
 			int x2 = Term->x2[y];
 
 			/* Flush each "modified" row */
 			if (x1 <= x2) {
-				/* Use "Term_pict()" - always, sometimes or never */
-				if (Term->always_pict)
-					/* Flush the row */
-					Term_fresh_row_pict(y, x1, x2);
-				else if (Term->higher_pict)
-					/* Flush the row */
-					Term_fresh_row_both(y, x1, x2);
-				else
-					/* Flush the row */
-					Term_fresh_row_text(y, x1, x2);
-
-				/* This row is all done */
+				/*
+				 * As above, set the bounds for the modified
+				 * region to be empty before drawing.
+				 */
 				Term->x1[y] = w;
 				Term->x2[y] = 0;
 
-				/* Hack -- Flush that row (if allowed) */
+				/* Use "Term_pict()" - always, sometimes or never */
+				if (Term->always_pict) {
+					/* Flush the row */
+					if (Term->dblh_hook) {
+						Term_fresh_row_pict_dblh(
+							y, x1, x2, pr_drw[ipr]);
+						ipr = (ipr + 1) % tile_height;
+					} else {
+						Term_fresh_row_pict(y, x1, x2);
+					}
+				} else if (Term->higher_pict) {
+					/* Flush the row */
+					if (Term->dblh_hook) {
+						Term_fresh_row_both_dblh(
+							y, x1, x2, pr_drw[ipr]);
+						ipr = (ipr + 1) % tile_height;
+					} else {
+						Term_fresh_row_both(y, x1, x2);
+					}
+				} else {
+					/* Flush the row */
+					Term_fresh_row_text(y, x1, x2);
+				}
+				/* Flush that row (if allowed) */
 				if (!Term->never_frosh) Term_xtra(TERM_XTRA_FROSH, y);
+			} else if (pr_drw) {
+				/*
+				 * Remember that nothing was redrawn on that
+				 * row.
+				 */
+				for (x = 0; x < w; ++x) {
+					pr_drw[ipr][x] = 0;
+				}
+				ipr = (ipr + 1) % tile_height;
 			}
 		}
 
-		/* No rows are invalid */
-		Term->y1 = h;
-		Term->y2 = 0;
+		if (pr_drw) {
+			for (y = 0; y < tile_height; ++y) {
+				mem_free(pr_drw[y]);
+			}
+			mem_free(pr_drw);
+		}
 	}
 
 
@@ -1294,10 +1934,18 @@ errr Term_fresh(void)
 		if (!scr->cu && scr->cv) {
 			if ((((tile_width > 1)||(tile_height > 1)) &&
 			     (!smlcurs) && (Term->saved == 0) && (scr->cy > 0))
-			    || bigcurs)
+			    || bigcurs) {
 				(void)((*Term->bigcurs_hook)(scr->cx, scr->cy));
-			else
+				scr->cnx = tile_width;
+				scr->cny = tile_height;
+			} else {
 				(void)((*Term->curs_hook)(scr->cx, scr->cy));
+				scr->cnx = 1;
+				scr->cny = 1;
+			}
+		} else {
+			scr->cnx = 1;
+			scr->cny = 1;
 		}
 	} else {
 		/* The cursor is useless or invisible ignore it, otherwise display */
@@ -1314,6 +1962,9 @@ errr Term_fresh(void)
 			/* Make the cursor visible */
 			Term_xtra(TERM_XTRA_SHAPE, 1);
 		}
+
+		scr->cnx = 1;
+		scr->cny = 1;
 	}
 
 	/* Save the "cursor state" */
@@ -1321,7 +1972,8 @@ errr Term_fresh(void)
 	old->cv = scr->cv;
 	old->cx = scr->cx;
 	old->cy = scr->cy;
-
+	old->cnx = scr->cnx;
+	old->cny = scr->cny;
 
 	/* Actually flush the output */
 	Term_xtra(TERM_XTRA_FRESH, 0);
@@ -1498,7 +2150,7 @@ errr Term_addstr(int n, int a, const char *buf)
 	/* Advance the cursor */
 	Term->scr->cx += n;
 
-	/* Hack -- Notice "Useless" cursor */
+	/* Notice "Useless" cursor */
 	if (res) Term->scr->cu = 1;
 
 	/* Success (usually) */
@@ -1537,32 +2189,32 @@ void Term_big_putch(int x, int y, int a, wchar_t c)
 	/* No tall skinny tiles */
 	if (tile_width > 1) {
 		/* Horizontal first */
-		for (hor = 0; hor <= tile_width; hor++) {
+		for (hor = 0; hor < tile_width; hor++) {
 			/* Queue dummy character */
 			if (hor != 0) {
 				if (a & 0x80)
 					Term_putch(x + hor, y, 255, -1);
 				else
-					Term_putch(x + hor, y, COLOUR_WHITE, ' ');
+					Term_putch(x + hor, y, COLOUR_WHITE, L' ');
 			}
 
 			/* Now vertical */
-			for (vert = 1; vert <= tile_height; vert++) {
+			for (vert = 1; vert < tile_height; vert++) {
 				/* Queue dummy character */
 				if (a & 0x80)
 					Term_putch(x + hor, y + vert, 255, -1);
 				else
-					Term_putch(x + hor, y + vert, COLOUR_WHITE, ' ');
+					Term_putch(x + hor, y + vert, COLOUR_WHITE, L' ');
 			}
 		}
 	} else {
 		/* Only vertical */
-		for (vert = 1; vert <= tile_height; vert++) {
+		for (vert = 1; vert < tile_height; vert++) {
 			/* Queue dummy character */
 			if (a & 0x80)
 				Term_putch(x, y + vert, 255, -1);
 			else
-				Term_putch(x, y + vert, COLOUR_WHITE, ' ');
+				Term_putch(x, y + vert, COLOUR_WHITE, L' ');
 		}
 	}
 }
@@ -1603,9 +2255,6 @@ errr Term_erase(int x, int y, int n)
 	int x1 = -1;
 	int x2 = -1;
 
-	int na = Term->attr_blank;
-	wchar_t nc = Term->char_blank;
-
 	int *scr_aa;
 	wchar_t *scr_cc;
 
@@ -1630,12 +2279,12 @@ errr Term_erase(int x, int y, int n)
 		int oa = scr_aa[x];
 		wchar_t oc = scr_cc[x];
 
-		/* Hack -- Ignore "non-changes" */
-		if ((oa == na) && (oc == nc)) continue;
+		/* Ignore "non-changes" */
+		if ((oa == COLOUR_WHITE) && (oc == ' ')) continue;
 
 		/* Save the "literal" information */
-		scr_aa[x] = na;
-		scr_cc[x] = nc;
+		scr_aa[x] = COLOUR_WHITE;
+		scr_cc[x] = ' ';
 
 		scr_taa[x] = 0;
 		scr_tcc[x] = 0;
@@ -1675,9 +2324,6 @@ errr Term_clear(void)
 	int w = Term->wid;
 	int h = Term->hgt;
 
-	int na = Term->attr_blank;
-	wchar_t nc = Term->char_blank;
-
 	/* Cursor usable */
 	Term->scr->cu = 0;
 
@@ -1693,8 +2339,8 @@ errr Term_clear(void)
 
 		/* Wipe each column */
 		for (x = 0; x < w; x++) {
-			scr_aa[x] = na;
-			scr_cc[x] = nc;
+			scr_aa[x] = COLOUR_WHITE;
+			scr_cc[x] = ' ';
 
 			scr_taa[x] = 0;
 			scr_tcc[x] = 0;
@@ -1728,7 +2374,7 @@ errr Term_redraw(void)
 	/* Force "total erase" */
 	Term->total_erase = true;
 
-	/* Hack -- Refresh */
+	/* Refresh */
 	Term_fresh();
 
 	/* Success */
@@ -1773,7 +2419,7 @@ errr Term_redraw_section(int x1, int y1, int x2, int y2)
 		}
 	}
 
-	/* Hack -- Refresh */
+	/* Refresh */
 	Term_fresh();
 
 	/* Success */
@@ -1869,7 +2515,7 @@ errr Term_flush(void)
 	if (!Term)
 		return 0;
 
-	/* Hack -- Flush all events */
+	/* Flush all events */
 	Term_xtra(TERM_XTRA_FLUSH, 0);
 
 	/* Forget all keypresses */
@@ -1897,9 +2543,9 @@ static void log_keypress(ui_event e)
 /**
  * Add a keypress to the "queue"
  */
-errr Term_keypress(keycode_t k, byte mods)
+errr Term_keypress(keycode_t k, uint8_t mods)
 {
-	/* Hack -- Refuse to enqueue non-keys */
+	/* Refuse to enqueue non-keys */
 	if (!k) return (-1);
 
 	if(!Term->complex_input) {
@@ -1940,7 +2586,7 @@ errr Term_keypress(keycode_t k, byte mods)
 /**
  * Add a mouse event to the "queue"
  */
-errr Term_mousepress(int x, int y, char button)/*, byte mods);*/
+errr Term_mousepress(int x, int y, char button)/*, uint8_t mods);*/
 {
 	/* Store the char, advance the queue */
 	Term->key_queue[Term->key_head].type = EVT_MOUSE;
@@ -1986,10 +2632,10 @@ errr Term_key_push(int k)
 
 errr Term_event_push(const ui_event *ke)
 {
-	/* Hack -- Refuse to enqueue non-keys */
+	/* Refuse to enqueue non-keys */
 	if (!ke) return (-1);
 
-	/* Hack -- Overflow may induce circular queue */
+	/* Overflow may induce circular queue */
 	if (Term->key_tail == 0) Term->key_tail = Term->key_size;
 
 	/* Back up, Store the char */
@@ -2022,7 +2668,7 @@ errr Term_inkey(ui_event *ch, bool wait, bool take)
 	/* Assume no key */
 	memset(ch, 0, sizeof *ch);
 
-	/* Hack -- get bored */
+	/* Get bored */
 	if (!Term->never_bored)
 		/* Process random events */
 		Term_xtra(TERM_XTRA_BORED, 0);
@@ -2065,7 +2711,8 @@ errr Term_inkey(ui_event *ch, bool wait, bool take)
 /**
  * Save the "requested" screen into the "memorized" screen
  *
- * Every "Term_save()" should match exactly one "Term_load()"
+ * Every "Term_save()" should match exactly one "Term_load()" or
+ * "Term_load_all()"
  */
 errr Term_save(void)
 {
@@ -2098,7 +2745,8 @@ errr Term_save(void)
 /**
  * Restore the "requested" contents (see above).
  *
- * Every "Term_save()" should match exactly one "Term_load()"
+ * Every "Term_save()" should match exactly one "Term_load()" or
+ * "Term_load_all()"
  */
 errr Term_load(void)
 {
@@ -2146,6 +2794,66 @@ errr Term_load(void)
 }
 
 
+/**
+ * Restore the "requested" contents (see above).  Differs from Term_load() in
+ * that all the previous saves are replayed from earliest to latest with a
+ * redraw for each.  That is useful for accurately restoring the display if
+ * the saves include partially overwritten big tiles.
+ *
+ * Every "Term_save()" should match exactly one "Term_load()" or
+ * "Term_load_all()"
+ */
+errr Term_load_all(void)
+{
+	int w = Term->wid;
+	int h = Term->hgt;
+	struct reversed_save {
+		term_win *saved_mem; struct reversed_save *next;
+	} *reversed_list = NULL;
+	struct term_win *cursor;
+
+	for (cursor = Term->mem; cursor; cursor = cursor->next) {
+		struct reversed_save *new_head = mem_alloc(sizeof(*new_head));
+
+		new_head->saved_mem = cursor;
+		new_head->next = reversed_list;
+		reversed_list = new_head;
+	}
+
+	while (reversed_list) {
+		struct reversed_save *tgt = reversed_list;
+		int y;
+
+		reversed_list = reversed_list->next;
+		term_win_copy(Term->scr, tgt->saved_mem, w, h);
+		mem_free(tgt);
+
+		/* Assume change */
+		for (y = 0; y < h; y++) {
+			/* Assume change */
+			Term->x1[y] = 0;
+			Term->x2[y] = w - 1;
+		}
+		Term->y1 = 0;
+		Term->y2 = h - 1;
+
+		/* Force a redraw with those contents. */
+		Term_fresh();
+	}
+
+	/* Drop the most recent save. */
+	if (Term->mem) {
+		cursor = Term->mem;
+		Term->mem = Term->mem->next;
+		term_win_nuke(cursor);
+		mem_free(cursor);
+	}
+	Term->saved--;
+
+	/* Success */
+	return (0);
+}
+
 
 /**
  * React to a new physical window size.
@@ -2162,6 +2870,7 @@ errr Term_resize(int w, int h)
 	term_win *hold_old;
 	term_win *hold_scr;
 	term_win *hold_mem;
+	term_win **hold_mem_dest;
 	term_win *hold_tmp;
 
 	ui_event evt = EVENT_EMPTY;
@@ -2219,15 +2928,29 @@ errr Term_resize(int w, int h)
 	term_win_copy(Term->scr, hold_scr, wid, hgt);
 
 	/* If needed */
-	if (hold_mem) {
+	hold_mem_dest = &Term->mem;
+	while (hold_mem != 0) {
+		term_win* trash;
+
 		/* Create new window */
-		Term->mem = mem_zalloc(sizeof(term_win));
+		*hold_mem_dest = mem_zalloc(sizeof(term_win));
 
 		/* Initialize new window */
-		term_win_init(Term->mem, w, h);
+		term_win_init(*hold_mem_dest, w, h);
 
 		/* Save the contents */
-		term_win_copy(Term->mem, hold_mem, wid, hgt);
+		term_win_copy(*hold_mem_dest, hold_mem, wid, hgt);
+
+		trash = hold_mem;
+		hold_mem = hold_mem->next;
+
+		if ((*hold_mem_dest)->cx >= w) (*hold_mem_dest)->cu = 1;
+		if ((*hold_mem_dest)->cy >= h) (*hold_mem_dest)->cu = 1;
+
+		hold_mem_dest = &((*hold_mem_dest)->next);
+
+		term_win_nuke(trash);
+		mem_free(trash);
 	}
 
 	/* If needed */
@@ -2265,19 +2988,6 @@ errr Term_resize(int w, int h)
 	/* Illegal cursor */
 	if (Term->scr->cx >= w) Term->scr->cu = 1;
 	if (Term->scr->cy >= h) Term->scr->cu = 1;
-
-	/* If needed */
-	if (hold_mem) {
-		/* Nuke */
-		term_win_nuke(hold_mem);
-
-		/* Kill */
-		mem_free(hold_mem);
-
-		/* Illegal cursor */
-		if (Term->mem->cx >= w) Term->mem->cu = 1;
-		if (Term->mem->cy >= h) Term->mem->cu = 1;
-	}
 
 	/* If needed */
 	if (hold_tmp) {
@@ -2330,13 +3040,13 @@ errr Term_resize(int w, int h)
  */
 errr Term_activate(term *t)
 {
-	/* Hack -- already done */
+	/* Already done */
 	if (Term == t) return (1);
 
 	/* Deactivate the old Term */
 	if (Term) Term_xtra(TERM_XTRA_LEVEL, 0);
 
-	/* Hack -- Call the special "init" hook */
+	/* Call the special "init" hook */
 	if (t && !t->active_flag) {
 		/* Call the "init" hook */
 		if (t->init_hook) (*t->init_hook)(t);
@@ -2365,7 +3075,7 @@ errr Term_activate(term *t)
  */
 errr term_nuke(term *t)
 {
-	/* Hack -- Call the special "nuke" hook */
+	/* Call the special "nuke" hook */
 	if (t->active_flag) {
 		/* Call the "nuke" hook */
 		if (t->nuke_hook) (*t->nuke_hook)(t);
@@ -2478,12 +3188,10 @@ errr term_init(term *t, int w, int h, int k)
 	/* Force "total erase" */
 	t->total_erase = true;
 
-	/* Default "blank" */
-	t->attr_blank = 0;
-	t->char_blank = L' ';
-
 	/* No saves yet */
 	t->saved = 0;
+
+	t->sidebar_mode = SIDEBAR_LEFT;
 
 	/* Success */
 	return (0);
@@ -2492,7 +3200,7 @@ errr term_init(term *t, int w, int h, int k)
 /**
  * Emit a 'graphical' symbol and a padding character if appropriate
  */
-int big_pad(int col, int row, byte a, wchar_t c)
+int big_pad(int col, int row, uint8_t a, wchar_t c)
 {
 	Term_putch(col, row, a, c);
 
@@ -2500,4 +3208,55 @@ int big_pad(int col, int row, byte a, wchar_t c)
 		Term_big_putch(col, row, a, c);
 
 	return tile_width;
+}
+
+/**
+ * For the given terminal, return the first row where tiles may be rendered.
+ * \param t Is the terminal to be queried.
+ */
+int Term_get_first_tile_row(term *t)
+{
+	int result;
+
+	if (t == angband_term[0]) {
+		/*
+		 * In the main window, there's no tiles in the top bar, does
+		 * not account for the case where the main window is used as
+		 * the target for display_map() or displays tiles in the
+		 * knowledge menus.
+		 */
+		result = ROW_MAP;
+	} else {
+		/* In other windows, have to check the flags. */
+		int i = 1;
+
+		while (1) {
+			if (i >= ANGBAND_TERM_MAX) {
+				/*
+				 * Don't know the flags.  Err on the side of
+				 * drawing too few tiles.
+				 */
+				result = 1;
+				break;
+			}
+			if (t == angband_term[i]) {
+				if (window_flag[i] & PW_OVERHEAD) {
+					/*
+					 * All rows are valid targets for
+					 * tiles.
+					 */
+					result = 0;
+				} else {
+					/*
+					 * It's presumably a minimap view where
+					 * the first row has a non-tile border.
+					 */
+					result = 1;
+				}
+				break;
+			}
+			++i;
+		}
+	}
+	return result;
 }

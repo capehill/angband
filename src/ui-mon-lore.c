@@ -37,7 +37,7 @@
  */
 void lore_title(textblock *tb, const struct monster_race *race)
 {
-	byte standard_attr, optional_attr;
+	uint8_t standard_attr, optional_attr;
 	wchar_t standard_char, optional_char;
 
 	assert(race);
@@ -60,7 +60,7 @@ void lore_title(textblock *tb, const struct monster_race *race)
 	}
 
 	/* Dump the name and then append standard attr/char info */
-	textblock_append(tb, race->name);
+	textblock_append(tb, "%s", race->name);
 
 	textblock_append(tb, " ('");
 	textblock_append_pict(tb, standard_attr, standard_char);
@@ -95,15 +95,15 @@ void lore_description(textblock *tb, const struct monster_race *race,
 
 	assert(tb && race && original_lore);
 
-	/* Hack -- create a copy of the monster-memory that we can modify */
+	/* Create a copy of the monster-memory that we can modify */
 	memcpy(lore, original_lore, sizeof(struct monster_lore));
-
-	/* Now get the known monster flags */
-	monster_flags_known(race, lore, known_flags);
 
 	/* Spoilers -- know everything */
 	if (spoilers)
 		cheat_monster_lore(race, lore);
+
+	/* Now get the known monster flags */
+	monster_flags_known(race, lore, known_flags);
 
 	/* Appending the title here simplifies code in the callers. It also causes
 	 * a crash when generating spoilers (we don't need titles for them anwyay)*/
@@ -116,10 +116,7 @@ void lore_description(textblock *tb, const struct monster_race *race,
 	if (!spoilers)
 		lore_append_kills(tb, race, lore, known_flags);
 
-	/* If we are generating spoilers, we want to output as UTF-8. As of 3.5,
-	 * the values in race->name and race->text remain unconverted from the
-	 * UTF-8 edit files. */
-	lore_append_flavor(tb, race, spoilers);
+	lore_append_flavor(tb, race);
 
 	/* Describe the monster type, speed, life, and armor */
 	lore_append_movement(tb, race, lore, known_flags);

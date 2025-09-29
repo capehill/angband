@@ -43,7 +43,8 @@ struct source source_monster(int who)
 
 struct source source_player(void)
 {
-	struct source src = { SRC_PLAYER };
+	struct source src;
+	src.what = SRC_PLAYER;
 	return src;
 }
 
@@ -52,5 +53,13 @@ struct source source_object(struct object *object)
 	struct source src;
 	src.what = SRC_OBJECT;
 	src.which.object = object;
+	return src;
+}
+
+struct source source_chest_trap(struct chest_trap *chest_trap)
+{
+	struct source src;
+	src.what = SRC_CHEST_TRAP;
+	src.which.chest_trap = chest_trap;
 	return src;
 }

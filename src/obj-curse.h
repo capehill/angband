@@ -27,9 +27,12 @@ int lookup_curse(const char *name);
 void copy_curses(struct object *obj, int *source);
 bool curses_are_equal(const struct object *obj1, const struct object *obj2);
 bool append_object_curse(struct object *obj, int pick, int power);
+bool remove_object_curse(struct object *obj, int pick, bool message);
 void check_artifact_curses(struct artifact *art);
 bool artifact_curse_conflicts(struct artifact *art, int pick);
 bool append_artifact_curse(struct artifact *art, int pick, int power);
 bool do_curse_effect(int i, struct object *obj);
+int16_t modify_weight_for_curse(int i, int16_t weight);
+void apply_curse_attributes(int i, struct object *obj);
 
 #endif /* !INCLUDED_OBJ_CURSE_H */

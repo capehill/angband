@@ -137,7 +137,7 @@ struct file_parser quests_parser = {
 /**
  * Check if the given level is a quest level.
  */
-bool is_quest(int level)
+bool is_quest(struct player *p, int level)
 {
 	size_t i;
 
@@ -145,7 +145,7 @@ bool is_quest(int level)
 	if (!level) return false;
 
 	for (i = 0; i < z_info->quest_max; i++)
-		if (player->quests[i].level == level)
+		if (p->quests[i].level == level)
 			return true;
 
 	return false;
@@ -185,13 +185,13 @@ void player_quests_free(struct player *p)
 /**
  * Creates magical stairs after finishing a quest monster.
  */
-static void build_quest_stairs(struct loc grid)
+static void build_quest_stairs(struct player *p, struct loc grid)
 {
-	struct loc new_grid = player->grid;
+	struct loc new_grid = p->grid;
 
 	/* Stagger around */
 	while (!square_changeable(cave, grid) &&
-		   !square_iswall(cave, grid) &&
+		   square_ispassable(cave, grid) &&
 		   !square_isdoor(cave, grid)) {
 		/* Pick a location */
 		scatter(cave, &new_grid, grid, 1, false);
@@ -210,41 +210,49 @@ static void build_quest_stairs(struct loc grid)
 	square_set_feat(cave, grid, FEAT_MORE);
 
 	/* Update the visuals */
-	player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
+	p->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 }
 
 /**
  * Check if this (now dead) monster is a quest monster, and act appropriately
  */
-bool quest_check(const struct monster *m) {
+bool quest_check(struct player *p, const struct monster *m)
+{
 	int i, total = 0;
-
-	/* Don't bother with non-questors */
-	if (!rf_has(m->race->flags, RF_QUESTOR)) return false;
+	bool completed = false;
 
 	/* Mark quests as complete */
 	for (i = 0; i < z_info->quest_max; i++) {
 		/* Note completed quests */
-		if (player->quests[i].level == m->race->level) {
-			player->quests[i].level = 0;
-			player->quests[i].cur_num++;
+		if (cave->depth == p->quests[i].level &&
+		    m->race == p->quests[i].race) {
+			p->quests[i].cur_num++;
+
+			if (p->quests[i].cur_num == p->quests[i].max_num) {
+				p->quests[i].level = 0;
+				completed = true;
+			}
 		}
 
 		/* Count incomplete quests */
-		if (player->quests[i].level) total++;
+		if (p->quests[i].level) total++;
 	}
 
-	/* Build magical stairs */
-	build_quest_stairs(m->grid);
+	if (completed) {
+		/* Build magical stairs */
+		build_quest_stairs(p, m->grid);
 
-	/* Nothing left, game over... */
-	if (total == 0) {
-		player->total_winner = true;
-		player->upkeep->redraw |= (PR_TITLE);
-		msg("*** CONGRATULATIONS ***");
-		msg("You have won the game!");
-		msg("You may retire (commit suicide) when you are ready.");
+		/* Nothing left, game over... */
+		if (total == 0) {
+			p->total_winner = true;
+			p->upkeep->redraw |= (PR_TITLE);
+			msg("*** CONGRATULATIONS ***");
+			msg("You have won the game!");
+			msg("You may retire (key is shift-q) when you are ready.");
+		}
+
+		return true;
+	} else {
+		return false;
 	}
-
-	return true;
 }

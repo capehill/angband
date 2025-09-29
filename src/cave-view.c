@@ -20,6 +20,7 @@
 #include "cave.h"
 #include "cmds.h"
 #include "init.h"
+#include "game-world.h"
 #include "monster.h"
 #include "player-calcs.h"
 #include "player-timed.h"
@@ -299,10 +300,8 @@ bool los(struct chunk *c, struct loc grid1, struct loc grid2)
  *
  * The "SQUARE_GLOW" flag is used to determine which grids are "permanently 
  * illuminated".  This flag is used by the update_view() function to help 
- * determine which viewable flags may be "seen" by the player.  This flag 
- * is used by the "map_info" function to determine if a grid is only lit by 
- * the player's torch.  This flag has special semantics for wall grids 
- * (see "update_view()").
+ * determine which viewable grids may be "seen" by the player.  This flag
+ * has special semantics for wall grids (see "update_view()").
  *
  * The "SQUARE_VIEW" flag is used to determine which grids are currently in
  * line of sight of the player.  This flag is set by (and used by) the
@@ -339,6 +338,10 @@ bool los(struct chunk *c, struct loc grid1, struct loc grid2)
  * or darkness through a room.  This flag is used by the "monster flow code".
  * This flag must always be cleared by any code which sets it.
  *
+ * The "SQUARE_CLOSE_PLAYER" flag is set for squares that are seen and either
+ * in the player's light radius or the UNLIGHT detection radius.  It is used
+ * by "map_info()" to select which lighting effects to apply to a square.
+ *
  * The "update_view()" function is an extremely important function.  It is
  * called only when the player moves, significant terrain changes, or the
  * player's blindness or torch radius changes.  Note that when the player
@@ -349,7 +352,8 @@ bool los(struct chunk *c, struct loc grid1, struct loc grid2)
  * on every cave grid in the player's field of view.  It also checks the torch
  * radius of the player, and sets the "SQUARE_SEEN" flag for every grid which
  * is in the "field of view" of the player and which is also "illuminated",
- * either by the players torch (if any) or by any permanent light source.
+ * either by the player's torch (if any), light from monsters, light from
+ * bright terrain, or by any permanent light source (as marked by SQUARE_GLOW).
  * It could use and help maintain information about multiple light sources,
  * which would be helpful in a multi-player version of Angband.
  *
@@ -380,29 +384,28 @@ bool los(struct chunk *c, struct loc grid1, struct loc grid2)
  * some way.  However, for the player to "see" the grid, as determined by
  * the "SQUARE_SEEN" flag, the player must not be blind, the grid must have
  * the "SQUARE_VIEW" flag set, and if the grid is a "wall" grid, and it is
- * not lit by the player's torch, then it must touch a projectable grid 
- * which has both the "SQUARE_GLOW"
- * and "SQUARE_VIEW" flags set.  This last part about wall grids is induced
- * by the semantics of "SQUARE_GLOW" as applied to wall grids, and checking
- * the technical requirements can be very expensive, especially since the
- * grid may be touching some "illegal" grids.  Luckily, it is more or less
- * correct to restrict the "touching" grids from the eight "possible" grids
- * to the (at most) three grids which are touching the grid, and which are
- * closer to the player than the grid itself, which eliminates more than
- * half of the work, including all of the potentially "illegal" grids, if
- * at most one of the three grids is a "diagonal" grid.  In addition, in
- * almost every situation, it is possible to ignore the "SQUARE_VIEW" flag
- * on these three "touching" grids, for a variety of technical reasons.
- * Finally, note that in most situations, it is only necessary to check
- * a single "touching" grid, in fact, the grid which is strictly closest
- * to the player of all the touching grids, and in fact, it is normally
- * only necessary to check the "SQUARE_GLOW" flag of that grid, again, for
- * various technical reasons.  However, one of the situations which does
- * not work with this last reduction is the very common one in which the
+ * not lit by some other light source, then it must touch a projectable grid
+ * which has both the "SQUARE_GLOW" and "SQUARE_VIEW" flags set.  This last
+ * part about wall grids is induced by the semantics of "SQUARE_GLOW" as
+ * applied to wall grids, and checking the technical requirements can be very
+ * expensive, especially since the grid may be touching some "illegal" grids.
+ * Luckily, it is more or less correct to restrict the "touching" grids from
+ * the eight "possible" grids to the (at most) three grids which are touching
+ * the grid, and which are closer to the player than the grid itself, which
+ * eliminates more than half of the work, including all of the potentially
+ * "illegal" grids, if at most one of the three grids is a "diagonal" grid.
+ * In addition, in almost every situation, it is possible to ignore the
+ * "SQUARE_VIEW" flag on these three "touching" grids, for a variety of
+ * technical reasons.  Finally, note that in most situations, it is only
+ * necessary to check a single "touching" grid, in fact, the grid which is
+ * strictly closest to the player of all the touching grids, and in fact,
+ * it is normally only necessary to check the "SQUARE_GLOW" flag of that grid,
+ * again, for various technical reasons.  However, one of the situations which
+ * does not work with this last reduction is the very common one in which the
  * player approaches an illuminated room from a dark hallway, in which the
  * two wall grids which form the "entrance" to the room would not be marked
  * as "SQUARE_SEEN", since of the three "touching" grids nearer to the player
- * than each wall grid, only the farthest of these grids is itself marked
+ * than each wall grid, only the farthest of those grids is itself marked
  * "SQUARE_GLOW".
  *
  *
@@ -437,9 +440,209 @@ static void mark_wasseen(struct chunk *c)
 		for (x = 0; x < c->width; x++) {
 			struct loc grid = loc(x, y);
 			if (square_isseen(c, grid))
-				sqinfo_on(square(c, grid).info, SQUARE_WASSEEN);
-			sqinfo_off(square(c, grid).info, SQUARE_VIEW);
-			sqinfo_off(square(c, grid).info, SQUARE_SEEN);
+				sqinfo_on(square(c, grid)->info, SQUARE_WASSEEN);
+			sqinfo_off(square(c, grid)->info, SQUARE_VIEW);
+			sqinfo_off(square(c, grid)->info, SQUARE_SEEN);
+			sqinfo_off(square(c, grid)->info, SQUARE_CLOSE_PLAYER);
+		}
+	}
+}
+
+/**
+ * Help glow_can_light_wall(), add_light() and calc_lighting():  check for
+ * whether a wall can appear to be lit, as viewed by the player, by a light
+ * source regardless of line-of-sight details.
+ * \param c Is the chunk in which to do the evaluation.
+ * \param p Is the player to test.
+ * \param sgrid Is the location of the light source.
+ * \param wgrid Is the location of the wall.
+ * \return Return true if the wall will appear to be lit for the player.
+ * Otherwise, return false.
+ */
+static bool source_can_light_wall(struct chunk *c, struct player *p,
+		struct loc sgrid, struct loc wgrid)
+{
+	struct loc sn = next_grid(wgrid, motion_dir(wgrid, sgrid)), pn, cn;
+
+	/*
+	 * If the light source is coincident with the wall, all faces will be
+	 * lit, and the player can potentially see it if it's within range and
+	 * the line of sight isn't broken.
+	 */
+	if (loc_eq(sn, wgrid)) return true;
+
+	/*
+	 * If the player is coincident with the wall, all faces of the wall are
+	 * visible to the player and the player can see whichever of those is
+	 * lit by the light source.
+	 */
+	pn = next_grid(wgrid, motion_dir(wgrid, p->grid));
+	if (loc_eq(pn, wgrid)) return true;
+
+	/*
+	 * For the lit face of the wall to be visible to the player, the
+	 * view directions from the wall to the player and the wall to the
+	 * light source must share at least one component.
+	 */
+	if (sn.x == pn.x) {
+		/*
+		 * If the view directions share both components, the lit face
+		 * will be visible to the player if in range and the line of
+		 * sight isn't broken.
+		 */
+		if (sn.y == pn.y) return true;
+		cn.x = sn.x;
+		cn.y = wgrid.y;
+	} else if (sn.y == pn.y) {
+		cn.x = wgrid.x;
+		cn.y = sn.y;
+	} else {
+		/*
+		 * If the view directions don't share a component, the lit face
+		 * is not visible to the player.
+		 */
+		return false;
+	}
+
+	/*
+	 * When only one component of the view directions is shared, take the
+	 * common component and test whether there's a wall there that would
+	 * block the player's view of the lit face.  That prevents instances
+	 * like this:
+	 *  p
+	 * ###1#
+	 *  @
+	 * where both the light-emitting monster, 'p', and the player, '@',
+	 * have line of sight to the wall, '1', but the face of '1' that would
+	 * be lit is blocked by the wall immediately to the left of '1'.
+	 */
+	return square_allowslos(c, cn);
+}
+
+/**
+ * Help calc_lighting():  check for whether a wall marked with SQUARE_GLOW
+ * can appear to be lit, as viewed by the player regardless of line-of-sight
+ * details.
+ * \param c Is the chunk in which to do the evaluation.
+ * \param p Is the player to test.
+ * \param wgrid Is the location of the wall.
+ * \return Return true if the wall will appear to be lit for the player.
+ * Otherwise, return false.
+ */
+static bool glow_can_light_wall(struct chunk *c, struct player *p,
+		struct loc wgrid)
+{
+	struct loc pn = next_grid(wgrid, motion_dir(wgrid, p->grid)), chk;
+
+	/*
+	 * If the player is in the wall grid, the player will see the lit face.
+	 */
+	if (loc_eq(pn, wgrid)) return true;
+
+	/*
+	 * If the grid in the direction of the player is not a wall and is
+	 * glowing, it'll illuminate the wall.
+	 */
+	if (square_allowslos(c, pn) && square_isglow(c, pn)) return true;
+
+	/*
+	 * Try the two neighboring squares adjacent to the one in the direction
+	 * of the player to see if one or more will illuminate the wall by
+	 * glowing.  Those could be out of bounds if the direction isn't
+	 * diagonal.
+	 */
+	if (pn.x != wgrid.x) {
+		if (pn.y != wgrid.y) {
+			chk.x = pn.x;
+			chk.y = wgrid.y;
+			if (square_allowslos(c, chk) &&
+					square_isglow(c, chk) &&
+					source_can_light_wall(c, p, chk, wgrid))
+				return true;
+			chk.x = wgrid.x;
+			chk.y = pn.y;
+			if (square_allowslos(c, chk) &&
+					square_isglow(c, chk) &&
+					source_can_light_wall(c, p, chk, wgrid))
+				return true;
+		} else {
+			chk.x = pn.x;
+			chk.y = wgrid.y - 1;
+			if (square_in_bounds(c, chk) &&
+					square_allowslos(c, chk) &&
+					square_isglow(c, chk) &&
+					source_can_light_wall(c, p, chk, wgrid))
+				return true;
+			chk.y = wgrid.y + 1;
+			if (square_in_bounds(c, chk) &&
+					square_allowslos(c, chk) &&
+					square_isglow(c, chk) &&
+					source_can_light_wall(c, p, chk, wgrid))
+				return true;
+		}
+	} else {
+		chk.y = pn.y;
+		chk.x = wgrid.x - 1;
+		if (square_in_bounds(c, chk) && square_allowslos(c, chk) &&
+				square_isglow(c, chk) &&
+				source_can_light_wall(c, p, chk, wgrid))
+			return true;
+		chk.x = wgrid.x + 1;
+		if (square_in_bounds(c, chk) && square_allowslos(c, chk) &&
+				square_isglow(c, chk) &&
+				source_can_light_wall(c, p, chk, wgrid))
+			return true;
+	}
+
+	/*
+	 * The adjacent squares towards the player won't light the wall by
+	 * by glowing.
+	 */
+	return false;
+}
+
+/**
+ * Help calc_lighting():  add in the effect of a light source.
+ * \param c Is the chunk to use.
+ * \param p Is the player to use.
+ * \param sgrid Is the location of the light source.
+ * \param radius Is the radius, in grids, of the light source.
+ * \param inten Is the intensity of the light source.
+ * This is a brute force approach.  Some computation probably could be saved by
+ * propagating the light out from the source and terminating paths when they
+ * reach a wall.
+ */
+static void add_light(struct chunk *c, struct player *p, struct loc sgrid,
+		int radius, int inten)
+{
+	int y;
+
+	for (y = -radius; y <= radius; y++) {
+		int x;
+
+		for (x = -radius; x <= radius; x++) {
+			struct loc grid = loc_sum(sgrid, loc(x, y));
+			int dist = distance(sgrid, grid);
+			if (!square_in_bounds(c, grid)) continue;
+			if (dist > radius) continue;
+			/* Don't propagate the light through walls. */
+			if (!los(c, sgrid, grid)) continue;
+			/*
+			 * Only light a wall if the face lit is possibly visible
+			 * to the player.
+			 */
+			if (!square_allowslos(c, grid) && !source_can_light_wall(c,
+					p, sgrid, grid)) continue;
+			/* Adjust the light level */
+			if (inten > 0) {
+				/* Light getting less further away */
+				c->squares[grid.y][grid.x].light +=
+					inten - dist;
+			} else {
+				/* Light getting greater further away */
+				c->squares[grid.y][grid.x].light +=
+					inten + dist;
+			}
 		}
 	}
 }
@@ -447,16 +650,24 @@ static void mark_wasseen(struct chunk *c)
 /**
  * Calculate light level for every grid in view - stolen from Sil
  */
-static void calc_light(struct chunk *c, struct player *p)
+static void calc_lighting(struct chunk *c, struct player *p)
 {
 	int dir, k, x, y;
-	int player_rad = MIN(0, ABS(p->state.cur_light) - 1);
+	int light = p->state.cur_light, radius = ABS(light) - 1;
+	int old_light = square_light(c, p->grid);
 
 	/* Starting values based on permanent light */
 	for (y = 0; y < c->height; y++) {
 		for (x = 0; x < c->width; x++) {
 			struct loc grid = loc(x, y);
-			c->squares[y][x].light = square_isglow(c, grid) ? 1 : 0;
+
+			if (square_isglow(c, grid) &&
+					(square_allowslos(c, grid) ||
+					glow_can_light_wall(c, p, grid))) {
+				c->squares[y][x].light = 1;
+			} else {
+				c->squares[y][x].light = 0;
+			}
 
 			/* Squares with bright terrain have intensity 2 */
 			if (square_isbright(c, grid)) {
@@ -464,6 +675,15 @@ static void calc_light(struct chunk *c, struct player *p)
 				for (dir = 0; dir < 8; dir++) {
 					struct loc adj_grid = loc_sum(grid, ddgrid_ddd[dir]);
 					if (!square_in_bounds(c, adj_grid)) continue;
+					/*
+					 * Only brighten a wall if the player
+					 * is in position to view the face
+					 * that's lit up.
+					 */
+					if (!square_allowslos(c, adj_grid) &&
+							!source_can_light_wall(
+							c, p, grid, adj_grid))
+							continue;
 					c->squares[adj_grid.y][adj_grid.x].light += 1;
 				}
 			}
@@ -471,57 +691,36 @@ static void calc_light(struct chunk *c, struct player *p)
 	}
 
 	/* Light around the player */
-	for (y = -player_rad; y <= player_rad; y++) {
-		for (x = -player_rad; x <= player_rad; x++) {
-			/* Get valid grids within the player's light effect radius */
-			struct loc grid = loc_sum(p->grid, loc(x, y));
-			int dist = distance(p->grid, grid);
-			if (!square_in_bounds(c, grid)) continue;
-			if (dist > player_rad) continue;
-
-			/* Add to the light level */
-			c->squares[grid.y][grid.x].light += ABS(p->state.cur_light) - dist;
-		}
-	}
+	add_light(c, p, p->grid, radius, light);
 
 	/* Scan monster list and add monster light or darkness */
 	for (k = 1; k < cave_monster_max(c); k++) {
 		/* Check the k'th monster */
 		struct monster *mon = cave_monster(c, k);
-		int light, mon_rad;
 
 		/* Skip dead monsters */
 		if (!mon->race) continue;
 
+		/* Skip if the monster is hidden */
+		if (monster_is_camouflaged(mon)) continue;
+
 		/* Get light info for this monster */
 		light = mon->race->light;
-		mon_rad = ABS(light) - 1;
+		radius = ABS(light) - 1;
 
 		/* Skip monsters not affecting light */
-		if (!mon_rad) continue;
+		if (!light) continue;
 
-		/* Light or darken around the monster */
-		for (y = -mon_rad; y <= mon_rad; y++) {
-			for (x = -mon_rad; x <= mon_rad; x++) {
-				/* Get valid grids within the monster's light effect radius */
-				struct loc grid = loc_sum(mon->grid, loc(x, y));
-				int dist = distance(mon->grid, grid);
-				if (!square_in_bounds(c, grid)) continue;
-				if (dist > mon_rad) continue;
+		/* Skip if the player can't see it. */
+		if (distance(p->grid, mon->grid) - radius > z_info->max_sight)
+			continue;
 
-				/* Only set it if the player can see it */
-				if (distance(p->grid, grid) > z_info->max_sight) continue;
+		add_light(c, p, mon->grid, radius, light);
+	}
 
-				/* Adjust the light level */
-				if (light > 0) {
-					/* Light getting less further away */
-					c->squares[grid.y][grid.x].light += light - dist;
-				} else {
-					/* Light getting greater further away */
-					c->squares[grid.y][grid.x].light += light + dist;
-				}
-			}
-		}
+	/* Update light level indicator */
+	if (square_light(c, p->grid) != old_light) {
+		p->upkeep->redraw |= PR_LIGHT;
 	}
 }
 
@@ -538,21 +737,23 @@ static void become_viewable(struct chunk *c, struct loc grid, struct player *p,
 	if (square_isview(c, grid)) return;
 
 	/* Add the grid to the view, make seen if it's close enough to the player */
-	sqinfo_on(square(c, grid).info, SQUARE_VIEW);
-	if (close)
-		sqinfo_on(square(c, grid).info, SQUARE_SEEN);
+	sqinfo_on(square(c, grid)->info, SQUARE_VIEW);
+	if (close) {
+		sqinfo_on(square(c, grid)->info, SQUARE_SEEN);
+		sqinfo_on(square(c, grid)->info, SQUARE_CLOSE_PLAYER);
+	}
 
 	/* Mark lit grids, and walls near to them, as seen */
 	if (square_islit(c, grid)) {
-		if (square_iswall(c, grid)) {
+		if (!square_allowslos(c, grid)) {
 			/* For walls, check for a lit grid closer to the player */
 			int xc = (x < p->grid.x) ? (x + 1) : (x > p->grid.x) ? (x - 1) : x;
 			int yc = (y < p->grid.y) ? (y + 1) : (y > p->grid.y) ? (y - 1) : y;
 			if (square_islit(c, loc(xc, yc))) {
-				sqinfo_on(square(c, grid).info, SQUARE_SEEN);
+				sqinfo_on(square(c, grid)->info, SQUARE_SEEN);
 			}
 		} else {
-			sqinfo_on(square(c, grid).info, SQUARE_SEEN);
+			sqinfo_on(square(c, grid)->info, SQUARE_SEEN);
 		}
 	}
 }
@@ -567,10 +768,15 @@ static void update_view_one(struct chunk *c, struct loc grid, struct player *p)
 	int xc = x, yc = y;
 
 	int d = distance(grid, p->grid);
-	bool close = d < ABS(p->state.cur_light);
+	bool close = d < p->state.cur_light;
 
 	/* Too far away */
 	if (d > z_info->max_sight) return;
+
+	/* UNLIGHT players have a special radius of view */
+	if (player_has(p, PF_UNLIGHT) && (p->state.cur_light <= 1)) {
+		close = d < (2 + p->lev / 6 - p->state.cur_light);
+	}
 
 	/* Special case for wall lighting. If we are a wall and the square in
 	 * the direction of the player is in LOS, we are in LOS. This avoids
@@ -581,7 +787,7 @@ static void update_view_one(struct chunk *c, struct loc grid, struct player *p)
 	 * where the wall cell marked '1' would not be lit because the LOS
 	 * algorithm runs into the adjacent wall cell.
 	 */
-	if (square_iswall(c, grid)) {
+	if (!square_allowslos(c, grid)) {
 		int dx = x - p->grid.x;
 		int dy = y - p->grid.y;
 		int ax = ABS(dx);
@@ -596,7 +802,7 @@ static void update_view_one(struct chunk *c, struct loc grid, struct player *p)
 		 * wall. If we don't do this, double-thickness walls will have
 		 * both sides visible.
 		 */
-		if (square_iswall(c, loc(xc, yc))) {
+		if (!square_allowslos(c, loc(xc, yc))) {
 			xc = x;
 			yc = y;
 		}
@@ -604,14 +810,14 @@ static void update_view_one(struct chunk *c, struct loc grid, struct player *p)
 		/* Check if we got here via the 'knight's move' rule and, if so,
 		 * don't steal LOS. */
 		if (ax == 2 && ay == 1) {
-			if (!square_iswall(c, loc(x - sx, y))
-				&& square_iswall(c, loc(x - sx, y - sy))) {
+			if (square_allowslos(c, loc(x - sx, y))
+				&& !square_allowslos(c, loc(x - sx, y - sy))) {
 				xc = x;
 				yc = y;
 			}
 		} else if (ax == 1 && ay == 2) {
-			if (!square_iswall(c, loc(x, y - sy))
-				&& square_iswall(c, loc(x - sx, y - sy))) {
+			if (square_allowslos(c, loc(x, y - sy))
+				&& !square_allowslos(c, loc(x - sx, y - sy))) {
 				xc = x;
 				yc = y;
 			}
@@ -625,11 +831,12 @@ static void update_view_one(struct chunk *c, struct loc grid, struct player *p)
 /**
  * Update view for a single square
  */
-static void update_one(struct chunk *c, struct loc grid, int blind)
+static void update_one(struct chunk *c, struct loc grid, struct player *p)
 {
 	/* Remove view if blind, check visible squares for traps */
-	if (blind) {
-		sqinfo_off(square(c, grid).info, SQUARE_SEEN);
+	if (p->timed[TMD_BLIND]) {
+		sqinfo_off(square(c, grid)->info, SQUARE_SEEN);
+		sqinfo_off(square(c, grid)->info, SQUARE_CLOSE_PLAYER);
 	} else if (square_isseen(c, grid)) {
 		square_reveal_trap(c, grid, false, true);
 	}
@@ -638,12 +845,12 @@ static void update_one(struct chunk *c, struct loc grid, int blind)
 	if (square_isseen(c, grid) && !square_wasseen(c, grid)) {
 		if (square_isfeel(c, grid)) {
 			c->feeling_squares++;
-			sqinfo_off(square(c, grid).info, SQUARE_FEEL);
+			sqinfo_off(square(c, grid)->info, SQUARE_FEEL);
 			/* Don't display feeling if it will display for the new level */
 			if ((c->feeling_squares == z_info->feeling_need) &&
-				!player->upkeep->only_partial) {
+				!p->upkeep->only_partial) {
 				display_feeling(true);
-				player->upkeep->redraw |= PR_FEELING;
+				p->upkeep->redraw |= PR_FEELING;
 			}
 		}
 
@@ -655,7 +862,7 @@ static void update_one(struct chunk *c, struct loc grid, int blind)
 	if (!square_isseen(c, grid) && square_wasseen(c, grid))
 		square_light_spot(c, grid);
 
-	sqinfo_off(square(c, grid).info, SQUARE_WASSEEN);
+	sqinfo_off(square(c, grid)->info, SQUARE_WASSEEN);
 }
 
 /**
@@ -668,14 +875,26 @@ void update_view(struct chunk *c, struct player *p)
 	/* Record the current view */
 	mark_wasseen(c);
 
-	/* Assume we can view the player grid */
-	sqinfo_on(square(c, p->grid).info, SQUARE_VIEW);
-	if (p->state.cur_light > 0 || square_isglow(c, p->grid) ||
-		((p->state.cur_light < 0) && player_has(p, PF_UNLIGHT)))
-		sqinfo_on(square(c, p->grid).info, SQUARE_SEEN);
-
 	/* Calculate light levels */
-	calc_light(c, p);
+	calc_lighting(c, p);
+
+	/* Assume we can view the player grid */
+	sqinfo_on(square(c, p->grid)->info, SQUARE_VIEW);
+	if (p->state.cur_light > 0 || square_islit(c, p->grid) ||
+		player_has(p, PF_UNLIGHT)) {
+		sqinfo_on(square(c, p->grid)->info, SQUARE_SEEN);
+		sqinfo_on(square(c, p->grid)->info, SQUARE_CLOSE_PLAYER);
+	}
+	/*
+	 * If the player is blind and in terrain that was remembered to be
+	 * impassable, forget the remembered terrain.  This will have to be
+	 * modified in variants that have timed effects which allow a player
+	 * to move through impassable terrain.
+	 */
+	if (p->timed[TMD_BLIND] && square_isknown(c, p->grid)
+			&& !square_ispassable(p->cave, p->grid)) {
+		square_forget(c, p->grid);
+	}
 
 	/* Squares we have LOS to get marked as in the view, and perhaps seen */
 	for (y = 0; y < c->height; y++)
@@ -685,14 +904,14 @@ void update_view(struct chunk *c, struct player *p)
 	/* Update each grid */
 	for (y = 0; y < c->height; y++)
 		for (x = 0; x < c->width; x++)
-			update_one(c, loc(x, y), p->timed[TMD_BLIND]);
+			update_one(c, loc(x, y), p);
 }
 
 
 /**
  * Returns true if the player's grid is dark
  */
-bool no_light(void)
+bool no_light(const struct player *p)
 {
-	return (!square_isseen(cave, player->grid));
+	return (!square_isseen(cave, p->grid));
 }

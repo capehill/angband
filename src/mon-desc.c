@@ -79,10 +79,6 @@ void get_mon_name(char *buf, size_t buflen,
  *
  * Reflexives are acquired by requesting Objective plus Possessive.
  *
- * Note that the "possessive" for certain unique monsters will look
- * really silly, as in "Morgoth, King of Darkness's".  We should
- * perhaps add a flag to "remove" any "descriptives" in the name.
- *
  * Note that "offscreen" monsters will get a special "(offscreen)"
  * notation in their name if they are visible but offscreen.  This
  * may look silly with possessives, as in "the rat's (offscreen)".
@@ -98,6 +94,8 @@ void get_mon_name(char *buf, size_t buflen,
  *   0x40 --> Assume the monster is hidden
  *   0x80 --> Assume the monster is visible
  *  0x100 --> Capitalise monster name
+ *  0x200 --> Add a comma if the name includes an unterminated phrase,
+ *            "Wormtongue, Agent of Saruman" is an example
  *
  * Useful Modes:
  *   0x00 --> Full nominative name ("the kobold") or "it"
@@ -178,10 +176,25 @@ void monster_desc(char *desc, size_t max, const struct monster *mon, int mode)
 		else
 			my_strcpy(desc, "itself", max);
 	} else {
+		const char *comma_pos;
+
 		/* Unique, indefinite or definite */
-		if (rf_has(mon->race->flags, RF_UNIQUE)) {
+		if (monster_is_shape_unique(mon)) {
 			/* Start with the name (thus nominative and objective) */
-			my_strcpy(desc, mon->race->name, max);
+			/*
+			 * Strip off descriptive phrase if a possessive will be
+			 * added.
+			 */
+			if ((mode & MDESC_POSS)
+					&& rf_has(mon->race->flags, RF_NAME_COMMA)
+					&& (comma_pos = strchr(mon->race->name, ','))
+					&& comma_pos - mon->race->name < 1024) {
+				strnfmt(desc, max, "%.*s",
+					(int) (comma_pos - mon->race->name),
+					mon->race->name);
+			} else {
+				my_strcpy(desc, mon->race->name, max);
+			}
 		} else {
 			if (mode & MDESC_IND_VIS) {
 				/* XXX Check plurality for "some" */
@@ -192,7 +205,25 @@ void monster_desc(char *desc, size_t max, const struct monster *mon, int mode)
 				my_strcpy(desc, "the ", max);
 			}
 
-			my_strcat(desc, mon->race->name, max);
+			/*
+			 * As with uniques, strip off phrase if a possessive
+			 * will be added.
+			 */
+			if ((mode & MDESC_POSS)
+					&& rf_has(mon->race->flags, RF_NAME_COMMA)
+					&& (comma_pos = strchr(mon->race->name, ','))
+					&& comma_pos - mon->race->name < 1024) {
+				my_strcat(desc, format("%.*s",
+					(int) (comma_pos - mon->race->name),
+					mon->race->name), max);
+			} else {
+				my_strcat(desc, mon->race->name, max);
+			}
+		}
+
+		if ((mode & MDESC_COMMA)
+				&& rf_has(mon->race->flags, RF_NAME_COMMA)) {
+			my_strcat(desc, ",", max);
 		}
 
 		/* Handle the possessive */

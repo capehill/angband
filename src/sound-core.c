@@ -20,12 +20,16 @@
 #include "sound.h"
 #include "main.h"
 #include "ui-prefs.h"
-#ifdef SOUND_SDL
+#if defined(SOUND_SDL) || defined(SOUND_SDL2)
 #include "snd-sdl.h"
 #endif
 
-#if (defined(WINDOWS) && !defined(USE_SDL))
+#if (!defined(WIN32_CONSOLE_MODE) && defined(WINDOWS) && defined(SOUND) && !defined(SOUND_SDL) && !defined(SOUND_SDL2))
 #include "snd-win.h"
+#endif
+
+#if defined(MACH_O_CARBON) && defined(SOUND) && !defined(SOUND_SDL) && !defined(SOUND_SDL2)
+#include "cocoa/snd-cocoa.h"
 #endif
 
 #define MAX_SOUNDS_PER_MESSAGE	16
@@ -39,8 +43,8 @@ struct sound_module
 
 struct msg_snd_data
 {
-	u16b num_sounds;
-	u16b sound_ids[MAX_SOUNDS_PER_MESSAGE];
+	uint16_t num_sounds;
+	uint16_t sound_ids[MAX_SOUNDS_PER_MESSAGE];
 };
 
 /*
@@ -55,13 +59,15 @@ static struct msg_snd_data message_sounds[MSG_MAX];
  */
 static const struct sound_module sound_modules[] =
 {
-#ifdef SOUND_SDL
+#if defined(SOUND_SDL) || defined(SOUND_SDL2)
 	{ "sdl", "SDL_mixer sound module", init_sound_sdl },
-#endif /* SOUND_SDL */
-#if (defined(WINDOWS) && !defined(USE_SDL))
+#endif /* SOUND_SDL || SOUND_SDL2 */
+#if (!defined(WIN32_CONSOLE_MODE) && defined(WINDOWS) && defined(SOUND) && !defined(SOUND_SDL) && !defined(SOUND_SDL2))
 	{ "win", "Windows sound module", init_sound_win },
 #endif
-
+#if (defined(MACH_O_CARBON) && defined(SOUND) && !defined(SOUND_SDL) && !defined(SOUND_SDL2))
+	{ "cocoa", "Cocoa sound module", init_sound_cocoa },
+#endif
 	{ "", "", NULL },
 };
 
@@ -70,10 +76,12 @@ static const struct sound_module sound_modules[] =
  * entries - each representing a sound that needs to be loaded by calling
  * load_sound_hook() for each entry.
  */
-static u16b next_sound_id;
+static uint16_t next_sound_id;
 static struct sound_data *sounds;
 
+#ifdef SOUND
 #define SOUND_DATA_ARRAY_INC	10
+#endif
 
 /* These are the hooks installed by the platform sound module */
 static struct sound_hooks hooks;
@@ -84,6 +92,7 @@ static struct sound_hooks hooks;
  */
 static bool preload_sounds = false;
 
+#ifdef SOUND
 static struct sound_data *grow_sound_list(void)
 {
 	int new_size;
@@ -104,6 +113,7 @@ static struct sound_data *grow_sound_list(void)
 
 	return sounds;
 }
+#endif
 
 /**
  * Iterate through all the sound types supporting by the platform's sound
@@ -141,8 +151,13 @@ static void load_sound(struct sound_data *sound_data)
 			my_strcpy(filename_buf, path, filename_buf_size);
 			filename_buf = string_append(filename_buf, supported_sound_files[i].extension);
 
-			if (file_exists(filename_buf))
-				load_success = hooks.load_sound_hook(filename_buf, supported_sound_files[i].type, sound_data);
+			if (file_exists(filename_buf)) {
+				sound_data->status = SOUND_ST_ERROR;
+				load_success = hooks.load_sound_hook(
+					filename_buf,
+					supported_sound_files[i].type,
+					sound_data);
+			}
 
 			mem_free(filename_buf);
 			i++;
@@ -153,6 +168,7 @@ static void load_sound(struct sound_data *sound_data)
 	}
 }
 
+#ifdef SOUND
 /**
  * Parse a string of sound names provided by the preferences parser and:
  *  - Allocate a unique 'sound id' to any new sounds and add them to the
@@ -160,16 +176,16 @@ static void load_sound(struct sound_data *sound_data)
  *  - Add each sound assigned to a message type to that message types
  *    'sound map
  */
-void message_sound_define(u16b message_id, const char *sounds_str)
+static void message_sound_define(uint16_t message_id, const char *sounds_str)
 {
 	char *search;
 	char *str;
 	char *cur_token;
 	char *next_token;
 
-	u16b sound_id = 0;
+	uint16_t sound_id = 0;
 
-	u32b hash;
+	uint32_t hash;
 	int i;
 	bool found = false;
 
@@ -178,6 +194,8 @@ void message_sound_define(u16b message_id, const char *sounds_str)
 
 	/* sounds_str is a space separated list of sound names */
 	str = cur_token = string_make(sounds_str);
+
+	if (!cur_token) return;
 
 	search = strchr(cur_token, ' ');
 
@@ -199,7 +217,7 @@ void message_sound_define(u16b message_id, const char *sounds_str)
 
 		while ((!found) && (i < next_sound_id)) {
 			if (sounds[i].hash == hash) {
-				if (!strcmp(sounds[i].name, cur_token)) {
+				if (streq(sounds[i].name, cur_token)) {
 					found = true;
 					sound_id = i;
 				}
@@ -249,8 +267,10 @@ void message_sound_define(u16b message_id, const char *sounds_str)
 
 	string_free(str);
 }
+#endif
 
-enum parser_error parse_prefs_sound(struct parser *p)
+#ifdef SOUND
+static enum parser_error parse_prefs_sound(struct parser *p)
 {
 	int msg_index;
 	const char *type;
@@ -272,6 +292,7 @@ enum parser_error parse_prefs_sound(struct parser *p)
 
 	return PARSE_ERROR_NONE;
 }
+#endif
 
 errr register_sound_pref_parser(struct parser *p)
 {
@@ -303,42 +324,31 @@ static void play_sound(game_event_type type, game_event_data *data, void *user)
 		assert((sound_id >= 0) && (sound_id < next_sound_id));
 
 		/* Ensure the sound is loaded before we play it */
-		if (!sounds[sound_id].loaded)
+		if (sounds[sound_id].status == SOUND_ST_UNKNOWN)
 			load_sound(&sounds[sound_id]);
 
 		/* Only bother playing it if the platform can */
-		if (sounds[sound_id].loaded)
+		if (sounds[sound_id].status == SOUND_ST_LOADED)
 			hooks.play_sound_hook(&sounds[sound_id]);
 	}
 }
 
-/*
- * Shut down the sound system and free resources.
+/**
+ * Set whether all sounds are loaded when the sound preferences are loaded or
+ * a sound is loaded when it is needed.
+ *
+ * \param new_setting will, if true, causes all sounds to be preloaded when
+ * the sound preferences are loaded next.  If false, a sound will be loaded
+ * just before it is first played..
+ * \return the previous setting for whether sounds are preloaded.
  */
-static void close_audio(void)
+bool set_preloaded_sounds(bool new_setting)
 {
-	int i;
+	bool old_setting = preload_sounds;
 
-	if (0 == next_sound_id)
-		return;	/* Never opened */
-
-	/*
-	 * Ask the platforms sound module to free resources for each
-	 * sound
-	 */
-	if (hooks.unload_sound_hook)
-		for (i = 0; i < next_sound_id; i++) {
-			hooks.unload_sound_hook(&sounds[i]);
-			string_free(sounds[i].name);
-		}
-
-	mem_free(sounds);
-
-	/* Close the platform's sound module */
-	if (hooks.close_audio_hook)
-		hooks.close_audio_hook();
+	preload_sounds = new_setting;
+	return old_setting;
 }
-
 
 /**
  * Init the sound "module".
@@ -347,6 +357,9 @@ errr init_sound(const char *soundstr, int argc, char **argv)
 {
 	int i = 0;
 	bool done = false;
+
+	/* Release resources previously allocated if called multiple times. */
+	close_sound();
 
 	/* Try the modules in the order specified by sound_modules[] */
 	while (sound_modules[i].init && !done) {
@@ -363,16 +376,53 @@ errr init_sound(const char *soundstr, int argc, char **argv)
 	/* Open the platform specific sound system */
 	if (!hooks.open_audio_hook)
 		return 1;
-
 	if (!hooks.open_audio_hook())
 		return 1;
 
 	/* Enable sound */
 	event_add_handler(EVENT_SOUND, play_sound, NULL);
-	atexit(close_audio);
 
 	/* Success */
 	return (0);
+}
+
+/**
+ * Shut down the sound "module".
+ */
+void close_sound(void)
+{
+	if (0 == next_sound_id) return;	/* Never opened */
+
+	/*
+	 * Ask the platforms sound module to free resources for each
+	 * sound
+	 */
+	if (hooks.unload_sound_hook) {
+		int i;
+
+		for (i = 0; i < next_sound_id; i++) {
+			hooks.unload_sound_hook(&sounds[i]);
+			string_free(sounds[i].name);
+		}
+	}
+
+	mem_free(sounds);
+	sounds = NULL;
+	next_sound_id = 0;
+
+	/* Close the platform's sound module */
+	if (hooks.close_audio_hook) {
+		hooks.close_audio_hook();
+	}
+}
+
+/**
+ * Return true if there has been a succesful call to init_sound() without
+ * a later call to close_sound().  Otherwse, return false.
+ */
+bool is_sound_inited(void)
+{
+	return next_sound_id != 0;
 }
 
 /**

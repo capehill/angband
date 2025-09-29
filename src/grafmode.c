@@ -33,13 +33,13 @@ static enum parser_error parse_graf_name(struct parser *p) {
 	}
 	mode->pNext = list;
 	mode->grafID = parser_getuint(p, "index");
-	strncpy(mode->menuname, parser_getstr(p, "menuname"), 32);
+	my_strcpy(mode->menuname, parser_getstr(p, "menuname"), 32);
 
 	mode->alphablend = 0;
 	mode->overdrawRow = 0;
 	mode->overdrawMax = 0;
-	strncpy(mode->file, "", 32);
-	strncpy(mode->pref, "none", 32);
+	my_strcpy(mode->file, "", 32);
+	my_strcpy(mode->pref, "none", 32);
 	
 	parser_setpriv(p, mode);
 	return PARSE_ERROR_NONE;
@@ -65,7 +65,7 @@ static enum parser_error parse_graf_size(struct parser *p) {
 	}
 	mode->cell_width = parser_getuint(p, "wid");
 	mode->cell_height = parser_getuint(p, "hgt");
-	strncpy(mode->file, parser_getstr(p, "filename"), 32);
+	my_strcpy(mode->file, parser_getstr(p, "filename"), 32);
 	return PARSE_ERROR_NONE;
 }
 
@@ -74,7 +74,7 @@ static enum parser_error parse_graf_pref(struct parser *p) {
 	if (!mode) {
 		return PARSE_ERROR_INVALID_VALUE;
 	}
-	strncpy(mode->pref, parser_getstr(p, "prefname"), 32);
+	my_strcpy(mode->pref, parser_getstr(p, "prefname"), 32);
 	return PARSE_ERROR_NONE;
 }
 
@@ -140,10 +140,10 @@ static errr finish_parse_grafmode(struct parser *p) {
 	graphics_modes[count].alphablend = 0;
 	graphics_modes[count].overdrawRow = 0;
 	graphics_modes[count].overdrawMax = 0;
-	strncpy(graphics_modes[count].pref, "none", 8);
-	strncpy(graphics_modes[count].path, "", 32);
-	strncpy(graphics_modes[count].file, "", 32);
-	strncpy(graphics_modes[count].menuname, "None", 32);
+	my_strcpy(graphics_modes[count].pref, "none", 8);
+	my_strcpy(graphics_modes[count].path, "", 32);
+	my_strcpy(graphics_modes[count].file, "", 32);
+	my_strcpy(graphics_modes[count].menuname, "None", 32);
 
 	graphics_mode_high_id = max;
 
@@ -179,8 +179,6 @@ bool init_graphics_modes(void) {
 	struct parser *p;
 	errr e = 0;
 
-	int line_no = 0;
-
 	/* Build the filename */
 	path_build(buf, sizeof(buf), ANGBAND_DIR_TILES, "list.txt");
 
@@ -193,8 +191,6 @@ bool init_graphics_modes(void) {
 
 		p = init_parse_grafmode();
 		while (file_getl(f, line, sizeof line)) {
-			line_no++;
-
 			e = parser_parse(p, line);
 			if (e != PARSE_ERROR_NONE) {
 				print_error(buf, p);
@@ -217,7 +213,7 @@ void close_graphics_modes(void) {
 	}
 }
 
-graphics_mode *get_graphics_mode(byte id) {
+graphics_mode *get_graphics_mode(uint8_t id) {
 	graphics_mode *test = graphics_modes;
 	while (test) {
 		if (test->grafID == id) {
@@ -226,4 +222,30 @@ graphics_mode *get_graphics_mode(byte id) {
 		test = test->pNext;
 	}
 	return NULL;
+}
+
+/**
+ * Test for whether an attribute/character pair corresponds to a double-height
+ * tile.
+ * \param a Is the attribute.
+ * \param c Is the character.
+ * Intended for use as struct term's dblh_hook field.
+ */
+int is_dh_tile(int a, wchar_t c)
+{
+	int tileset_row;
+
+	/*
+	 * If it's not a tile (assumes tiles have high-bit set on the
+	 * attribute), graphics aren't enabled, or the graphics mode doesn't
+	 * use double-height tiles, it can't be double-height.
+	 */
+	if (!(a & 0x80) || !current_graphics_mode ||
+			!current_graphics_mode->overdrawRow) {
+		return 0;
+	}
+	/* Test the row for the tile. */
+	tileset_row = a & 0x7f;
+	return tileset_row >= current_graphics_mode->overdrawRow &&
+		tileset_row <= current_graphics_mode->overdrawMax;
 }

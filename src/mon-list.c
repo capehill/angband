@@ -125,8 +125,8 @@ void monster_list_reset(monster_list_t *list)
 	}
 
 	memset(list->entries, 0, list->entries_size * sizeof(monster_list_entry_t));
-	memset(list->total_entries, 0, MONSTER_LIST_SECTION_MAX * sizeof(u16b));
-	memset(list->total_monsters, 0, MONSTER_LIST_SECTION_MAX * sizeof(u16b));
+	memset(list->total_entries, 0, MONSTER_LIST_SECTION_MAX * sizeof(uint16_t));
+	memset(list->total_monsters, 0, MONSTER_LIST_SECTION_MAX * sizeof(uint16_t));
 	list->distinct_entries = 0;
 	list->creation_turn = 0;
 	list->sorted = false;
@@ -245,6 +245,34 @@ int monster_list_standard_compare(const void *a, const void *b)
 }
 
 /**
+ * Comparison function for the monster list: sort by exp
+ */
+int monster_list_compare_exp(const void *a, const void *b)
+{
+	const struct monster_race *ar = ((monster_list_entry_t *)a)->race;
+	const struct monster_race *br = ((monster_list_entry_t *)b)->race;
+
+	long a_exp, b_exp;
+
+	/* If this happens, something might be wrong in the collect function. */
+	if (ar == NULL || br == NULL)
+		return 1;
+
+	/* Experience, integer part */
+	a_exp = (long)ar->mexp * ar->level / player->lev;
+	b_exp = (long)br->mexp * br->level / player->lev;
+
+	/* Evaluate exp gained when killing */
+	if (a_exp > b_exp)
+		return -1;
+
+	if (a_exp < b_exp)
+		return 1;
+
+	return 0;
+}
+
+/**
  * Sort the monster list with the given sort function.
  */
 void monster_list_sort(monster_list_t *list,
@@ -273,7 +301,7 @@ void monster_list_sort(monster_list_t *list,
  * \param entry is the monster list entry to display.
  * \return a color for the monster entry.
  */
-byte monster_list_entry_line_color(const monster_list_entry_t *entry)
+uint8_t monster_list_entry_line_color(const monster_list_entry_t *entry)
 {
 	/* Display uniques in a special colour */
 	if (rf_has(entry->race->flags, RF_UNIQUE))

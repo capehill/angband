@@ -13,6 +13,16 @@
  *  * Redistributions in binary form must reproduce the above copyright notice,
  *    this list of conditions and the following disclaimer in the documentation
  *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+ * THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+ * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "z-virt.h"
@@ -29,14 +39,14 @@ typedef struct _message_t
 	char *str;
 	struct _message_t *newer;
 	struct _message_t *older;
-	u16b type;
-	u16b count;
+	uint16_t type;
+	uint16_t count;
 } message_t;
 
 typedef struct _msgcolor_t
 {
-	u16b type;
-	byte color;
+	uint16_t type;
+	uint8_t color;
 	struct _msgcolor_t *next;
 } msgcolor_t;
 
@@ -45,8 +55,8 @@ typedef struct _msgqueue_t
 	message_t *head;
 	message_t *tail;
 	msgcolor_t *colors;
-	u32b count;
-	u32b max;
+	uint32_t count;
+	uint32_t max;
 } msgqueue_t;
 
 static msgqueue_t *messages = NULL;
@@ -94,7 +104,7 @@ void messages_free(void)
 /**
  * Return the current number of messages stored.
  */
-u16b messages_num(void)
+uint16_t messages_num(void)
 {
 	return messages->count;
 }
@@ -111,13 +121,14 @@ u16b messages_num(void)
  * it, in which case the "count" of the message will be increased instead.
  * This count can be fetched using the message_count() function.
  */
-void message_add(const char *str, u16b type)
+void message_add(const char *str, uint16_t type)
 {
 	message_t *m;
 
 	if (messages->head &&
 	    messages->head->type == type &&
-	    !strcmp(messages->head->str, str)) {
+	    streq(messages->head->str, str) &&
+	    messages->head->count != (uint16_t)-1) {
 		messages->head->count++;
 		return;
 	}
@@ -151,12 +162,14 @@ void message_add(const char *str, u16b type)
 /**
  * Returns the message of age `age`.
  */
-static message_t *message_get(u16b age)
+static message_t *message_get(uint16_t age)
 {
 	message_t *m = messages->head;
 
-	while (m && age--)
+	while (m && age) {
+		age--;
 		m = m->older;
+	}
 
 	return m;
 }
@@ -169,7 +182,7 @@ static message_t *message_get(u16b age)
  * Returns the empty string if the no messages of the age specified are
  * available.
  */
-const char *message_str(u16b age)
+const char *message_str(uint16_t age)
 {
 	message_t *m = message_get(age);
 	return (m ? m->str : "");
@@ -183,7 +196,7 @@ const char *message_str(u16b age)
  * with the message "The orc sets your hair on fire.", then the text will only
  * have one age (age = 0), but will have a count of 5.
  */
-u16b message_count(u16b age)
+uint16_t message_count(uint16_t age)
 {
 	message_t *m = message_get(age);
 	return (m ? m->count : 0);
@@ -195,7 +208,7 @@ u16b message_count(u16b age)
  *
  * The type is one of the MSG_ constants, defined in message.h.
  */
-u16b message_type(u16b age)
+uint16_t message_type(uint16_t age)
 {
 	message_t *m = message_get(age);
 	return (m ? m->type : 0);
@@ -206,7 +219,7 @@ u16b message_type(u16b age)
  * (i.e. age = 0 represents the last memorised message, age = 1 is the one
  * before that, etc).
  */
-byte message_color(u16b age)
+uint8_t message_color(uint16_t age)
 {
 	message_t *m = message_get(age);
 	return (m ? message_type_color(m->type) : COLOUR_WHITE);
@@ -220,7 +233,7 @@ byte message_color(u16b age)
 /**
  * Defines the color `color` for the message type `type`.
  */
-void message_color_define(u16b type, byte color)
+void message_color_define(uint16_t type, uint8_t color)
 {
 	msgcolor_t *mc;
 
@@ -229,30 +242,34 @@ void message_color_define(u16b type, byte color)
 		messages->colors = mem_zalloc(sizeof(msgcolor_t));
 		messages->colors->type = type;
 		messages->colors->color = color;
+		return;
 	}
 
 	mc = messages->colors;
-	while (mc->next)
+	while (1)
 	{
 		if (mc->type == type)
 		{
 			mc->color = color;
+			break;
+		}
+		if (! mc->next) {
+			mc->next = mem_zalloc(sizeof(msgcolor_t));
+			mc->next->type = type;
+			mc->next->color = color;
+			break;
 		}
 		mc = mc->next;
 	}
-
-	mc->next = mem_zalloc(sizeof(msgcolor_t));
-	mc->next->type = type;
-	mc->next->color = color;
 }
 
 /**
  * Returns the colour for the message type `type`.
  */
-byte message_type_color(u16b type)
+uint8_t message_type_color(uint16_t type)
 {
 	msgcolor_t *mc;
-	byte color = COLOUR_WHITE;
+	uint8_t color = COLOUR_WHITE;
 
 	if (messages)
 	{
@@ -283,10 +300,13 @@ int message_lookup_by_name(const char *name)
 		#undef MSG
 	};
 	size_t i;
-	unsigned int number;
+	char *pe;
+	unsigned long number = strtoul(name, &pe, 10);
 
-	if (sscanf(name, "%u", &number) == 1)
-		return (number < MSG_MAX) ? (int)number : -1;
+	if (pe != name) {
+		return (contains_only_spaces(pe) && number < MSG_MAX) ?
+			(int)number : -1;
+	}
 
 	for (i = 0; i < N_ELEMENTS(message_names); i++) {
 		if (my_stricmp(name, message_names[i]) == 0)
@@ -299,7 +319,7 @@ int message_lookup_by_name(const char *name)
 /**
  * Return the MSG_ flag that matches the given sound event name.
  *
- * \param name is the sound name from sound.cfg.
+ * \param name is the sound name from sound.prf.
  * \return The MSG_ flag for the corresponding sound.
  */
 int message_lookup_by_sound_name(const char *name)
@@ -311,7 +331,8 @@ int message_lookup_by_sound_name(const char *name)
 	};
 	size_t i;
 
-	for (i = 0; i < N_ELEMENTS(sound_names); i++) {
+	/* Exclude MSG_MAX since it has NULL for the sound's name. */
+	for (i = 0; i < N_ELEMENTS(sound_names) - 1; i++) {
 		if (my_stricmp(name, sound_names[i]) == 0)
 			return (int)i;
 	}
@@ -323,7 +344,7 @@ int message_lookup_by_sound_name(const char *name)
  * Return the sound name for the given message.
  *
  * \param message is the MSG_ flag to find.
- * \return The sound.cfg sound name.
+ * \return The sound.prf sound name.
  */
 const char *message_sound_name(int message)
 {
@@ -354,33 +375,12 @@ void sound(int type)
 }
 
 /**
- * Clear everything, display a formatted message, ring the system bell.
- *
- * \param fmt Format string
+ * Ring the system bell.
  */
-void bell(const char *fmt, ...)
+void bell(void)
 {
-	va_list vp;
-
-	char buf[1024];
-
-	/* Begin the Varargs Stuff */
-	va_start(vp, fmt);
-
-	/* Format the args, save the length */
-	(void)vstrnfmt(buf, sizeof(buf), fmt, vp);
-
-	/* End the Varargs Stuff */
-	va_end(vp);
-
-	/* Fail if messages not loaded */
-	if (!messages) return;
-
-	/* Add to message log */
-	message_add(buf, MSG_BELL);
-
 	/* Send bell event */
-	event_signal_message(EVENT_BELL, MSG_BELL, buf);
+	event_signal_message(EVENT_BELL, MSG_BELL, NULL);
 }
 
 /**

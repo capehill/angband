@@ -21,6 +21,7 @@
 #include "cave.h"
 #include "effects.h"
 #include "init.h"
+#include "obj-chest.h"
 #include "obj-curse.h"
 #include "obj-gear.h"
 #include "obj-knowledge.h"
@@ -31,14 +32,33 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 
-/** Arrays holding an index of objects to generate for a given level */
-static u32b *obj_total;
-static byte *obj_alloc;
+/**
+ * Stores cumulative probability distribution for objects at each level.  The
+ * value at ilv * (z_info->k_max + 1) + itm is the probablity, out of
+ * obj_alloc[ilv * (z_info->k_max + 1) + z_info->k_max], that an item whose
+ * index is less than itm occurs at level, ilv.
+ */
+static uint32_t *obj_alloc;
 
-static u32b *obj_total_great;
-static byte *obj_alloc_great;
+/**
+ * Has the same layout and interpretation as obj_alloc, but only items that
+ * are good or better contribute to the cumulative probability distribution.
+ */
+static uint32_t *obj_alloc_great;
 
-static s16b alloc_ego_size = 0;
+/**
+ * Store the total allocation value for each tval by level.  The value at
+ * ilv * TV_MAX + tval is the total for tval at the level, ilv.
+ */
+static uint32_t *obj_total_tval;
+
+/**
+ * Same layout and interpretation as obj_total_tval, but only items that are
+ * good or better contribute.
+ */
+static uint32_t *obj_total_tval_great;
+
+static int16_t alloc_ego_size = 0;
 static alloc_entry *alloc_ego_table;
 
 struct money {
@@ -56,35 +76,43 @@ static void alloc_init_objects(void) {
 	int item, lev;
 	int k_max = z_info->k_max;
 
-	/* Allocate and wipe */
-	obj_alloc = mem_zalloc((z_info->max_obj_depth + 1) * k_max * sizeof(byte));
-	obj_alloc_great = mem_zalloc((z_info->max_obj_depth + 1) * k_max * sizeof(byte));
-	obj_total = mem_zalloc((z_info->max_obj_depth + 1) * sizeof(u32b));
-	obj_total_great = mem_zalloc((z_info->max_obj_depth + 1) * sizeof(u32b));
+	/* Allocate */
+	obj_alloc = mem_alloc_alt((z_info->max_obj_depth + 1) * (k_max + 1) * sizeof(*obj_alloc));
+	obj_alloc_great = mem_alloc_alt((z_info->max_obj_depth + 1) * (k_max + 1) * sizeof(*obj_alloc_great));
+	obj_total_tval = mem_zalloc_alt((z_info->max_obj_depth + 1) * TV_MAX * sizeof(*obj_total_tval));
+	obj_total_tval_great = mem_zalloc_alt((z_info->max_obj_depth + 1) * TV_MAX * sizeof(*obj_total_tval));
 
-	/* Init allocation data */
+	/* The cumulative chance starts at zero for each level. */
+	for (lev = 0; lev <= z_info->max_obj_depth; lev++) {
+		obj_alloc[lev * (k_max + 1)] = 0;
+		obj_alloc_great[lev * (k_max + 1)] = 0;
+	}
+
+	/* Fill the cumulative probability tables */
 	for (item = 0; item < k_max; item++) {
 		const struct object_kind *kind = &k_info[item];
 
 		int min = kind->alloc_min;
 		int max = kind->alloc_max;
 
-		/* If an item doesn't have a rarity, move on */
-		if (!kind->alloc_prob) continue;
-
 		/* Go through all the dungeon levels */
 		for (lev = 0; lev <= z_info->max_obj_depth; lev++) {
 			int rarity = kind->alloc_prob;
 
-			/* Save the probability in the standard table */
+			/* Add to the cumulative prob. in the standard table */
 			if ((lev < min) || (lev > max)) rarity = 0;
-			obj_total[lev] += rarity;
-			obj_alloc[(lev * k_max) + item] = rarity;
+			assert(rarity >= 0 && obj_alloc[(lev * (k_max + 1)) + item] <= (uint32_t)-1 - rarity);
+			obj_alloc[(lev * (k_max + 1)) + item + 1] =
+				obj_alloc[(lev * (k_max + 1)) + item] + rarity;
 
-			/* Save the probability in the "great" table if relevant */
+			obj_total_tval[lev * TV_MAX + kind->tval] += rarity;
+
+			/* Add to the cumulative prob. in the "great" table */
 			if (!kind_is_good(kind)) rarity = 0;
-			obj_total_great[lev] += rarity;
-			obj_alloc_great[(lev * k_max) + item] = rarity;
+			obj_alloc_great[(lev * (k_max + 1)) + item + 1] =
+				obj_alloc_great[(lev * (k_max + 1)) + item] + rarity;
+
+			obj_total_tval_great[lev * TV_MAX + kind->tval] += rarity;
 		}
 	}
 }
@@ -188,10 +216,10 @@ static void cleanup_obj_make(void) {
 	}
 	mem_free(money_type);
 	mem_free(alloc_ego_table);
-	mem_free(obj_total_great);
-	mem_free(obj_total);
-	mem_free(obj_alloc_great);
-	mem_free(obj_alloc);
+	mem_free_alt(obj_total_tval_great);
+	mem_free_alt(obj_total_tval);
+	mem_free_alt(obj_alloc_great);
+	mem_free_alt(obj_alloc);
 }
 
 /*** Make an ego item ***/
@@ -280,6 +308,33 @@ static int random_high_resist(struct object *obj, int *resist)
 
 
 /**
+ * Return the index, i, into the cumulative probability table, tbl, such that
+ * tbl[i] <= p < tbl[i + 1].  p must be less than tbl[n - 1] and tbl[0] must be
+ * zero.
+ */
+static int binary_search_probtable(const uint32_t *tbl, int n, uint32_t p)
+{
+	int ilow = 0, ihigh = n;
+
+	assert(tbl[0] == 0 && tbl[n - 1] > p);
+	while (1) {
+		int imid;
+
+		if (ilow == ihigh - 1) {
+			assert(tbl[ilow] <= p && tbl[ihigh] > p);
+			return ilow;
+		}
+		imid = (ilow + ihigh) / 2;
+		if (tbl[imid] <= p) {
+			ilow = imid;
+		} else {
+			ihigh = imid;
+		}
+	}
+}
+
+
+/**
  * Select an ego-item that fits the object's tval and sval.
  */
 static struct ego_item *ego_find_random(struct object *obj, int level)
@@ -353,13 +408,13 @@ void ego_apply_magic(struct object *obj, int level)
 		/* Get a base resist if available, mark it as random */
 		if (random_base_resist(obj, &resist)) {
 			obj->el_info[resist].res_level = 1;
-			obj->el_info[resist].flags |= EL_INFO_RANDOM;
+			obj->el_info[resist].flags |= EL_INFO_RANDOM | EL_INFO_IGNORE;
 		}
 	} else if (kf_has(obj->ego->kind_flags, KF_RAND_HI_RES)) {
 		/* Get a high resist if available, mark it as random */
 		if (random_high_resist(obj, &resist)) {
 			obj->el_info[resist].res_level = 1;
-			obj->el_info[resist].flags |= EL_INFO_RANDOM;
+			obj->el_info[resist].flags |= EL_INFO_RANDOM | EL_INFO_IGNORE;
 		}
 	}
 
@@ -393,9 +448,9 @@ void ego_apply_magic(struct object *obj, int level)
 		obj->el_info[i].flags |= obj->ego->el_info[i].flags;
 	}
 
-	/* Add effect (ego effect will trump object effect, when there are any) */
-	if (obj->ego->effect) {
-		obj->effect = obj->ego->effect;
+	/* Add activation (ego's activation will trump object's, if any). */
+	if (obj->ego->activation) {
+		obj->activation = obj->ego->activation;
 		obj->time = obj->ego->time;
 	}
 
@@ -499,9 +554,10 @@ void copy_artifact_data(struct object *obj, const struct artifact *art)
 	copy_brands(&obj->brands, art->brands);
 	copy_curses(obj, art->curses);
 	for (i = 0; i < ELEM_MAX; i++) {
-		/* Take the larger of artifact and base object resist levels */
-		obj->el_info[i].res_level =
-			MAX(art->el_info[i].res_level, obj->el_info[i].res_level);
+		/* Use any non-zero artifact resist level */
+		if (art->el_info[i].res_level != 0) {
+			obj->el_info[i].res_level = art->el_info[i].res_level;
+		}
 
 		/* Union of flags so as to know when ignoring is notable */
 		obj->el_info[i].flags |= art->el_info[i].flags;
@@ -519,22 +575,20 @@ void copy_artifact_data(struct object *obj, const struct artifact *art)
  * We *prefer* to create the special artifacts in order, but this is
  * normally outweighed by the "rarity" rolls for those artifacts.
  */
-static struct object *make_artifact_special(int level)
+static struct object *make_artifact_special(int level, int tval)
 {
 	int i;
 	struct object *new_obj;
 
 	/* No artifacts, do nothing */
-	if (OPT(player, birth_no_artifacts))
-		return NULL;
+	if (OPT(player, birth_no_artifacts)) return NULL;
 
 	/* No artifacts in the town */
-	if (!player->depth)
-		return NULL;
+	if (!player->depth) return NULL;
 
 	/* Check the special artifacts */
 	for (i = 0; i < z_info->a_max; ++i) {
-		struct artifact *art = &a_info[i];
+		const struct artifact *art = &a_info[i];
 		struct object_kind *kind = lookup_kind(art->tval, art->sval);
 
 		/* Skip "empty" artifacts */
@@ -543,11 +597,14 @@ static struct object *make_artifact_special(int level)
 		/* Make sure the kind was found */
 		if (!kind) continue;
 
+		/* Make sure it's the right tval (if given) */
+		if (tval && (tval != art->tval)) continue;
+
 		/* Skip non-special artifacts */
 		if (!kf_has(kind->kind_flags, KF_INSTA_ART)) continue;
 
 		/* Cannot make an artifact twice */
-		if (art->created) continue;
+		if (is_artifact_created(art)) continue;
 
 		/* Enforce minimum "depth" (loosely) */
 		if (art->alloc_min > player->depth) {
@@ -564,15 +621,6 @@ static struct object *make_artifact_special(int level)
 		/* Artifact "rarity roll" */
 		if (randint1(100) > art->alloc_prob) continue;
 
-		/* Enforce minimum "object" level (loosely) */
-		if (kind->level > level) {
-			/* Get the "out-of-depth factor" */
-			int d = (kind->level - level) * 5;
-
-			/* Roll for out-of-depth creation */
-			if (randint0(d) != 0) continue;
-		}
-
 		/* Assign the template */
 		new_obj = object_new();
 		object_prep(new_obj, kind, art->alloc_min, RANDOMISE);
@@ -584,7 +632,7 @@ static struct object *make_artifact_special(int level)
 		copy_artifact_data(new_obj, art);
 
 		/* Mark the artifact as "created" */
-		art->created = true;
+		mark_artifact_created(art, true);
 
 		/* Success */
 		return new_obj;
@@ -607,22 +655,19 @@ static struct object *make_artifact_special(int level)
 static bool make_artifact(struct object *obj)
 {
 	int i;
-	bool art_ok = true;
 
 	/* Make sure birth no artifacts isn't set */
-	if (OPT(player, birth_no_artifacts)) art_ok = false;
-
-	if (!art_ok) return (false);
+	if (OPT(player, birth_no_artifacts)) return false;
 
 	/* No artifacts in the town */
-	if (!player->depth) return (false);
+	if (!player->depth) return false;
 
 	/* Paranoia -- no "plural" artifacts */
-	if (obj->number != 1) return (false);
+	if (obj->number != 1) return false;
 
 	/* Check the artifact list (skip the "specials") */
 	for (i = 0; !obj->artifact && i < z_info->a_max; i++) {
-		struct artifact *art = &a_info[i];
+		const struct artifact *art = &a_info[i];
 		struct object_kind *kind = lookup_kind(art->tval, art->sval);
 
 		/* Skip "empty" items */
@@ -635,7 +680,7 @@ static bool make_artifact(struct object *obj)
 		if (kf_has(kind->kind_flags, KF_INSTA_ART)) continue;
 
 		/* Cannot make an artifact twice */
-		if (art->created) continue;
+		if (is_artifact_created(art)) continue;
 
 		/* Must have the correct fields */
 		if (art->tval != obj->tval) continue;
@@ -663,7 +708,7 @@ static bool make_artifact(struct object *obj)
 
 	if (obj->artifact) {
 		copy_artifact_data(obj, obj->artifact);
-		obj->artifact->created = true;
+		mark_artifact_created(obj->artifact, true);
 		return true;
 	}
 
@@ -693,7 +738,7 @@ bool make_fake_artifact(struct object *obj, const struct artifact *artifact)
 
 	/* Create the artifact */
 	object_prep(obj, kind, 0, MAXIMISE);
-	obj->artifact = (struct artifact *)artifact;
+	obj->artifact = artifact;
 	copy_artifact_data(obj, artifact);
 
 	return (true);
@@ -717,14 +762,36 @@ static void apply_magic_weapon(struct object *obj, int level, int power)
 		obj->to_h += m_bonus(10, level);
 		obj->to_d += m_bonus(10, level);
 
-		if (tval_is_melee_weapon(obj) || tval_is_ammo(obj)) {
+		if (tval_is_melee_weapon(obj)) {
 			/* Super-charge the damage dice */
-			while ((obj->dd * obj->ds > 0) &&
-					one_in_(10L * obj->dd * obj->ds))
-				obj->dd++;
-
-			/* But not too high */
-			if (obj->dd > 9) obj->dd = 9;
+			while ((obj->dd * obj->ds > 0) && one_in_(4 * obj->dd * obj->ds)) {
+				/* More dice or sides means more likely to get still more */
+				if (randint0(obj->dd + obj->ds) < obj->dd) {
+					int newdice = randint1(2 + obj->dd/obj->ds);
+					while (((obj->dd + 1) * obj->ds <= 40) && newdice) {
+						if (!one_in_(3)) {
+							obj->dd++;
+						}
+						newdice--;
+					}
+				} else {
+					int newsides = randint1(2 + obj->ds/obj->dd);
+					while ((obj->dd * (obj->ds + 1) <= 40) && newsides) {
+						if (!one_in_(3)) {
+							obj->ds++;
+						}
+						newsides--;
+					}
+				}
+			}
+		} else if (tval_is_ammo(obj)) {
+			/* Up to two chances to enhance damage dice. */
+			if (one_in_(6) == 1) {
+				obj->ds++;
+				if (one_in_(10) == 1) {
+					obj->ds++;
+				}
+			}
 		}
 	}
 }
@@ -860,7 +927,7 @@ int apply_magic(struct object *obj, int lev, bool allow_artifacts, bool good,
 				bool great, bool extra_roll)
 {
 	int i;
-	s16b power = 0;
+	int16_t power = 0;
 
 	/* Chance of being `good` and `great` */
 	/* This has changed over the years:
@@ -925,15 +992,8 @@ int apply_magic(struct object *obj, int lev, bool allow_artifacts, bool good,
 				obj->modifiers[OBJ_MOD_SPEED]++;
 		}
 	} else if (tval_is_chest(obj)) {
-		/* Hack -- skip ruined chests */
-		if (obj->kind->level > 0) {
-			/* Hack -- pick a "difficulty" */
-			obj->pval = randint1(obj->kind->level);
-
-			/* Never exceed "difficulty" of 55 to 59 */
-			if (obj->pval > 55)
-				obj->pval = (s16b)(55 + randint0(5));
-		}
+		/* Get a random, level-dependent set of chest traps */
+		obj->pval = pick_chest_traps(obj);
 	}
 
 	/* Apply minima from ego items if necessary */
@@ -946,7 +1006,7 @@ int apply_magic(struct object *obj, int lev, bool allow_artifacts, bool good,
 /*** Generate a random object ***/
 
 /**
- * Hack -- determine if a template is "good".
+ * Determine if a template is "good".
  *
  * Note that this test only applies to the object *kind*, so it is
  * possible to choose a kind which is "good", and then later cause
@@ -1007,31 +1067,40 @@ bool kind_is_good(const struct object_kind *kind)
  */
 static struct object_kind *get_obj_num_by_kind(int level, bool good, int tval)
 {
-	/* This is the base index into obj_alloc for this dlev */
-	size_t ind, item;
-	u32b value;
-	int total = 0;
-	byte *objects = good ? obj_alloc_great : obj_alloc;
+	const uint32_t *objects;
+	uint32_t total, value;
+	int item;
 
-	/* Pick an object */
-	ind = level * z_info->k_max;
-
-	/* Get new total */
-	for (item = 0; item < z_info->k_max; item++)
-		if (objkind_byid(item)->tval == tval)
-			total += objects[ind + item];
+	assert(level >= 0 && level <= z_info->max_obj_depth);
+	assert(tval >= 0 && tval < TV_MAX);
+	if (good) {
+		objects = obj_alloc_great + level * (z_info->k_max + 1);
+		total = obj_total_tval_great[level * TV_MAX + tval];
+	} else {
+		objects = obj_alloc + level * (z_info->k_max + 1);
+		total = obj_total_tval[level * TV_MAX + tval];
+	}
 
 	/* No appropriate items of that tval */
 	if (!total) return NULL;
-	
-	value = randint0(total);
-	
-	for (item = 0; item < z_info->k_max; item++)
-		if (objkind_byid(item)->tval == tval) {
-			if (value < objects[ind + item]) break;
 
-			value -= objects[ind + item];
+	/* Pick an object */
+	value = randint0(total);
+
+	/*
+	 * Find it.  Having a loop to calculate the cumulative probability
+	 * here with only the tval and applying a binary search was slower
+	 * for a test of getting a TV_SWORD from 4.2's available objects.
+	 * So continue to use the O(N) search.
+	 */
+	for (item = 0; item < z_info->k_max; item++) {
+		if (objkind_byid(item)->tval == tval) {
+			uint32_t prob = objects[item + 1] - objects[item];
+
+			if (value < prob) break;
+			value -= prob;
 		}
+	}
 
 	/* Return the item index */
 	return objkind_byid(item);
@@ -1044,9 +1113,9 @@ static struct object_kind *get_obj_num_by_kind(int level, bool good, int tval)
  */
 struct object_kind *get_obj_num(int level, bool good, int tval)
 {
-	/* This is the base index into obj_alloc for this dlev */
-	size_t ind, item;
-	u32b value;
+	const uint32_t *objects;
+	uint32_t value;
+	int item;
 
 	/* Occasional level boost */
 	if ((level > 0) && one_in_(z_info->great_obj))
@@ -1057,31 +1126,20 @@ struct object_kind *get_obj_num(int level, bool good, int tval)
 	level = MIN(level, z_info->max_obj_depth);
 	level = MAX(level, 0);
 
-	/* Pick an object */
-	ind = level * z_info->k_max;
-	
 	if (tval)
 		return get_obj_num_by_kind(level, good, tval);
-	
-	if (!good) {
-		value = randint0(obj_total[level]);
-		for (item = 0; item < z_info->k_max; item++) {
-			/* Found it */
-			if (value < obj_alloc[ind + item]) break;
 
-			/* Decrement */
-			value -= obj_alloc[ind + item];
-		}
-	} else {
-		value = randint0(obj_total_great[level]);
-		for (item = 0; item < z_info->k_max; item++) {
-			/* Found it */
-			if (value < obj_alloc_great[ind + item]) break;
+	objects = (good ? obj_alloc_great : obj_alloc) +
+		level * (z_info->k_max + 1);
 
-			/* Decrement */
-			value -= obj_alloc_great[ind + item];
-		}
+	/* Pick an object. */
+	if (! objects[z_info->k_max]) {
+		return NULL;
 	}
+	value = randint0(objects[z_info->k_max]);
+
+	/* Find it with a binary search. */
+	item = binary_search_probtable(objects, z_info->k_max + 1, value);
 
 	/* Return the item index */
 	return objkind_byid(item);
@@ -1102,15 +1160,15 @@ struct object_kind *get_obj_num(int level, bool good, int tval)
  * \return a pointer to the newly allocated object, or NULL on failure.
  */
 struct object *make_object(struct chunk *c, int lev, bool good, bool great,
-						   bool extra_roll, s32b *value, int tval)
+		bool extra_roll, int32_t *value, int tval)
 {
-	int base;
-	struct object_kind *kind;
+	int base, tries = 3;
+	struct object_kind *kind = NULL;
 	struct object *new_obj;
 
 	/* Try to make a special artifact */
 	if (one_in_(good ? 10 : 1000)) {
-		new_obj = make_artifact_special(lev);
+		new_obj = make_artifact_special(lev, tval);
 		if (new_obj) {
 			if (value) *value = object_value_real(new_obj, 1);
 			return new_obj;
@@ -1123,8 +1181,18 @@ struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 	/* Base level for the object */
 	base = (good ? (lev + 10) : lev);
 
-	/* Try to choose an object kind */
-	kind = get_obj_num(base, good || great, tval);
+	/* Try to choose an object kind; reject most books the player can't read */
+	while (tries) {
+		kind = get_obj_num(base, good || great, tval);
+		if (kind && tval_is_book_k(kind) && !obj_kind_can_browse(kind)) {
+			if (one_in_(5)) break;
+			kind = NULL;
+			tries--;
+			continue;
+		} else {
+			break;
+		}
+	}
 	if (!kind)
 		return NULL;
 
@@ -1134,7 +1202,7 @@ struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 	apply_magic(new_obj, lev, true, good, great, extra_roll);
 
 	/* Generate multiple items */
-	if (kind->gen_mult_prob >= randint1(100))
+	if (!new_obj->artifact && kind->gen_mult_prob >= randint1(100))
 		new_obj->number = randcalc(kind->stack_size, lev, RANDOMISE);
 
 	if (new_obj->number > new_obj->kind->base->max_stack)
@@ -1145,8 +1213,21 @@ struct object *make_object(struct chunk *c, int lev, bool good, bool great,
 		*value = object_value_real(new_obj, new_obj->number);
 
 	/* Boost of 20% per level OOD for uncursed objects */
-	if ((!new_obj->curses) && (kind->alloc_min > c->depth)) {
-		if (value) *value += (kind->alloc_min - c->depth) * (*value / 5);
+	if ((!new_obj->curses) && (kind->alloc_min > c->depth) && value) {
+		int32_t ood = kind->alloc_min - c->depth;
+		int32_t frac = MAX(*value, 0) / 5;
+		int32_t adj;
+
+		if (frac <= INT32_MAX / ood) {
+			adj = ood * frac;
+		} else {
+			adj = INT32_MAX;
+		}
+		if (*value <= INT32_MAX - adj) {
+			*value += adj;
+		} else {
+			*value = INT32_MAX;
+		}
 	}
 
 	return new_obj;
@@ -1167,10 +1248,10 @@ void acquirement(struct loc grid, int level, int num, bool great)
 		if (!nice_obj) continue;
 
 		nice_obj->origin = ORIGIN_ACQUIRE;
-		nice_obj->origin_depth = player->depth;
+		nice_obj->origin_depth = convert_depth_to_origin(player->depth);
 
 		/* Drop the object */
-		drop_near(cave, &nice_obj, 0, grid, true);
+		drop_near(cave, &nice_obj, 0, grid, true, false);
 	}
 }
 
@@ -1210,7 +1291,7 @@ struct object_kind *money_kind(const char *name, int value)
  * \param coin_type the name of the type of money object to make
  * \return a pointer to the newly minted cash (cannot fail)
  */
-struct object *make_gold(int lev, char *coin_type)
+struct object *make_gold(int lev, const char *coin_type)
 {
 	/* This average is 16 at dlev0, 80 at dlev40, 176 at dlev100. */
 	int avg = (16 * lev)/10 + 16;
@@ -1230,7 +1311,7 @@ struct object *make_gold(int lev, char *coin_type)
 		value *= 5;
 	}
 
-	/* Cap gold at max short (or alternatively make pvals s32b) */
+	/* Cap gold at max short (or alternatively make pvals int32_t) */
 	if (value >= SHRT_MAX) {
 		value = SHRT_MAX - randint0(200);
 	}

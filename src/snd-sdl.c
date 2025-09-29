@@ -20,17 +20,19 @@
  */
 #include "angband.h"
 #include "init.h"
+#include "snd-sdl.h"
 #include "sound.h"
 
-#ifdef USE_SDL
+#ifdef SOUND_SDL
 #  include <SDL/SDL.h>
 #  include <SDL/SDL_mixer.h>
-#endif /* USE_SDL */
+#endif /* SOUND_SDL */
 
-#ifdef USE_SDL2
+#ifdef SOUND_SDL2
 #  include <SDL.h>
 #  include <SDL_mixer.h>
-#endif /* USE_SDL2 */
+#  include <SDL_revision.h>
+#endif /* SOUND_SDL2 */
 
 /**
  * Struct representing all data about an event sample
@@ -56,19 +58,19 @@ static const struct sound_file_type supported_sound_files[] = { {".mp3", SDL_MUS
 								{".ogg", SDL_CHUNK},
 								{"", SDL_NULL} };
 
+#ifdef SOUND_SDL2
+static bool print_sdl_details = false;
+#endif
+
 /**
  * Initialise SDL and open the mixer.
  */
 static bool open_audio_sdl(void)
 {
-	int audio_rate;
-	Uint16 audio_format;
-	int audio_channels;
-
 	/* Initialize variables */
-	audio_rate = 22050;
-	audio_format = AUDIO_S16;
-	audio_channels = 2;
+	int audio_rate = 22050;
+	Uint16 audio_format = AUDIO_S16;
+	int audio_channels = 2;
 
 	/* Initialize the SDL library */
 	if (SDL_Init(SDL_INIT_AUDIO) < 0) {
@@ -79,8 +81,39 @@ static bool open_audio_sdl(void)
 	/* Try to open the audio */
 	if (Mix_OpenAudio(audio_rate, audio_format, audio_channels, 4096) < 0) {
 		plog_fmt("SDL: Couldn't open mixer: %s", SDL_GetError());
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
 		return false;
 	}
+
+#ifdef SOUND_SDL2
+	if (print_sdl_details) {
+		const SDL_version *pv;
+		const char *driver_name;
+		SDL_version lv;
+		int freq, n_chan;
+		Uint16 fmt;
+
+		SDL_Log("SDL audio: Runtime SDL library revision: %s",
+			SDL_GetRevision());
+		pv = Mix_Linked_Version();
+		SDL_MIXER_VERSION(&lv);
+		SDL_Log("SDL audio: SDL_mixer library version: "
+			"%u.%u.%u (runtime) %u.%u.%u (compiled)",
+			pv->major, pv->minor, pv->patch,
+			lv.major, lv.minor, lv.patch);
+		driver_name = SDL_GetCurrentAudioDriver();
+		SDL_Log("SDL audio: Current driver: %s",
+			(driver_name) ? driver_name : "Not initialized");
+		if (Mix_QuerySpec(&freq, &fmt, &n_chan)) {
+			SDL_Log("SDL audio: Mixer channels, frequency, and "
+				"format: %d %d %lu", n_chan, freq,
+				(unsigned long)fmt);
+		} else {
+			SDL_Log("SDL audio: Mixer channels, frequency, and"
+				"format: %s", Mix_GetError());
+		}
+	}
+#endif
 
 	/* Success */
 	return true;
@@ -89,9 +122,9 @@ static bool open_audio_sdl(void)
 /**
  * Load a sound from file.
  */
-static bool load_sample_sdl(const char *filename, int file_type, sdl_sample *sample)
+static bool load_sample_sdl(const char *filename, int ft, sdl_sample *sample)
 {
-	switch (file_type) {
+	switch (ft) {
 		case SDL_CHUNK:
 			sample->sample_data.chunk = Mix_LoadWAV(filename);
 
@@ -120,7 +153,7 @@ static bool load_sample_sdl(const char *filename, int file_type, sdl_sample *sam
  * Load a sound and return a pointer to the associated SDL Sound data
  * structure back to the core sound module.
  */
-static bool load_sound_sdl(const char *filename, int file_type, struct sound_data *data)
+static bool load_sound_sdl(const char *filename, int ft, struct sound_data *data)
 {
 	sdl_sample *sample = (sdl_sample *)(data->plat_data);
 
@@ -128,10 +161,9 @@ static bool load_sound_sdl(const char *filename, int file_type, struct sound_dat
 		sample = mem_zalloc(sizeof(*sample));
 
 	/* Try and load the sample file */
-	data->loaded = load_sample_sdl(filename, file_type, sample);
-
-	if (data->loaded) {
-		sample->sample_type = file_type;
+	if (load_sample_sdl(filename, ft, sample)) {
+		data->status = SOUND_ST_LOADED;
+		sample->sample_type = ft;
 	} else {
 		mem_free(sample);
 		sample = NULL;
@@ -196,7 +228,7 @@ static bool unload_sound_sdl(struct sound_data *data)
 
 		mem_free(sample);
 		data->plat_data = NULL;
-		data->loaded = false;
+		data->status = SOUND_ST_UNKNOWN;
 	}
 
 	return true;
@@ -214,14 +246,12 @@ static bool close_audio_sdl(void)
 	 * calling unload_sound_sdl() for every sample that was loaded.
 	 */
 	Mix_CloseAudio();
-
-	/* XXX This may conflict with the SDL port */
-	SDL_Quit();
+	SDL_QuitSubSystem(SDL_INIT_AUDIO);
 
 	return true;
 }
 
-const struct sound_file_type *supported_files_sdl(void)
+static const struct sound_file_type *supported_files_sdl(void)
 {
 	return supported_sound_files;
 }
@@ -237,6 +267,29 @@ errr init_sound_sdl(struct sound_hooks *hooks, int argc, char **argv)
 	hooks->load_sound_hook = load_sound_sdl;
 	hooks->unload_sound_hook = unload_sound_sdl;
 	hooks->play_sound_hook = play_sound_sdl;
+
+#ifdef SOUND_SDL2
+	{
+		int i;
+
+		for (i = 1; i < argc; ++i) {
+			if (streq(argv[i], "-v")) {
+				print_sdl_details = true;
+			}
+		}
+
+		if (print_sdl_details) {
+			SDL_version vr, vc;
+
+			SDL_GetVersion(&vr);
+			SDL_VERSION(&vc);
+			SDL_Log("SDL audio: SDL library version: "
+				"%u.%u.%u (runtime) %u.%u.%u (compiled; %s)",
+				vr.major, vr.minor, vr.patch,
+				vc.major, vc.minor, vc.patch, SDL_REVISION);
+		}
+	}
+#endif
 
 	/* Success */
 	return (0);

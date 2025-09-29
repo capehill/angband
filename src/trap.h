@@ -59,7 +59,7 @@ struct trap_kind
 	struct trap_kind *next;
 	int tidx;					/**< Trap kind index */
 
-	byte d_attr;				/**< Default trap attribute */
+	uint8_t d_attr;				/**< Default trap attribute */
 	wchar_t d_char;				/**< Default trap character */
 
 	int rarity;					/**< Rarity */
@@ -81,14 +81,14 @@ extern struct trap_kind *trap_info;
  */
 struct trap
 {
-	byte t_idx;					/**< Trap kind index */
+	uint8_t t_idx;			/**< Trap kind index */
 	struct trap_kind *kind;		/**< Trap kind */
-	struct trap *next;			/**< Next trap in this location */
+	struct trap *next;		/**< Next trap in this location */
 
-	struct loc grid;			/**< Location of trap */
+	struct loc grid;		/**< Location of trap */
 
-	byte power;					/**< Power for locks, visibility for traps */
-	byte timeout;				/**< Timer for disabled traps */
+	uint8_t power;			/**< Power for locks, visibility for traps */
+	uint8_t timeout;		/**< Timer for disabled traps */
 
 	bitflag flags[TRF_SIZE];	/**< Trap flags (only this particular trap) */
 };
@@ -98,14 +98,17 @@ bool square_trap_specific(struct chunk *c, struct loc grid, int t_idx);
 bool square_trap_flag(struct chunk *c, struct loc grid, int flag);
 bool square_reveal_trap(struct chunk *c, struct loc grid, bool always,
 						bool domsg);
-bool trap_check_hit(int power);
+void square_memorize_traps(struct chunk *c, struct loc grid);
 void hit_trap(struct loc grid, int delayed);
 bool square_player_trap_allowed(struct chunk *c, struct loc grid);
 void place_trap(struct chunk *c, struct loc grid, int t_idx, int trap_level);
 void square_free_trap(struct chunk *c, struct loc grid);
 void wipe_trap_list(struct chunk *c);
+bool square_remove_trap(struct chunk *c, struct loc grid, struct trap *trap,
+		bool memorize);
 bool square_remove_all_traps(struct chunk *c, struct loc grid);
-bool square_remove_trap(struct chunk *c, struct loc grid, int t_idx);
+bool square_remove_all_traps_of_type(struct chunk *c, struct loc grid,
+		int t_idx);
 bool square_set_trap_timeout(struct chunk *c, struct loc grid, bool domsg,
 							 int t_idx, int time);
 int square_trap_timeout(struct chunk *c, struct loc grid, int t_idx);

@@ -48,10 +48,10 @@ Equipment list (``e``)
   For the standard body these are WEAPON (weapon), BOW (missile launcher),
   RING (ring) (two of these), AMULET (amulet), LIGHT (light source),
   BODY_ARMOR (armor), CLOAK (cloak), SHIELD (shield), HAT (helmet),
-  GLOVES (gloves), BOOTS (boots).   You must be wielding/wearing certain
+  GLOVES (gloves), BOOTS (boots). You must be wielding/wearing certain
   objects to take advantage of their special powers.
 
-Quiver list ('\|')
+Quiver list (``|``)
   Missiles that you carry will automatically be put in your quiver.  The
   quiver has 10 slots; it also takes up inventory space, so every 40 
   missiles will reduce your number of inventory slots by 1.
@@ -63,7 +63,7 @@ Drop an item (``d``)
   traps are considered objects for the purpose of determining if the space 
   is occupied. This command may take a quantity, and takes some energy.
 
-Ignore an item (``k``) or Ignore an item ('^D')
+Ignore an item (``k``) or Ignore an item ('^d')
   This ignores an item in your inventory or on the dungeon floor. If the
   selected pile contains multiple objects, you may specify a quantity. When
   ignored, the game will sometimes prompt you whether to ignore only this
@@ -77,9 +77,7 @@ Wear/Wield equipment (``w``)
   only one object can be in each slot at a time, if you wear or wield an
   item into a slot which is already occupied, the old item will be first be
   taken off, and may in fact be dropped if there is no room for it in your
-  inventory. Wielding ammunition will add it to an empty slot in your
-  quiver and prompt you to replace a type of ammunition if your quiver is
-  already full. This command takes some energy.
+  inventory. This command takes some energy.
 
 Take off equipment (``t``) or Take off equipment (``T``)
   Use this command to take off a piece of equipment and return it to your
@@ -124,9 +122,10 @@ Go up staircase (``<``)
   case you will return to the town level. Note that whenever you leave a
   level (not the town), you will never find it again. This means that for
   all intents and purposes, any objects on that level are destroyed. This
-  includes artifacts unless the "Create characters in preserve mode" option
-  was set when your character was created, in which case the artifacts may
-  show up again later. This command takes some energy.
+  includes artifacts unless the "Lose artifacts when leaving level" option
+  was turned off when your character was created, in which case the artifacts
+  may show up again later. The option to lose artifacts is off in the default
+  configuration. This command takes some energy.
 
 Go down staircase (``>``)
   Descends a down staircase you are standing on. There are always at least
@@ -163,7 +162,7 @@ Rest (``R``)
 Alter Commands
 ==============
 
-Tunnel (``T``) or Tunnel ('^T')
+Tunnel (``T``) or Tunnel ('^t')
   Tunnelling or mining is a very useful art. There are many kinds of rock,
   with varying hardness, including permanent rock (permanent), granite
   (very hard), quartz veins (hard), magma veins (soft), and rubble (very
@@ -171,17 +170,17 @@ Tunnel (``T``) or Tunnel ('^T')
   sometimes contain treasure, in which case they will be displayed in a
   different way. Rubble sometimes covers an object but is easy to tunnel
   through, even with your bare hands.  Tunnelling ability increases with 
-  strength and weapon weight. This command may take a count, requires a
-  direction, and takes some energy.
+  strength and weapon weight. If you have a digging tool in your pack, the
+  game will automatically use this to dig. This command may take a count,
+  requires a direction, and takes some energy.
 
 Open a door or chest (``o``)
   To open an object such as a door or chest, you must use this command. If
   the object is locked, you will attempt to pick the lock based on your
   disarming ability. If you open a trapped chest without disarming the
-  traps first, the trap will be set off. Some doors will be jammed shut and
-  may have to be forced open. Opening will automatically attempt to pick
-  any lock doors. You may need several tries to open a door or chest. This
-  command may take a count, requires a direction, and takes some energy.
+  traps first, the trap will be set off. Opening will automatically attempt
+  to pick any door locks. You may need several tries to open a door or chest.
+  This command may take a count, requires a direction, and takes some energy.
 
 Close a door (``c``)
   Non-intelligent and some other creatures cannot open doors, so shutting
@@ -193,11 +192,11 @@ Close a door (``c``)
 Disarm a trap or chest, or lock a door (``D``)
   You can attempt to disarm traps on the floor or on chests. If you fail,
   there is a chance that you will blunder and set it off. You can only
-  disarm a trap after you have found it (usually with the Search command).
-  The command can also be used to lock a closed door. This will create a
-  hindrance for monsters. Even if many monsters will be able to pick the
-  lock or bash the door down, it will often take them some time. This
-  command may take a count, requires a direction, and takes some energy.
+  disarm a trap after you have found it. The command can also be used to
+  lock a closed door, which will create a hindrance for monsters. Even if
+  many monsters will be able to pick the lock or bash the door down, it
+  will often take them some time. This command may take a count, requires
+  a direction, and takes some energy.
 
 Alter (``+``)
   This special command allows the use of a single keypress to select any of
@@ -209,29 +208,36 @@ Alter (``+``)
   grid" command. This command may take a count, requires a direction, and
   takes some energy.
 
-Spell and Prayer Commands
+Steal (``s``)
+  This command is only available to rogues, and allows them to try and steal
+  from a monster.  Stealing works better when the player is stealthy and
+  faster than the target monster, and best of all when the victim is asleep.
+  A failed theft will wake the monster; if you really bungle the attempt, the
+  monster may shout out in anger.  This command requires a direction and
+  takes some energy.
+
+Spell Commands
 =========================
 
 Browse a book (``b``) or Peruse a book (``P``)
-  Only mages, rogues, and rangers can read magic books, and only priests
-  and paladins can read prayer books. Warriors cannot read any books. When
-  this command is used, all of the spells or prayers contained in the
-  selected book are displayed, along with information such as their level,
-  the amount of mana required to cast them, and whether or not you know the
-  spell or prayer.
+  Each class has books it can read and books it cannot; except for warriors,
+  who cannot read any books. When this command is used, all of the spells
+  contained in the selected book are displayed, along with information such as
+  their level, the amount of mana required to cast them, and whether or not
+  you know the spell.
 
-Gain new spells or prayers (``G``)
-  Use this command to actually learn new spells or prayers. When you are
-  able to learn new spells or prayers, the word "Study" will appear on the
-  status line at the bottom of the screen. If you have a book in your
-  possession, containing spells or prayers which you may learn, then you
-  may choose to study that book. If you are a mage, rogue, or ranger, you
-  may actually choose which spell to study. If you are a priest or paladin,
-  your gods will choose a prayer for you. There are nine books of each
-  type, five of which are normally found only in the dungeon. This command
-  takes some energy.
+Gain new spells (``G``)
+  Use this command to actually learn new spells. When you are able to learn
+  new spells, the word "Study" will appear on the status line at the bottom
+  of the screen. If you have a book in your possession, containing spells
+  which you may learn, then you may choose to study that book. Most classes
+  may actually choose which spell to study, but if you are a priest or paladin,
+  your gods will choose a prayer for you. There are five books of each
+  realm, but hybrid classes - paladins, rogues, rangers and blackguards - can
+  only cast from two or three of these.  Higher level books are normally found
+  only in the dungeon. This command takes some energy.
 
-Cast a spell or pray a prayer (``m`` and ``p`` in both keysets)
+Cast a spell (``m`` in both keysets)
   To cast a spell, you must have previously learned the spell and must have
   in your inventory a book from which the spell can be read. Each spell has
   a chance of failure which starts out fairly large but decreases as you
@@ -248,13 +254,15 @@ Object Manipulation Commands
 ============================
 
 Eat some food (``E``)
-  You must eat regularly to prevent starvation. As you grow hungry, a
-  message will appear at the bottom of the screen saying "Hungry". If you
-  go hungry long enough, you will become weak, then start fainting, and
-  eventually, you may well die of starvation. You may use this command to
-  eat food in your inventory. Note that you can sometimes find food in the
-  dungeon, but it is not always wise to eat strange food. This command
-  takes some energy.
+  You must eat regularly to prevent starvation. There is a hunger meter
+  at the bottom of the screen, which says "Fed" and gives a percentage in
+  most circumstances. If you go hungry long enough, you will become weak,
+  then start fainting, and eventually, you may well die of starvation
+  (accompanied by increasingly alarming messages on your hunger meter).
+  It is also possible to be "Full", which will make you move slowly; more
+  slowly the fuller you get. You may use this command to eat food in your
+  inventory. Note that you can sometimes find food in the dungeon, but it
+  is not always wise to eat strange food. This command takes some energy.
 
 Fuel your lantern/torch (``F``)
   If you are using a lantern and have flasks of oil in your pack, then you
@@ -281,20 +289,19 @@ Inscribe an object (``{``)
   inscription is limited to the particular object (or pile) and is not
   automatically transferred to all similar objects. Under certain
   circumstances, Angband will display "fake" inscriptions on certain
-  objects ('cursed', 'tried', 'empty') when appropriate. These 
-  "fake" inscriptions remain all the time, even if the player chooses 
-  to add a "real" inscription on top of it later.
+  objects ('tried', 'empty') when appropriate. These "fake" inscriptions
+  remain all the time, even if the player chooses to add a "real" inscription
+  on top of it later.
 
-  In addition, Angband will occasionally place a "real" inscription on an
-  object for you, normally as the result of your character getting a
-  "feeling" about the item. All characters will get "feelings" about
-  weapons and armor after carrying them for a while.
+  In addition, Angband will place the inscription '??' on an object for you
+  if the object has a property (or "rune") that you have not learned yet.
+  This inscription will remain until you know all the runes on the object.
 
   An item labeled as '{empty}' was found to be out of charges, and an
   item labeled as '{tried}' is a "flavored" item which the character has
   used, but whose effects are unknown. Certain inscriptions have a meaning
   to the game, see '@#', '@x#', '!*', and '!x', in the section on
-  inventory object election.
+  inventory object selection.
 
 Uninscribe an object (``}``)
   This command removes the inscription on an object. This command will have
@@ -347,11 +354,11 @@ Throwing and Missile Weapons
 ============================
 
 Fire an item (``f``) or Fire an item (``t``)
-  This command will fire a will allow you to fire a missile from either
-  your quiver or your inventory provided it is the appropriate ammunition
-  for the current missile weapon you have equipped. You may not fire an
-  item without a missile weapon equipped. Fired ammunition has a chance of
-  breaking. This command takes some energy.
+  This command will allow you to fire a missile from either your quiver or
+  your inventory provided it is the appropriate ammunition for the current
+  missile weapon you have equipped. You may not fire an item without a
+  missile weapon equipped. Fired ammunition has a chance of breaking.
+  This command takes some energy.
 
 Fire default ammo at nearest (``h``) or ('TAB')
   If you have a missile weapon equipped and the appropriate ammunition in
@@ -366,7 +373,8 @@ Throw an item (``v``)
   object from a pile will be thrown at a time. Note that throwing an object
   will often cause it to break, so be careful! If you throw something at a
   creature, your chances of hitting it are determined by your plusses to
-  hit, your ability at throwing, and the object's plusses to hit. Once the
+  hit, your ability at throwing, and the object's plusses to hit. Some
+  weapons are especially designed for throwing.  Once the
   creature is hit, the object may or may not do any damage to it. 
   Note that flasks of oil will do some fire damage to a monster on impact. 
   If you are wielding a missile launcher compatible with the object you are
@@ -458,12 +466,12 @@ List visible items (``]``)
 Message Commands
 ================
 
-Repeat level feeling ('^F')
+Repeat level feeling ('^f')
   Repeats the feeling about the monsters in the dungeon level that you got
   when you first entered the level.  If you have explored enough of the 
   level, you will also get a feeling about how good the treasures are.
 
-View previous messages ('^P')
+View previous messages ('^p')
   This command shows you all the recent messages. You can scroll through
   them, or exit with ESCAPE.
 
@@ -475,38 +483,141 @@ Game Status Commands
 ====================
 
 Character Description (``C``)
-  Brings up a full description of your character, including your kill
+  Brings up a full description of your character, including your skill
   levels, your current and potential stats, and various other information.
   From this screen, you can change your name or use the file character
   description command to save your character status to a file. That command
   saves additional information, including your background, your inventory,
-  and the contents of your house.
+  and the contents of your house. The command to change the mode switches
+  what's displayed back and forth from the original view to one that shows
+  how your current equipment and the player's innate characteristics affect
+  certain attributes. The default symbols used within that view are '.' for
+  nothing equipped or no known effect on the attribute, '?' if your character
+  does not know if there's an effect on the attribute, '+' if your character
+  knows that there is a positive effect on the attribute, '-' if your character
+  knows that there is a negative effect on the attribute, '!' if a timed effect
+  positively affects the attribute, or '=' if a timed effect negatively affects
+  the attribute.  For elemental resistances (the block of attributes on the
+  far left), '*', to indicate an immunity, and '~' to indicate that something
+  provides both a '+' and '-', are also possible.  The color of the label for
+  the attribute will indicate the sum of the different sources for your
+  character. Those colors default to be: slate for when your character does
+  not know the rune associated with that attribute, white if there is no
+  combined effect (excluding timed effects) known to the character, light
+  blue if the known combined effect (excluding timed effects) is positive, red
+  if the known combined effect (excluding timed effects) is negative, and
+  green if the known combined effect is an elemental immunity.
 
 Check knowledge (``~``)
   This command allows you to ask about the knowledge possessed by your
-  character. Currently, this includes being able to list all known
-  "artifacts", "uniques", and "objects". Normally, once an artifact is
-  "generated", and "lost", it can never again be found, and will become
-  "known" to the player. With "preserve" mode, an artifact can never be
-  "lost" until it is "known" to the player. In either case, any "known"
-  artifacts not in the possession of the player will never again be
-  "generated". The "uniques" are special "unique" monsters which can only
-  be killed once per game. Certain "objects" come in "flavors", and you 
-  must determine the effect of each "flavor" once for each such type of 
-  object, and this command will allow you to display all "known" flavors.
-  Inscribing items in this list will cause you to similarly inscribe all
-  similar items you find from this point on.
+  character. Information that you can look up is:
+
+  objects
+    Will display which objects your character is familiar with. For each
+    type of object, allows you to change whether or not it is ignored,
+    the representation of that type on the screen, or the inscription
+    automatically applied to all objects of that type. Some types of
+    objects your character will be familiar with from the start of the game.
+    Others come in "flavors", and your character must determine the effect
+    of each "flavor" once for each such type of object. For a type of object
+    with a known "flavor", you be also be able to display a summary of
+    what the object can do.
+
+  runes
+    Will display the "runes", properties of enchanted objects, your
+    character is familiar with. Allows you to change the inscription that
+    is automatically appended to an object that has the rune.  Once your
+    character identifies a "rune" on one object, he or she will recognize
+    that property on other objects.
+
+  artifacts
+    Will display all artifacts that your character has encountered. Normally,
+    once an artifact is "generated" and "lost", it can never again be found,
+    and will become "known" to the player. With the "Lose artifacts when
+    leaving level" option turned off, an artifact can never be "lost" until
+    it is "known" to the player. In either case, any "known" artifacts not
+    in the possession of the player will never again be "generated".
+
+  ego items
+    Will display the "egos" your character has encountered.  Each "ego" is
+    a collection of enchantments that can appear on an object.  "Egos" are
+    often restricted to only a few specific types of objects.
+
+  monsters
+    Displays the kinds of monsters your current or previous characters have
+    encountered. For each kind of monster, allows you to change its
+    representation on the screen. Some monsters are "uniques" which can be
+    only be killed once per game. For a "unique" that your current or
+    previous characters have encountered, this will display whether that
+    "unique" is still alive in this game.
+
+  features
+    Displays the types of map grids that can appear in the game.  For each
+    type, allows you to change its representation on the screen and how
+    that representation changes depending on the amount of light present.
+
+  traps
+    Displays the types of traps that can appear in the game.  For each type,
+    allows you to change its representation on the screen and how that
+    representation changes depending on the amount of light present.
+
+  shapechange effects
+    Provides a more detailed description of the "shapes", magical effects
+    from some spells and a few items which change the shape of your
+    character's body.
+
+  stores and home
+    Each of these will display the contents of the corresponding store
+    or your player's home at the time your character last visited the
+    town. If your character is currently in town, what is displayed here
+    will be the current contents.
+
+  hall of fame
+    Displays a list of current and past characters, sorted by how far they
+    progressed.
+
+  character history
+    Displays a summary of what your current character has done.
+
+  equippable comparison
+    This displays a summary of the known properties of the equippable
+    items your character has access to, whether they are currently equipped,
+    in your character's pack, on the floor at your character's current
+    location, or in a store. Near the top of the display is a line, beginning
+    with "@", which summarizes the state of your character given his or her
+    current equipment. Every line after that corresponds to an item, sorted
+    by which equipment slot it can fill. The first character on each of those
+    lines is the representation of that item as it would appear in the map if
+    it was on the floor. After that is single character, "e" for equipped,
+    "p" for pack, "f" for floor, "h" for home, and "s" for store, which
+    indicates where the item is. The remainder of the line summarizes the
+    properties of the object, with one property per column. In the default
+    view, those properties are the resistances, flags, and modifiers present
+    on the item; they appear in the same order (left to right) as they appear
+    (top to bottom and then left to right) in the second part of the character
+    description. You can toggle back and forth between that view and one
+    that displays the effect of each item on your character's key statistics
+    by pressing 'v'. You can use 'c' to cycle through which items, based
+    on their location, are included in the display. The default is to show
+    only the items that are equipped, in the pack, on the floor at your
+    character's current location, and in the home. The other options are:
+    show only the items in stores other than the home, show all items,
+    or show only those that equipped or in the pack. There are some
+    additional commands, notably for filtering which items are displayed based
+    on a particular property and for displaying the details about one or
+    two items. To see what those additional commands are, use the '?' key
+    to bring up the in-game help for the equippable comparison.
 
 Saving and Exiting Commands
 ===========================
 
-Save and Quit ('Ctrl-X')
+Save and Quit ('Ctrl-x')
   To save your game so that you can return to it later, use this command.
   Save files will also be generated (hopefully) if the game crashes due to
   a system error. After you die, you can use your savefile to play again
   with the same options and such.
 
-Save ('Ctrl-S')
+Save ('Ctrl-s')
   This command saves the game but doesn't exit Angband. Use this frequently
   if you are paranoid about having your computer crash (or your power go
   out) while you are playing.
@@ -536,7 +647,7 @@ Interact with keymaps - option submenu
 Interact with visuals - option submenu
   Allow you to interact with visuals. You may load or save visuals from
   user pref files, or modify the attr/char mappings for the monsters,
-  objects, and terrain features. You must use the "redraw" command ('^R')
+  objects, and terrain features. You must use the "redraw" command ('^r')
   to redraw the map after changing attr/char mappings. NOTE: It is
   generally easier to modify visuals via the "knowledge" menus.
 
@@ -553,7 +664,7 @@ Help (``?``)
   just text files in a particular format, and that other help files may be
   available on the Net. In particular, there are a variety of spoiler files
   which do not come with the standard distribution. Check the place you got
-  Angband from or ask on the angband forums angband.oook.cz about them.
+  Angband from or ask on the Angband forums, angband.live/forums/ , about them.
 
 Identify Symbol (``/``)
   Use this command to find out what a character stands for. For instance,
@@ -565,9 +676,9 @@ Identify Symbol (``/``)
 
   There are three special symbols you can use with the Identify Symbol
   command to access specific parts of your monster memory. Typing
-  'Ctrl-A' when asked for a symbol will recall details about all
-  monsters, typing 'Ctrl-U' will recall details about all unique
-  monsters, and typing 'Ctrl-N' will recall details about all non-unique
+  'Ctrl-a' when asked for a symbol will recall details about all
+  monsters, typing 'Ctrl-u' will recall details about all unique
+  monsters, and typing 'Ctrl-n' will recall details about all non-unique
   monsters.
 
   If the character stands for a creature, you are asked if you want to
@@ -585,19 +696,15 @@ Game Version (``V``)
 Extra Commands
 ==============
 
-Toggle Choice Window ('^E')
+Toggle Choice Window ('^e')
   Toggles the display in any sub-windows (if available) which are
   displaying your inventory or equipment.
 
-Redraw Screen ('^R')
+Redraw Screen ('^r')
   This command adapts to various changes in global options, and redraws all
   of the windows. It is normally only necessary in abnormal situations,
   such as after changing the visual attr/char mappings, or enabling
   "graphics" mode.
-
-Load screen dump (left-paren)
-  This command loads a "snap-shot" of the current screen from the file
-  'dump.txt', and displays it on the screen.
 
 Save screen dump (|``)``|)
   This command dumps a "snap-shot" of the current screen to a file,
@@ -605,7 +712,7 @@ Save screen dump (|``)``|)
 
   - html, suitable for viewing in a web browser.
   - forum embedded html for vBulletin, suitable for pasting in
-    web forums like http://angband.oook.cz/forums.
+    web forums like https://angband.live/forums/.
 	
 Special Keys
 ============
@@ -614,15 +721,15 @@ Certain special keys may be intercepted by the operating system or the host
 machine, causing unexpected results. In general, these special keys are
 control keys, and often, you can disable their special effects.
 
-If you are playing on a UNIX or similar system, then Ctrl-C will interrupt
+If you are playing on a UNIX or similar system, then Ctrl-c will interrupt
 Angband. The second and third interrupt will induce a warning bell, and the
-fourth will induce both a warning bell and a special message, ince the
-fifth will quit the game, after killing your character. Also, 'Ctrl-Z'
-will suspend the game, and return you to the original command shell, until
-you resume the game with the 'fg' command. There is now a compilation
-option to force the game to prevent the "double 'ctrl-z' escape death
-trick". The 'Ctrl-\\' and 'Ctrl-D' and 'Ctrl-S' keys should not be
-intercepted.
+fourth will induce both a warning bell and a special message, since the
+fifth will either quit without saving (if Angband was compiled without the
+SETGID option which puts the save files in a shared location for all users)
+or kill your character (if Angband was compiled with the SETGID option).
+Also, 'Ctrl-z' will suspend the game, and return you to the original command
+shell, until you resume the game with the 'fg' command. The 'Ctrl-\\' and
+'Ctrl-d' and 'Ctrl-s' keys should not be intercepted.
 
 It is often possible to specify "control-keys" without actually pressing
 the control key, by typing a caret (``^``) followed by the key. This is
@@ -647,7 +754,9 @@ the command. The '[y/n]' prompts may be answered with ``y`` or ``n``, or
 the displayed message) by pressing 'ESCAPE', 'SPACE', 'RETURN',
 'LINEFEED', or by any keypress, if the "quick_messages" option is turned
 on.
- 
+
+.. _command-counts:
+
 Command Counts
 ==============
 

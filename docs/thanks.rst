@@ -2,49 +2,225 @@
 Credits
 =======
 
-If your name should be included in this file and it's not, please email us
-so we can fix it. :)
-
-Version 4.1.x
+Version 4.2.x
 =============
 
 Code contribution:
 
+* Adam Goodman (agoodman)
+* Adriankhl
+* Adrian Siekierka (asiekierka)
 * Alex Mooney
-* Andi Sidwell (takkaria)
-* AndreyB
+* Alexandre Detiste
+* Andre Maroneze
+* Andrew York
+* Anna Sidwell (takkaria)
+* ArmiesAndCastles (v-chirkov)
+* bacchist
+* Ben Collver
+* Ben Semmler (molybdenum)
 * Bardur Arantsson
-* Ben Semmler
-* crayonsmelting
+* Bill Peterson
+* Binrui Dong
+* bron
+* Cameron Ball
+* Colin Woodbury
+* Cuboideb (Diego Gonzalez)
+* Dag Arneson (sanedragon)
+* Daniel Burgener
+* David Medley
 * Derakon
+* Diego Herrera
+* Eastwind921
+* Elly Fong-Jones (elly)
+* Eric Branlund (backwardsEric)
 * Erik Osheim (d_m)
 * fizzix (Aaron Bader)
-* Flavio Medeiros
-* Graeme Russ
-* Gwilim Owen
-* Jean-François Caron
-* kaypy
-* Kevin J. Fletcher
-* Nomad
-* Pete McIlroy
-* Peter (Hermann Döppes)
-* Peter McIlroy
-* phantom-voltage
+* floyza
+* fruviad
+* jdholbrook81
+* jefetienne
+* Joan Andrés
+* John Weismiller (emar)
+* Justin Chua
+* kleo
+* Kusunose Toru
+* Lars Haugseth
+* magnate (Chris Carr)
+* MarbleDice
+* Michael Courtney (wobbly)
+* Mikolaj Konarski
+* Nima Hoda
+* Paul Johnson
+* piels
 * PowerWyrm
-* rmzelle
-* rowanbeentje
-* Tiara Smith
-* Twisted Pair in my Hair
-* Vic K (t4nk)
-* William Orr
+* pwinckles (moosferatu)
+* Rodent/Sideways/sulkasormi
+* Ryan Schmidt
+* Shanoah Alkire
+* spenserblack
+* Stefan Strogin
+* tangar
+* Tim Schumacher (timschumi)
+* Tom Morton (tom)
+* Vic K
+* wkmanire
+* wobbly
+* Yutao Yuan (infmagic2047)
 
-Thanks are due for contributing to discussion which has influenced this
-version to a great many people (too many to list) on
+Thanks are due to many people for, reporting bugs, suggesting changes and
+contributing to discussion which has influenced this version.  The following is
+an (undoubtedly poor) attempt to list you all, please let me know if you think
+you ought to be included:
 
-* the Angband forums (http://angband.oook.cz/forum/)
-* the #angband-dev and #angband IRC channels on freenode.net
-* the roguelikes subreddit (https://www.reddit.com/r/roguelikes/)
-* the #band channel on the roguelikes discord
+* Adam
+* Anarchic Fox
+* animal_waves
+* AnonymousHero
+* Antoine
+* archolewa
+* Aszazin
+* Atriel
+* bio_hazard
+* Bogatyr
+* bughunter
+* bunnies
+* Capn_Carpaccio
+* Carg
+* Carnivean
+* cccfire
+* Chud
+* cjslates
+* ClaytonAguiar
+* Clearshade
+* clouded
+* Cold_Heart
+* Combatereak
+* Darin
+* debo (cyberdemons pls)
+* desstorm
+* dionysian
+* Djbanete
+* dos350
+* Dragget
+* drquicksilver
+* Ed_47569
+* Egavactip
+* emulord
+* EpicMan
+* Eric
+* Estie
+* Estragon
+* Evilpotatoe
+* ewert
+* Flambard
+* floatRand
+* FogSpear
+* fph
+* Gauss
+* Geoff Hill (yes, that one)
+* geoff_tewierik
+* gglibertine
+* Glorfindel
+* Goaticus
+* Grotug
+* gtrudeau88
+* Gwarl
+* half
+* HallucinationMushroom
+* HebrewToYou
+* Holy_Rage
+* Hounded
+* Hrrunstar
+* Huqhox
+* ImEsteban
+* Ingwe Ingweron
+* JBright
+* Jeff Greene (nppangband)
+* jevansau
+* jml34
+* jsv
+* Julian (jl8e)
+* Jungle_Boy
+* kandrc
+* kaypy
+* khearn
+* kineahora
+* Kinematics
+* lanactoor
+* lonadar
+* luneya
+* malcontent
+* Mark
+* MattB
+* Mike
+* misanthropope
+* MITZE
+* MKula
+* Mondkalb
+* Monkey Face
+* Moving Pictures
+* mrfy
+* Muscleguy
+* MWGE
+* Naranathu Bhranthan
+* Narry
+* NCountr
+* Netbrian
+* NightLizard
+* Nomad
+* olivertheorem
+* Once
+* Oraticus
+* Pahasusi
+* Patashu
+* Pete Mack
+* Philip
+* Pondlife
+* Pussy Galore
+* quarague
+* Quirk
+* Raerick
+* Raxmei
+* renato
+* robinjohnson
+* Rydel
+* Saru
+* Scatha
+* schatz
+* scrarth
+* Selkie
+* shirish
+* Sinquen
+* Sky
+* smbhax
+* spara
+* Sparrow the Dunadan
+* Sphara
+* swaggert
+* the Invisible Stalker
+* Therem Harth
+* Thraalbee
+* Tibarius
+* Timo Pietilä
+* TJA
+* TJS
+* topazg
+* Torr
+* Ugramoth
+* Vivit
+* Voovus
+* Vorczar
+* Werbaer
+* whartung
+* Whelk
+* will_asher
+* WindLord
+* Wiwaxia
+* Xaxyx
+* Youssarian
+* Zikke
+* Zirael
 
 Special thanks to Luke McConnell for many, many conversations on game design
 which influenced design decisions across the breadth and depth of Angband.
@@ -53,7 +229,7 @@ Previous maintainers
 ====================
 
 Angband 3.0.8 - 3.5.1:
-  Andi Sidwell <andi at takkaria.org>
+  Anna Sidwell <anna at takkaria.org>
 
 Angband 2.9.0 - 3.0.6:
   Robert Ruehlmann <rr9 at thangorodrim.net>
@@ -76,7 +252,7 @@ bugfixes, and other stuff for Angband prior to 4.0:
 
 Peter Berger, Andrew Hill, Werner Baer, Tom Morton, "Cyric the Mad", 
 Chris Kern, Jurriaan Kalkman, Alexander Wilkins, Mauro Scarpa, "facade", 
-Dennis van Es, Kenneth A. Strom, Wei-Hwa Huang, Nikodemus, Timo Pietila, 
+Dennis van Es, Kenneth A. Strom, Wei-Hwa Huang, Nikodemus, Timo Pietilä,
 Shayne Steele, Dr. Andrew White, Greg Flint, Christopher Jeris, Ian 
 Parkhouse, "Warhammer", Scott Holder, Brent Ross, Kazuo Ito, Willem 
 Siemelink, "Luthien", David J. Grabiner, Ilya Bely, "chungkuo", Kieron 
@@ -264,6 +440,50 @@ Beta testing and bug reporting/fixing:
  * Egavactip
  * zog
  * troycheek
+
+Version 4.1.x
+=============
+
+Code contribution:
+
+* Alex Mooney
+* Andi Sidwell (takkaria)
+* AndreyB
+* Bardur Arantsson
+* Ben Semmler
+* crayonsmelting
+* Derakon
+* Erik Osheim (d_m)
+* fizzix (Aaron Bader)
+* Flavio Medeiros
+* Graeme Russ
+* Gwilim Owen
+* Jean-François Caron
+* kaypy
+* Kevin J. Fletcher
+* Nomad
+* Pete McIlroy
+* Peter (Hermann Döppes)
+* Peter McIlroy
+* phantom-voltage
+* PowerWyrm
+* rmzelle
+* rowanbeentje
+* Tiara Smith
+* Twisted Pair in my Hair
+* Vic K (t4nk)
+* William Orr
+
+Thanks are due for contributing to discussion which has influenced this
+version to a great many people (too many to list) on
+
+* the Angband forums (https://angband.live/forums/)
+* the #angband-dev and #angband IRC channels on libera.chat
+* the roguelikes subreddit (https://www.reddit.com/r/roguelikes/)
+* the #band channel on the roguelikes discord
+
+Special thanks to Luke McConnell for many, many conversations on game design
+which influenced design decisions across the breadth and depth of Angband.
 
 .. |copyright| unicode:: 0xA9
 

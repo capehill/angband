@@ -36,7 +36,7 @@
 
 
 /**
- * Hack -- Hallucinatory monster
+ * Hallucinatory monster
  */
 static void hallucinatory_monster(int *a, wchar_t *c)
 {
@@ -56,7 +56,7 @@ static void hallucinatory_monster(int *a, wchar_t *c)
 
 
 /**
- * Hack -- Hallucinatory object
+ * Hallucinatory object
  */
 static void hallucinatory_object(int *a, wchar_t *c)
 {
@@ -124,14 +124,16 @@ static void grid_get_attr(struct grid_data *g, int *a)
 		}
 	}
 
-	/* Hybrid or block walls -- for GCU, then for everyone else */
+	/* Add the attr inversion back for GCU */
 	if (a0) {
 		*a = a0 | *a;
-	} else if (use_graphics == GRAPHICS_NONE && feat_is_wall(g->f_idx)) {
+	}
+	/* Hybrid or block walls */
+	if (use_graphics == GRAPHICS_NONE && feat_is_wall(g->f_idx)) {
 		if (OPT(player, hybrid_walls))
-			*a = *a + (MAX_COLORS * BG_DARK);
+			*a = *a + (MULT_BG * BG_DARK);
 		else if (OPT(player, solid_walls))
-			*a = *a + (MAX_COLORS * BG_SAME);
+			*a = *a + (MULT_BG * BG_SAME);
 	}
 }
 
@@ -228,10 +230,10 @@ void grid_data_as_text(struct grid_data *g, int *ap, wchar_t *cp, int *tap,
 		if (g->hallucinate) {
 			/* Just pick a random monster to display. */
 			hallucinatory_monster(&a, &c);
-		} else if (!monster_is_mimicking(cave_monster(cave, g->m_idx)))	{
+		} else if (!monster_is_camouflaged(cave_monster(cave, g->m_idx)))	{
 			struct monster *mon = cave_monster(cave, g->m_idx);
 
-			byte da;
+			uint8_t da;
 			wchar_t dc;
 
 			/* Desired attr & char */
@@ -244,7 +246,7 @@ void grid_data_as_text(struct grid_data *g, int *ap, wchar_t *cp, int *tap,
 				a = da;
 				c = dc;
 			} else if (OPT(player, purple_uniques) && 
-					   rf_has(mon->race->flags, RF_UNIQUE)) {
+					monster_is_shape_unique(mon)) {
 				/* Turn uniques purple if desired (violet, actually) */
 				a = COLOUR_VIOLET;
 				c = dc;
@@ -263,7 +265,7 @@ void grid_data_as_text(struct grid_data *g, int *ap, wchar_t *cp, int *tap,
 				dc = monster_x_char[mon->race->ridx];
 				c = dc;
 			} else if (a & 0x80) {
-				/* Hack -- Bizarre grid under monster */
+				/* Bizarre grid under monster */
 				a = da;
 				c = dc;
 			} else if (!rf_has(mon->race->flags, RF_CHAR_CLEAR)) {
@@ -335,6 +337,54 @@ void grid_data_as_text(struct grid_data *g, int *ap, wchar_t *cp, int *tap,
 
 
 /**
+ * Get dimensions of a small-scale map (i.e. display_map()'s result).
+ * \param t Is the terminal displaying the map.
+ * \param c Is the chunk to display.
+ * \param tw Is the tile width in characters.
+ * \param th Is the tile height in characters.
+ * \param mw *mw is set to the width of the small-scale map.
+ * \param mh *mh is set to the height of the small-scale map.
+ */
+static void get_minimap_dimensions(term *t, const struct chunk *c,
+	int tw, int th, int *mw, int *mh)
+{
+	int map_height = t->hgt - 2;
+	int map_width = t->wid - 2;
+	int cave_height = c->height;
+	int cave_width = c->width;
+	int remainder;
+
+	if (th > 1) {
+		/*
+		 * Round cave height up to a multiple of the tile height
+		 * (ideally want no information truncated).
+		 */
+		remainder = cave_height % th;
+		if (remainder > 0) {
+			cave_height += th - remainder;
+		}
+
+		/*
+		 * Round map height down to a multiple of the tile height
+		 * (don't want partial tiles overwriting the map borders).
+		 */
+		map_height -= map_height % th;
+	}
+	if (tw > 1) {
+		/* As above but for the width. */
+		remainder = cave_width % tw;
+		if (remainder > 0) {
+			cave_width += tw - remainder;
+		}
+		map_width -= map_width % tw;
+	}
+
+	*mh = MIN(map_height, cave_height);
+	*mw = MIN(map_width, cave_width);
+}
+
+
+/**
  * Move the cursor to a given map location.
  */
 static void move_cursor_relative_map(int y, int x)
@@ -355,22 +405,38 @@ static void move_cursor_relative_map(int y, int x)
 		/* No relevant flags */
 		if (!(window_flag[j] & (PW_MAPS))) continue;
 
-		/* Location relative to panel */
-		ky = y - t->offset_y;
+		if (window_flag[j] & PW_MAP) {
+			/* Be consistent with display_map(). */
+			int map_width, map_height;
 
-		if (tile_height > 1)
-			ky = tile_height * ky;
+			get_minimap_dimensions(t, cave, tile_width,
+				tile_height, &map_width, &map_height);
+
+			ky = (y * map_height) / cave->height;
+			if (tile_height > 1) {
+				ky = ky - (ky % tile_height) + 1;
+			} else {
+				++ky;
+			}
+			kx = (x * map_width) / cave->width;
+			if (tile_width > 1) {
+				kx = kx - (kx % tile_width) + 1;
+			} else {
+				++kx;
+			}
+		} else {
+			/* Location relative to panel */
+			ky = y - t->offset_y;
+			if (tile_height > 1)
+				ky = tile_height * ky;
+
+			kx = x - t->offset_x;
+			if (tile_width > 1)
+				kx = tile_width * kx;
+		}
 
 		/* Verify location */
 		if ((ky < 0) || (ky >= t->hgt)) continue;
-
-		/* Location relative to panel */
-		kx = x - t->offset_x;
-
-		if (tile_width > 1)
-			kx = tile_width * kx;
-
-		/* Verify location */
 		if ((kx < 0) || (kx >= t->wid)) continue;
 
 		/* Go there */
@@ -431,7 +497,7 @@ void move_cursor_relative(int y, int x)
  *
  * Note the use of "Term_queue_char()" for efficiency.
  */
-static void print_rel_map(wchar_t c, byte a, int y, int x)
+static void print_rel_map(wchar_t c, uint8_t a, int y, int x)
 {
 	int ky, kx;
 
@@ -447,33 +513,57 @@ static void print_rel_map(wchar_t c, byte a, int y, int x)
 		/* No relevant flags */
 		if (!(window_flag[j] & (PW_MAPS))) continue;
 
-		/* Location relative to panel */
-		ky = y - t->offset_y;
+		if (window_flag[j] & PW_MAP) {
+			/* Be consistent with display_map(). */
+			int map_width, map_height;
 
-		if (tile_height > 1) {
-			ky = tile_height * ky;
-			if (ky + 1 >= t->hgt) continue;
+			get_minimap_dimensions(t, cave, tile_width,
+				tile_height, &map_width, &map_height);
+
+			kx = (x * map_width) / cave->width;
+			ky = (y * map_height) / cave->height;
+			if (tile_width > 1) {
+				kx = kx - (kx % tile_width) + 1;
+			} else {
+				++kx;
+			}
+			if (tile_height > 1) {
+				ky = ky - (ky % tile_height) + 1;
+			} else {
+				++ky;
+			}
+		} else {
+			/* Location relative to panel */
+			ky = y - t->offset_y;
+
+			if (tile_height > 1) {
+				ky = tile_height * ky;
+				if (ky + 1 >= t->hgt) continue;
+			}
+
+			kx = x - t->offset_x;
+
+			if (tile_width > 1) {
+				kx = tile_width * kx;
+				if (kx + 1 >= t->wid) continue;
+			}
 		}
 
 		/* Verify location */
 		if ((ky < 0) || (ky >= t->hgt)) continue;
-
-		/* Location relative to panel */
-		kx = x - t->offset_x;
-
-		if (tile_width > 1) {
-			kx = tile_width * kx;
-			if (kx + 1 >= t->wid) continue;
-		}
-
-		/* Verify location */
 		if ((kx < 0) || (kx >= t->wid)) continue;
 
-		/* Hack -- Queue it */
+		/* Queue it */
 		Term_queue_char(t, kx, ky, a, c, 0, 0);
 
 		if ((tile_width > 1) || (tile_height > 1))
-			Term_big_queue_char(Term, kx, ky, a, c, 0, 0);
+			/*
+			 * The overhead view can make use of the last row in
+			 * the terminal.  Others leave it be.
+			 */
+			Term_big_queue_char(t, kx, ky, t->hgt -
+				((window_flag[j] & PW_OVERHEAD) ? 0 : ROW_BOTTOM_MAP),
+				a, c, 0, 0);
 	}
 }
 
@@ -488,7 +578,7 @@ static void print_rel_map(wchar_t c, byte a, int y, int x)
  *
  * The main screen will always be at least 24x80 in size.
  */
-void print_rel(wchar_t c, byte a, int y, int x)
+void print_rel(wchar_t c, uint8_t a, int y, int x)
 {
 	int ky, kx;
 	int vy, vx;
@@ -512,11 +602,12 @@ void print_rel(wchar_t c, byte a, int y, int x)
 	vx = COL_MAP + (tile_width * kx);
 	vy = ROW_MAP + (tile_height * ky);
 
-	/* Hack -- Queue it */
+	/* Queue it */
 	Term_queue_char(Term, vx, vy, a, c, 0, 0);
 
 	if ((tile_width > 1) || (tile_height > 1))
-		Term_big_queue_char(Term, vx, vy, a, c, 0, 0);
+		Term_big_queue_char(Term, vx, vy, ROW_MAP + SCREEN_ROWS,
+			a, c, 0, 0);
   
 }
 
@@ -536,6 +627,7 @@ static void prt_map_aux(void)
 	/* Scan windows */
 	for (j = 0; j < ANGBAND_TERM_MAX; j++) {
 		term *t = angband_term[j];
+		int clipy;
 
 		/* No window */
 		if (!t) continue;
@@ -543,17 +635,39 @@ static void prt_map_aux(void)
 		/* No relevant flags */
 		if (!(window_flag[j] & (PW_MAPS))) continue;
 
+		if (window_flag[j] & PW_MAP) {
+			term *old = Term;
+
+			Term_activate(t);
+			display_map(NULL, NULL);
+			Term_activate(old);
+			continue;
+		}
+
 		/* Assume screen */
 		ty = t->offset_y + (t->hgt / tile_height);
 		tx = t->offset_x + (t->wid / tile_width);
 
+		/*
+		 * The overhead view can use the last row of the terminal.
+		 * Others can not.
+		 */
+		clipy = t->hgt - ((window_flag[j] & PW_OVERHEAD) ? 0 : ROW_BOTTOM_MAP);
+
 		/* Dump the map */
-		for (y = t->offset_y, vy = 0; y < ty; vy++, y++) {
-			if (vy + tile_height - 1 >= t->hgt) continue;
-			for (x = t->offset_x, vx = 0; x < tx; vx++, x++) {
+		for (y = t->offset_y, vy = 0; y < ty; vy += tile_height, y++) {
+			for (x = t->offset_x, vx = 0; x < tx; vx += tile_width, x++) {
 				/* Check bounds */
-				if (!square_in_bounds(cave, loc(x, y))) continue;
-				if (vx + tile_width - 1 >= t->wid) continue;
+				if (!square_in_bounds(cave, loc(x, y))) {
+					Term_queue_char(t, vx, vy,
+						COLOUR_WHITE, ' ',
+						0, 0);
+					if (tile_width > 1 || tile_height > 1) {
+						Term_big_queue_char(t, vx, vy,
+							clipy, COLOUR_WHITE, ' ', 0, 0);
+					}
+					continue;
+				}
 
 				/* Determine what is there */
 				map_info(loc(x, y), &g);
@@ -561,7 +675,20 @@ static void prt_map_aux(void)
 				Term_queue_char(t, vx, vy, a, c, ta, tc);
 
 				if ((tile_width > 1) || (tile_height > 1))
-					Term_big_queue_char(t, vx, vy, 255, -1, 0, 0);
+					Term_big_queue_char(t, vx, vy, clipy,
+						255, -1, 0, 0);
+			}
+			/* Clear partial tile at the end of each line. */
+			for (; vx < t->wid; ++vx) {
+				Term_queue_char(t, vx, vy, COLOUR_WHITE,
+					' ', 0, 0);
+			}
+		}
+		/* Clear row of partial tiles at the bottom. */
+		for (; vy < t->hgt; ++vy) {
+			for (vx = 0; vx < t->wid; ++vx) {
+				Term_queue_char(t, vx, vy, COLOUR_WHITE,
+					' ', 0, 0);
 			}
 		}
 	}
@@ -585,6 +712,7 @@ void prt_map(void)
 	int y, x;
 	int vy, vx;
 	int ty, tx;
+	int clipy;
 
 	/* Redraw map sub-windows */
 	prt_map_aux();
@@ -593,9 +721,12 @@ void prt_map(void)
 	ty = Term->offset_y + SCREEN_HGT;
 	tx = Term->offset_x + SCREEN_WID;
 
+	/* Avoid overwriting the last row with padding for big tiles. */
+	clipy = ROW_MAP + SCREEN_ROWS;
+
 	/* Dump the map */
-	for (y = Term->offset_y, vy = ROW_MAP; y < ty; vy+=tile_height, y++)
-		for (x = Term->offset_x, vx = COL_MAP; x < tx; vx+=tile_width, x++) {
+	for (y = Term->offset_y, vy = ROW_MAP; y < ty; vy += tile_height, y++)
+		for (x = Term->offset_x, vx = COL_MAP; x < tx; vx += tile_width, x++) {
 			/* Check bounds */
 			if (!square_in_bounds(cave, loc(x, y))) continue;
 
@@ -603,11 +734,12 @@ void prt_map(void)
 			map_info(loc(x, y), &g);
 			grid_data_as_text(&g, &a, &c, &ta, &tc);
 
-			/* Hack -- Queue it */
+			/* Queue it */
 			Term_queue_char(Term, vx, vy, a, c, ta, tc);
 
 			if ((tile_width > 1) || (tile_height > 1))
-				Term_big_queue_char(Term, vx, vy, a, c, COLOUR_WHITE, L' ');
+				Term_big_queue_char(Term, vx, vy, clipy, a, c,
+					COLOUR_WHITE, L' ');
 		}
 }
 
@@ -637,22 +769,18 @@ void display_map(int *cy, int *cx)
 	int a, ta;
 	wchar_t c, tc;
 
-	byte tp;
+	uint8_t tp;
 
 	struct monster_race *race = &r_info[0];
 
 	/* Priority array */
-	byte **mp = mem_zalloc(cave->height * sizeof(byte*));
+	uint8_t **mp = mem_zalloc(cave->height * sizeof(uint8_t*));
 	for (y = 0; y < cave->height; y++)
-		mp[y] = mem_zalloc(cave->width * sizeof(byte));
+		mp[y] = mem_zalloc(cave->width * sizeof(uint8_t));
 
 	/* Desired map height */
-	map_hgt = Term->hgt - 2;
-	map_wid = Term->wid - 2;
-
-	/* Prevent accidents */
-	if (map_hgt > cave->height) map_hgt = cave->height;
-	if (map_wid > cave->width) map_wid = cave->width;
+	get_minimap_dimensions(Term, cave, tile_width, tile_height,
+		&map_wid, &map_hgt);
 
 	/* Prevent accidents */
 	if ((map_wid < 1) || (map_hgt < 1)) {
@@ -671,16 +799,26 @@ void display_map(int *cy, int *cx)
 	/* Draw a box around the edge of the term */
 	window_make(0, 0, map_wid + 1, map_hgt + 1);
 
-	/* Analyze the actual map */
-	for (y = 0; y < cave->height; y++)
-		for (x = 0; x < cave->width; x++) {
-			row = (y * map_hgt / cave->height);
-			col = (x * map_wid / cave->width);
+	/* Clear outside that boundary. */
+	if (map_wid + 1 < Term->wid - 1) {
+		for (y = 0; y < map_hgt + 1; y++) {
+			Term_erase(map_wid + 2, y, Term->wid - map_wid - 2);
+		}
+	}
+	if (map_hgt + 1 < Term->hgt - 1) {
+		for (y = map_hgt + 2; y < Term->hgt; y++) {
+			Term_erase(0, y, Term->wid);
+		}
+	}
 
-			if (tile_width > 1)
-				col = col - (col % tile_width);
-			if (tile_height > 1)
-				row = row - (row % tile_height);
+	/* Analyze the actual map */
+	for (y = 0; y < cave->height; y++) {
+		row = (y * map_hgt) / cave->height;
+		if (tile_height > 1) row = row - (row % tile_height);
+
+		for (x = 0; x < cave->width; x++) {
+			col = (x * map_wid) / cave->width;
+			if (tile_width > 1) col = col - (col % tile_width);
 
 			/* Get the attr/char at that map location */
 			map_info(loc(x, y), &g);
@@ -701,12 +839,15 @@ void display_map(int *cy, int *cx)
 				Term_queue_char(Term, col + 1, row + 1, a, c, ta, tc);
 
 				if ((tile_width > 1) || (tile_height > 1))
-					Term_big_queue_char(Term, col + 1, row + 1, 255, -1, 0, 0);
+					Term_big_queue_char(Term, col + 1,
+						row + 1, Term->hgt - 1,
+						255, -1, 0, 0);
 
 				/* Save priority */
 				mp[row][col] = tp;
 			}
 		}
+	}
 
 	/*** Display the player ***/
 
@@ -719,15 +860,21 @@ void display_map(int *cy, int *cx)
 	if (tile_height > 1)
 		row = row - (row % tile_height);
 
+	/* Get the terrain at the player's spot. */
+	map_info(player->grid, &g);
+	g.lighting = LIGHTING_LIT;
+	grid_data_as_text(&g, &a, &c, &ta, &tc);
+
 	/* Get the "player" tile */
-	ta = monster_x_attr[race->ridx];
-	tc = monster_x_char[race->ridx];
+	a = monster_x_attr[race->ridx];
+	c = monster_x_char[race->ridx];
 
 	/* Draw the player */
-	Term_putch(col + 1, row + 1, ta, tc);
+	Term_queue_char(Term, col + 1, row + 1, a, c, ta, tc);
 
 	if ((tile_width > 1) || (tile_height > 1))
-		Term_big_putch(col + 1, row + 1, ta, tc);
+		Term_big_queue_char(Term, col + 1, row + 1, Term->hgt - 1,
+			255, -1, 0, 0);
   
 	/* Return player location */
 	if (cy != NULL) (*cy) = row + 1;
@@ -747,7 +894,7 @@ void display_map(int *cy, int *cx)
 void do_cmd_view_map(void)
 {
 	int cy, cx;
-	byte w, h;
+	uint8_t w, h;
 	const char *prompt = "Hit any key to continue";
 	if (Term->view_map_hook) {
 		(*(Term->view_map_hook))(Term);

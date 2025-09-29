@@ -57,11 +57,42 @@
  */
 
 /**
+ * Given the monster, *mon, and cave *c, set *dist to the distance to the
+ * monster's target and *grid to the target's location.  Accounts for a player
+ * decoy, if present.  Either dist or grid may be NULL if that value is not
+ * needed.
+ */
+static void monster_get_target_dist_grid(struct monster *mon, int *dist,
+										 struct loc *grid)
+{
+	if (monster_is_decoyed(mon)) {
+		struct loc decoy = cave_find_decoy(cave);
+		if (dist) {
+			*dist = distance(mon->grid, decoy);
+		}
+		if (grid) {
+			*grid = decoy;
+		}
+	} else {
+		if (dist) {
+			*dist = mon->cdis;
+		}
+		if (grid) {
+			*grid = player->grid;
+		}
+	}
+}
+
+/**
  * Check if a monster has a chance of casting a spell this turn
  */
 static bool monster_can_cast(struct monster *mon, bool innate)
 {
 	int chance = innate ? mon->race->freq_innate : mon->race->freq_spell;
+	int tdist;
+	struct loc tgrid;
+
+	monster_get_target_dist_grid(mon, &tdist, &tgrid);
 
 	/* Cannot cast spells when nice */
 	if (mflag_has(mon->mflag, MFLAG_NICE)) return false;
@@ -69,15 +100,49 @@ static bool monster_can_cast(struct monster *mon, bool innate)
 	/* Not allowed to cast spells */
 	if (!chance) return false;
 
+	/* Taunted monsters are likely just to attack */
+	if (player->timed[TMD_TAUNT]) {
+		chance /= 2;
+	}
+
+	/* Monsters at their preferred range are more likely to cast */
+	if (tdist == mon->best_range) {
+		chance *= 2;
+	}
+
 	/* Only do spells occasionally */
 	if (randint0(100) >= chance) return false;
 
 	/* Check range */
-	if (mon->cdis > z_info->max_range) return false;
+	if (tdist > z_info->max_range) return false;
 
 	/* Check path */
-	if (!projectable(cave, mon->grid, player->grid, PROJECT_NONE))
+	if (!projectable(cave, mon->grid, tgrid, PROJECT_SHORT))
 		return false;
+
+	/* If the target isn't the player, only cast if the player can witness */
+	if ((tgrid.x != player->grid.x || tgrid.y != player->grid.y) &&
+		!square_isview(cave, mon->grid) &&
+		!square_isview(cave, tgrid)) {
+		struct loc *path = mem_alloc(z_info->max_range * sizeof(*path));
+		int npath, ipath;
+
+		npath = project_path(cave, path, z_info->max_range, mon->grid,
+			tgrid, PROJECT_SHORT);
+		ipath = 0;
+		while (1) {
+			if (ipath >= npath) {
+				/* No point on path visible.  Don't cast. */
+				mem_free(path);
+				return false;
+			}
+			if (square_isview(cave, path[ipath])) {
+				break;
+			}
+			++ipath;
+		}
+		mem_free(path);
+	}
 
 	return true;
 }
@@ -88,6 +153,9 @@ static bool monster_can_cast(struct monster *mon, bool innate)
 static void remove_bad_spells(struct monster *mon, bitflag f[RSF_SIZE])
 {
 	bitflag f2[RSF_SIZE];
+	int tdist;
+
+	monster_get_target_dist_grid(mon, &tdist, NULL);
 
 	/* Take working copy of spell flags */
 	rsf_copy(f2, f);
@@ -108,15 +176,16 @@ static void remove_bad_spells(struct monster *mon, bitflag f[RSF_SIZE])
 	}
 
 	/* Don't teleport to if the player is already next to us */
-	if (mon->cdis == 1) {
+	if (tdist == 1) {
 		rsf_off(f2, RSF_TELE_TO);
+		rsf_off(f2, RSF_TELE_SELF_TO);
 	}
 
 	/* Don't use the lash effect if the player is too far away */
-	if (mon->cdis > 2) {
+	if (tdist > 2) {
 		rsf_off(f2, RSF_WHIP);
 	}
-	if (mon->cdis > 3) {
+	if (tdist > 3) {
 		rsf_off(f2, RSF_SPIT);
 	}
 
@@ -128,7 +197,7 @@ static void remove_bad_spells(struct monster *mon, bitflag f[RSF_SIZE])
 		bool know_something = false;
 
 		/* Occasionally forget player status */
-		if (one_in_(100)) {
+		if (one_in_(20)) {
 			of_wipe(mon->known_pstate.flags);
 			pf_wipe(mon->known_pstate.pflags);
 			for (i = 0; i < ELEM_MAX; i++)
@@ -212,9 +281,14 @@ static bool summon_possible(struct loc grid)
 int choose_attack_spell(bitflag *f, bool innate, bool non_innate)
 {
 	int num = 0;
-	byte spells[RSF_MAX];
+	uint8_t spells[RSF_MAX];
 
 	int i;
+
+	/* Paranoid initialization */
+	for (i = 0; i < RSF_MAX; i++) {
+		spells[i] = 0;
+	}
 
 	/* Extract spells, filtering as necessary */
 	for (i = FLAG_START, num = 0; i < RSF_MAX; i++) {
@@ -222,9 +296,6 @@ int choose_attack_spell(bitflag *f, bool innate, bool non_innate)
 		if (!non_innate && !mon_spell_is_innate(i)) continue;
 		if (rsf_has(f, i)) spells[num++] = i;
 	}
-
-	/* Paranoia */
-	if (num == 0) return 0;
 
 	/* Pick at random */
 	return (spells[randint0(num)]);
@@ -253,6 +324,38 @@ static int monster_spell_failrate(struct monster *mon)
 	}
 
 	return failrate;
+}
+
+/**
+ * Calculate the base to-hit value for a monster attack based on race only.
+ * See also: chance_of_spell_hit_base
+ *
+ * \param race The monster race
+ * \param effect The attack
+ */
+int chance_of_monster_hit_base(const struct monster_race *race,
+	const struct blow_effect *effect)
+{
+	return MAX(race->level, 1) * 3 + effect->power;
+}
+
+/**
+ * Calculate the to-hit value of a monster attack for a specific monster
+ *
+ * \param mon The monster
+ * \param effect The attack
+ */
+static int chance_of_monster_hit(const struct monster *mon,
+	const struct blow_effect *effect)
+{
+	int to_hit = chance_of_monster_hit_base(mon->race, effect);
+
+	/* Apply stun hit reduction if applicable */
+	if (mon->m_timed[MON_TMD_STUN]) {
+		to_hit = to_hit * (100 - STUN_HIT_REDUCTION) / 100;
+	}
+
+	return to_hit;
 }
 
 /**
@@ -317,12 +420,15 @@ bool make_ranged_attack(struct monster *mon)
 
 	/* Non-stupid monsters do some filtering */
 	if (!monster_is_stupid(mon)) {
+		struct loc tgrid;
+
 		/* Remove the "ineffective" spells */
 		remove_bad_spells(mon, f);
 
 		/* Check for a clean bolt shot */
+		monster_get_target_dist_grid(mon, NULL, &tgrid);
 		if (test_spells(f, RST_BOLT) &&
-			!projectable(cave, mon->grid, player->grid, PROJECT_STOP)) {
+			!projectable(cave, mon->grid, tgrid, PROJECT_STOP)) {
 			ignore_spells(f, RST_BOLT);
 		}
 
@@ -346,7 +452,7 @@ bool make_ranged_attack(struct monster *mon)
 
 	/* If we see a hidden monster try to cast a spell, become aware of it */
 	if (monster_is_camouflaged(mon))
-		become_aware(mon);
+		become_aware(cave, mon);
 
 	/* Check for spell failure (innate attacks never fail) */
 	failrate = monster_spell_failrate(mon);
@@ -356,7 +462,7 @@ bool make_ranged_attack(struct monster *mon)
 	}
 
 	/* Cast the spell. */
-	disturb(player, 1);
+	disturb(player);
 	do_mon_spell(thrown_spell, mon, seen);
 
 	/* Remember what the monster did */
@@ -416,48 +522,15 @@ static int monster_critical(random_value dice, int rlev, int dam)
 }
 
 /**
- * Determine if a monster attack against the player succeeds.
+ * Determine if an attack against the player succeeds.
  */
-bool check_hit(struct player *p, int power, int level, int accuracy)
+bool check_hit(struct player *p, int to_hit)
 {
-	int chance, ac;
-
-	/* Calculate the "attack quality" */
-	chance = (power + (level * 3));
-
-	/* Total armor */
-	ac = p->state.ac + p->state.to_a;
-
-	/* If the monster checks vs ac, the player learns ac bonuses */
+	/* If anything checks vs ac, the player learns ac bonuses */
 	equip_learn_on_defend(p);
 
-	/* Apply accuracy */
-	chance *= accuracy;
-	chance /= 100;
-
 	/* Check if the player was hit */
-	return test_hit(chance, ac, true);
-}
-
-/**
- * Determine if a monster attack against a monster succeeds.
- */
-bool check_hit_monster(struct monster *mon, int power, int level, int accuracy)
-{
-	int chance, ac;
-
-	/* Calculate the "attack quality" */
-	chance = (power + (level * 3));
-
-	/* Total armor */
-	ac = mon->race->ac;
-
-	/* Apply accuracy */
-	chance *= accuracy;
-	chance /= 100;
-
-	/* Check if the monster was hit */
-	return test_hit(chance, ac, true);
+	return test_hit(to_hit, p->state.ac + p->state.to_a);
 }
 
 /**
@@ -480,7 +553,6 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 	char m_name[80];
 	char ddesc[80];
 	bool blinked = false;
-	int accuracy = 100 - (mon->m_timed[MON_TMD_STUN] ? STUN_HIT_REDUCTION : 0);
 
 	/* Not allowed to attack */
 	if (rf_has(mon->race->flags, RF_NEVER_BLOW)) return (false);
@@ -500,9 +572,6 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 		int damage = 0;
 		bool do_cut = false;
 		bool do_stun = false;
-		int sound_msg = MSG_GENERIC;
-
-		char *act = NULL;
 
 		/* Extract the attack infomation */
 		struct blow_effect *effect = mon->race->blow[ap_cnt].effect;
@@ -518,13 +587,13 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 		/* Monster hits player */
 		assert(effect);
 		if (streq(effect->name, "NONE") ||
-			check_hit(p, effect->power, rlev, accuracy)) {
+			check_hit(p, chance_of_monster_hit(mon, effect))) {
 			melee_effect_handler_f effect_handler;
 
 			/* Always disturbing */
-			disturb(p, 1);
+			disturb(p);
 
-			/* Hack -- Apply "protection from evil" */
+			/* Apply "protection from evil" */
 			if (p->timed[TMD_PROTEVIL] > 0) {
 				/* Learn about the evil flag */
 				if (monster_is_visible(mon))
@@ -535,18 +604,15 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 					/* Message */
 					msg("%s is repelled.", m_name);
 
-					/* Hack -- Next attack */
+					/* Next attack */
 					continue;
 				}
 			}
 
-			/* Describe the attack method */
-			act = monster_blow_method_action(method, -1);
 			do_cut = method->cut;
 			do_stun = method->stun;
-			sound_msg = method->msgt;
 
-			/* Hack -- assume all attacks are obvious */
+			/* Assume all attacks are obvious */
 			obvious = true;
 
 			/* Roll dice */
@@ -555,21 +621,6 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 			/* Reduce damage when stunned */
 			if (mon->m_timed[MON_TMD_STUN]) {
 				damage = (damage * (100 - STUN_DAM_REDUCTION)) / 100;
-			}
-
-			/* Message */
-			if (act) {
-				const char *fullstop = ".";
-				if (suffix(act, "'") || suffix(act, "!")) {
-					fullstop = "";
-				}
-
-				if (OPT(p, show_damage)) {
-					msgt(sound_msg, "%s %s (%d)%s", m_name, act, damage,
-						 fullstop);
-				} else {
-					msgt(sound_msg, "%s %s%s", m_name, act, fullstop);
-				}
 			}
 
 			/* Perform the actual effect. */
@@ -586,6 +637,7 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 					obvious,
 					blinked,
 					damage,
+					m_name
 				};
 
 				effect_handler(&context);
@@ -604,7 +656,7 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 				do_stun = false;
 			}
 
-			/* Hack -- only one of cut or stun */
+			/* Only one of cut or stun */
 			if (do_cut && do_stun) {
 				/* Cancel cut */
 				if (randint0(100) < 50)
@@ -633,7 +685,10 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 				}
 
 				/* Apply the cut */
-				if (amt) (void)player_inc_timed(p, TMD_CUT, amt, true, true);
+				if (amt) {
+					(void)player_inc_timed(p, TMD_CUT, amt,
+						true, true, true);
+				}
 			}
 
 			/* Handle stun */
@@ -654,16 +709,16 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 				}
 
 				/* Apply the stun */
-				if (amt)
-					(void)player_inc_timed(p, TMD_STUN, amt, true, true);
+				if (amt) {
+					(void)player_inc_timed(p, TMD_STUN, amt,
+						true, true, true);
+				}
 			}
-
-			string_free(act);
 		} else {
 			/* Visible monster missed player, so notify if appropriate. */
 			if (monster_is_visible(mon) &&	method->miss) {
 				/* Disturbing */
-				disturb(p, 1);
+				disturb(p);
 				msg("%s misses you.", m_name);
 			}
 		}
@@ -685,7 +740,10 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 	/* Blink away */
 	if (blinked) {
 		char dice[5];
-		msg("There is a puff of smoke!");
+
+		if (!p->is_dead && square_isseen(cave, mon->grid)) {
+			add_monster_message(mon, MON_MSG_HIT_AND_RUN, true);
+		}
 		strnfmt(dice, sizeof(dice), "%d", z_info->max_sight * 2 + 5);
 		effect_simple(EF_TELEPORT, source_monster(mon->midx), dice, 0, 0, 0, 0, 0, NULL);
 	}
@@ -702,7 +760,7 @@ bool make_attack_normal(struct monster *mon, struct player *p)
 }
 
 /**
- * Attack the player via physical attacks.
+ * Attack another monster via physical attacks.
  */
 bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 {
@@ -712,7 +770,6 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 	char m_name[80];
 	char t_name[80];
 	bool blinked = false;
-	int accuracy = 100 - (mon->m_timed[MON_TMD_STUN] ? STUN_HIT_REDUCTION : 0);
 
 	/* Not allowed to attack */
 	if (rf_has(mon->race->flags, RF_NEVER_BLOW)) return (false);
@@ -729,9 +786,6 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 
 		int damage = 0;
 		bool do_stun = false;
-		int sound_msg = MSG_GENERIC;
-
-		char *act = NULL;
 
 		/* Extract the attack infomation */
 		struct blow_effect *effect = mon->race->blow[ap_cnt].effect;
@@ -744,15 +798,12 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 		/* Monster hits monster */
 		assert(effect);
 		if (streq(effect->name, "NONE") ||
-			check_hit_monster(t_mon, effect->power, rlev, accuracy)) {
+			test_hit(chance_of_monster_hit(mon, effect), t_mon->race->ac)) {
 			melee_effect_handler_f effect_handler;
 
-			/* Describe the attack method */
-			act = monster_blow_method_action(method, t_mon->midx);
 			do_stun = method->stun;
-			sound_msg = method->msgt;
 
-			/* Hack -- assume all attacks are obvious */
+			/* Assume all attacks are obvious */
 			obvious = true;
 
 			/* Roll dice */
@@ -761,16 +812,6 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 			/* Reduce damage when stunned */
 			if (mon->m_timed[MON_TMD_STUN]) {
 				damage = (damage * (100 - STUN_DAM_REDUCTION)) / 100;
-			}
-
-			/* Message */
-			if (act) {
-				const char *fullstop = ".";
-				if (suffix(act, "'") || suffix(act, "!")) {
-					fullstop = "";
-				}
-
-				msgt(sound_msg, "%s %s%s", m_name, act, fullstop);
 			}
 
 			/* Perform the actual effect. */
@@ -787,6 +828,7 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 					obvious,
 					blinked,
 					damage,
+					m_name
 				};
 
 				effect_handler(&context);
@@ -820,8 +862,6 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 				if (amt)
 					(void)mon_inc_timed(t_mon, MON_TMD_STUN, amt, 0);
 			}
-
-			string_free(act);
 		} else {
 			/* Visible monster missed monster, so notify if appropriate. */
 			if (monster_is_visible(mon) && method->miss) {
@@ -846,7 +886,10 @@ bool monster_attack_monster(struct monster *mon, struct monster *t_mon)
 	/* Blink away */
 	if (blinked) {
 		char dice[5];
-		msg("There is a puff of smoke!");
+
+		if (square_isseen(cave, mon->grid)) {
+			add_monster_message(mon, MON_MSG_HIT_AND_RUN, true);
+		}
 		strnfmt(dice, sizeof(dice), "%d", z_info->max_sight * 2 + 5);
 		effect_simple(EF_TELEPORT, source_monster(mon->midx), dice, 0, 0, 0, 0, 0, NULL);
 	}

@@ -16,7 +16,7 @@
  *    are included in all such copies.  Other copyrights may also apply.
  *
  * This file maintains a list of saved chunks of world which can be reloaded
- * at any time.  The intitial example of this is the town, which is saved 
+ * at any time.  The initial example of this is the town, which is saved
  * immediately after generation and restored when the player returns there.
  *
  * The copying routines are also useful for generating a level in pieces and
@@ -28,13 +28,14 @@
 #include "game-world.h"
 #include "generate.h"
 #include "init.h"
+#include "mon-group.h"
 #include "mon-make.h"
 #include "obj-util.h"
 #include "trap.h"
 
 #define CHUNK_LIST_INCR 10
 struct chunk **chunk_list;     /**< list of pointers to saved chunks */
-u16b chunk_list_max = 0;      /**< current max actual chunk index */
+uint16_t chunk_list_max = 0;   /**< current max actual chunk index */
 
 /**
  * Write the terrain info of a chunk to memory and return a pointer to it
@@ -52,8 +53,8 @@ struct chunk *chunk_write(struct chunk *c)
 	for (y = 0; y < new->height; y++) {
 		for (x = 0; x < new->width; x++) {
 			/* Terrain */
-			new->squares[y][x].feat = square(c, loc(x, y)).feat;
-			sqinfo_copy(square(new, loc(x, y)).info, square(c, loc(x, y)).info);
+			new->squares[y][x].feat = square(c, loc(x, y))->feat;
+			sqinfo_copy(square(new, loc(x, y))->info, square(c, loc(x, y))->info);
 		}
 	}
 
@@ -70,9 +71,7 @@ void chunk_list_add(struct chunk *c)
 	int newsize = (chunk_list_max + CHUNK_LIST_INCR) *	sizeof(struct chunk *);
 
 	/* Lengthen the list if necessary */
-	if (chunk_list_max == 0)
-		chunk_list = mem_zalloc(newsize);
-	else if ((chunk_list_max % CHUNK_LIST_INCR) == 0)
+	if ((chunk_list_max % CHUNK_LIST_INCR) == 0)
 		chunk_list = (struct chunk **) mem_realloc(chunk_list, newsize);
 
 	/* Add the new one */
@@ -84,30 +83,22 @@ void chunk_list_add(struct chunk *c)
  * \param name the name of the chunk being removed from the list
  * \return whether it was found; success means it was successfully removed
  */
-bool chunk_list_remove(char *name)
+bool chunk_list_remove(const char *name)
 {
-	int i, j;
-	int newsize = 0;
+	int i;
 
+	/* Find the match */
 	for (i = 0; i < chunk_list_max; i++) {
-		/* Find the match */
-		if (!strcmp(name, chunk_list[i]->name)) {
-			/* Copy all the succeeding ones back one */
-			for (j = i + 1; j < chunk_list_max; j++)
+		if (streq(name, chunk_list[i]->name)) {
+			/* Copy all the succeeding chunks back one */
+			int j;
+			for (j = i + 1; j < chunk_list_max; j++) {
 				chunk_list[j - 1] = chunk_list[j];
+			}
 
-			/* Destroy the last one, and shorten the list */
-			/* Don't do this for now - may be unnecessary, as chunk list never
-			 * really gets shorter */
-			//if ((chunk_list_max % CHUNK_LIST_INCR) == 0)
-			//	newsize = (chunk_list_max - CHUNK_LIST_INCR) *	
-			//		sizeof(struct chunk *);
+			/* Shorten the list and return */
 			chunk_list_max--;
-			cave_free(chunk_list[chunk_list_max]);
 			chunk_list[chunk_list_max] = NULL;
-			if (newsize)
-				chunk_list = (struct chunk **) mem_realloc(chunk_list, newsize);
-
 			return true;
 		}
 	}
@@ -120,12 +111,12 @@ bool chunk_list_remove(char *name)
  * \param name the name of the chunk being sought
  * \return the pointer to the chunk
  */
-struct chunk *chunk_find_name(char *name)
+struct chunk *chunk_find_name(const char *name)
 {
 	int i;
 
 	for (i = 0; i < chunk_list_max; i++)
-		if (!strcmp(name, chunk_list[i]->name))
+		if (streq(name, chunk_list[i]->name))
 			return chunk_list[i];
 
 	return NULL;
@@ -147,12 +138,15 @@ bool chunk_find(struct chunk *c)
 }
 
 /**
- * Find the saved chunk above or below the current player depth
+ * Find the saved chunk adjacent to a given depth.
+ *
+ * \param depth is the depth to use.
+ * \param above if true, finds the chunk immediately above the given depth.
+ * Otherwise, finds the chunk immediately below that depth.
  */
-struct chunk *chunk_find_adjacent(struct player *p, bool above)
+struct chunk *chunk_find_adjacent(int depth, bool above)
 {
-	int depth = above ? p->depth - 1 : p->depth + 1;
-	struct level *lev = level_by_depth(depth);
+	struct level *lev = level_by_depth(depth + ((above) ? -1 : 1));
 
 	if (lev) {
 		return chunk_find_name(lev->name);
@@ -164,40 +158,183 @@ struct chunk *chunk_find_adjacent(struct player *p, bool above)
 /**
  * Transform y, x coordinates by rotation, reflection and translation
  * Stolen from PosChengband
- * \param y the coordinates being transformed
- * \param x the coordinates being transformed
- * \param y0 how much the coordinates are being translated
- * \param x0 how much the coordinates are being translated
+ * \param grid the grid being transformed
+ * \param y0 how much the grid is being translated vertically
+ * \param x0 how much the grid is being translated horizontally
  * \param height height of the chunk
  * \param width width of the chunk
  * \param rotate how much to rotate, in multiples of 90 degrees clockwise
  * \param reflect whether to reflect horizontally
  */
-void symmetry_transform(int *y, int *x, int y0, int x0, int height, int width,
+void symmetry_transform(struct loc *grid, int y0, int x0, int height, int width,
 						int rotate, bool reflect)
 {
+	/* Track what the dimensions are after rotations. */
+	int rheight = height, rwidth = width;
 	int i;
 
 	/* Rotate (in multiples of 90 degrees clockwise) */
-    for (i = 0; i < rotate % 4; i++) {
-        int temp = *x;
-        *x = height - 1 - (*y);
-        *y = temp;
-    }
+	for (i = 0; i < rotate % 4; i++) {
+		int temp = grid->x;
+		grid->x = rheight - 1 - (grid->y);
+		grid->y = temp;
+		temp = rwidth;
+		rwidth = rheight;
+		rheight = temp;
+	}
 
-	/* Reflect (horizontally) */
+	/* Reflect (horizontally in the rotated system) */
 	if (reflect)
-		*x = width - 1 - *x;
+		grid->x = rwidth - 1 - grid->x;
 
 	/* Translate */
-	*y += y0;
-	*x += x0;
+	grid->y += y0;
+	grid->x += x0;
 }
 
 /**
- * Write a chunk, transformed, to a given offset in another chunk.  Note that
- * objects are copied from the old chunk and not retained there
+ * Select a random symmetry transformation subject to certain constraints.
+ * \param height Is the height of the piece to transform.
+ * \param width Is the width of the piece to transform.
+ * \param flags Is a bitwise-or of one or more of SYMTR_FLAG_NONE,
+ * SYMTR_FLAG_NO_ROT (disallow 90 and 270 degree rotation and 180 degree
+ * rotation if not accompanied by a horizontal reflection - equivalent to a
+ * vertical reflection), SYMTR_FLAG_NO_REF (forbid horizontal reflection), and
+ * SYMTR_FLAG_FORCE_REF (force horizontal reflection).  If flags
+ * includes both SYMTR_FLAG_NO_REF and SYMTR_FLAG_FORCE_REF, the former takes
+ * precedence.
+ * \param transpose_weight Is the probability weight to use for transformations
+ * that include a tranposition (90 degree rotation, 270 degree rotation,
+ * 90 degree rotation + horizontal reflection, 270 degree rotation + horizontal
+ * reflection).  Coerced to be in the range of [0, SYMTR_MAX_WEIGHT] where 0
+ * means forbidding such transformations.
+ * \param rotate *rotate is set to the number of 90 degree clockwise rotations
+ * to perform for the random transform.
+ * \param reflect *reflect is set to whether the random transform includes a
+ * horizontal reflection.
+ * \param theight If theight is not NULL, *theight is set to the height of the
+ * piece after applying the transform.
+ * \param twidth If twidth is not NULL, *twidth is set to the width of the
+ * piece after applying the transform.
+ */
+void get_random_symmetry_transform(int height, int width, int flags,
+	int transpose_weight, int *rotate, bool *reflect,
+	int *theight, int *twidth)
+{
+	/*
+	 * Without any constraints there are 8 possibilities (4 rotations times
+	 * 2 options for whether or not there is a horizontal reflection).
+	 * Use an array of 9 elements (extra element for a leading zero) to
+	 * store the cumulative probability weights.  The first four are for
+	 * rotations without reflection.  The remainder are for the rotations
+	 * with reflection.
+	 */
+	int weights[9], draw, ilow, ihigh;
+
+	transpose_weight = MIN(SYMTR_MAX_WEIGHT, MAX(0, transpose_weight));
+	weights[0] = 0;
+	if ((flags & SYMTR_FLAG_NO_REF) || !(flags & SYMTR_FLAG_FORCE_REF)) {
+		weights[1] = weights[0] + SYMTR_MAX_WEIGHT;
+	} else {
+		weights[1] = weights[0];
+	}
+	if (flags & SYMTR_FLAG_NO_ROT) {
+		weights[2] = weights[1];
+		weights[3] = weights[2];
+		weights[4] = weights[3];
+	} else if ((flags & SYMTR_FLAG_NO_REF) ||
+			!(flags & SYMTR_FLAG_FORCE_REF)) {
+		weights[2] = weights[1] + transpose_weight;
+		weights[3] = weights[2] + SYMTR_MAX_WEIGHT;
+		weights[4] = weights[3] + transpose_weight;
+	} else {
+		/* Reflection is forced so these all have zero weight. */
+		weights[2] = weights[1];
+		weights[3] = weights[2];
+		weights[4] = weights[3];
+	}
+	if (flags & SYMTR_FLAG_NO_REF) {
+		/* Reflection is forbidden so these all have zero weight. */
+		weights[5] = weights[4];
+		weights[6] = weights[5];
+		weights[7] = weights[6];
+		weights[8] = weights[7];
+	} else {
+		weights[5] = weights[4] + SYMTR_MAX_WEIGHT;
+		if (flags & SYMTR_FLAG_NO_ROT) {
+			weights[6] = weights[5];
+			/*
+			 * 180 degree rotation with a horizontal reflection is
+			 * equivalent to a vertical reflection so don't exclude
+			 * in when forbidding rotations.
+			 */
+			weights[7] = weights[6] + SYMTR_MAX_WEIGHT;
+			weights[8] = weights[7];
+		} else {
+			weights[6] = weights[5] + transpose_weight;
+			weights[7] = weights[6] + SYMTR_MAX_WEIGHT;
+			weights[8] = weights[7] + transpose_weight;
+		}
+	}
+	assert(weights[8] > 0);
+
+	draw = randint0(weights[8]);
+
+	/* Find by a binary search. */
+	ilow = 0;
+	ihigh = 8;
+	while (1) {
+		int imid;
+
+		if (ilow == ihigh - 1) {
+			break;
+		}
+		imid = (ilow + ihigh) / 2;
+		if (weights[imid] <= draw) {
+			ilow = imid;
+		} else {
+			ihigh = imid;
+		}
+	}
+
+	*rotate = ilow % 4;
+	*reflect = (ilow >= 4);
+	if (theight) {
+		*theight = (*rotate == 0 || *rotate == 2) ?  height : width;
+	}
+	if (twidth) {
+		*twidth = (*rotate == 0 || *rotate == 2) ?  width : height;
+	}
+}
+
+/**
+ * Select a weight for transforms that involve transpositions so that
+ * such transforms are forbidden if width >= 2 * height and the probability of
+ * such a transform increases as height / width up to a maximum of
+ * SYMTR_MAX_WEIGHT when the height is greater than or equal to the width.
+ * That's so transformed pieces will usually fit well into the aspect ratio
+ * of generated levels.
+ * \param height Is the height of the piece being transformed.
+ * \param width Is the width of the piece being transformed.
+ */
+int calc_default_transpose_weight(int height, int width)
+{
+	return (SYMTR_MAX_WEIGHT / 64) *
+		MAX(0, MIN(64, (128 * height) / width - 64));
+}
+
+/**
+ * Write a chunk, transformed, to a given offset in another chunk.
+ *
+ * This function assumes that it is being called at level generation, when
+ * there has been no interaction between the player and the level, monsters
+ * have not been activated, all monsters are in only one group, and objects
+ * are in their original positions.
+ *
  * \param dest the chunk where the copy is going
+ * \param p is the player; if the player is in the chunk being copied, the
+ * player's position will be updated to be the player's location in the
+ * destination
  * \param source the chunk being copied
  * \param y0 transformation parameters  - see symmetry_transform()
  * \param x0 transformation parameters  - see symmetry_transform()
@@ -205,12 +342,13 @@ void symmetry_transform(int *y, int *x, int y0, int x0, int height, int width,
  * \param reflect transformation parameters  - see symmetry_transform()
  * \return success - fails if the copy would not fit in the destination chunk
  */
-bool chunk_copy(struct chunk *dest, struct chunk *source, int y0, int x0,
-				int rotate, bool reflect)
+bool chunk_copy(struct chunk *dest, struct player *p, struct chunk *source,
+		int y0, int x0, int rotate, bool reflect)
 {
 	int i, max_group_id = 0;
-	int y, x;
+	struct loc grid;
 	int h = source->height, w = source->width;
+	int mon_skip = dest->mon_max - 1;
 
 	/* Check bounds */
 	if (rotate % 1) {
@@ -221,81 +359,120 @@ bool chunk_copy(struct chunk *dest, struct chunk *source, int y0, int x0,
 			return false;
 	}
 
-	/* Write the location stuff */
-	for (y = 0; y < h; y++) {
-		for (x = 0; x < w; x++) {
+	/* Write the location stuff (terrain, objects, traps) */
+	for (grid.y = 0; grid.y < h; grid.y++) {
+		for (grid.x = 0; grid.x < w; grid.x++) {
 			/* Work out where we're going */
-			int dest_y = y;
-			int dest_x = x;
-			symmetry_transform(&dest_y, &dest_x, y0, x0, h, w, rotate, reflect);
+			struct loc dest_grid = grid;
+			symmetry_transform(&dest_grid, y0, x0, h, w, rotate, reflect);
 
 			/* Terrain */
-			dest->squares[dest_y][dest_x].feat = square(source, loc(x, y)).feat;
-			sqinfo_copy(square(dest, loc(dest_x, dest_y)).info,
-						square(source, loc(x, y)).info);
+			dest->squares[dest_grid.y][dest_grid.x].feat =
+				square(source, grid)->feat;
+			sqinfo_copy(square(dest, dest_grid)->info,
+						square(source, grid)->info);
 
 			/* Dungeon objects */
-			if (square_object(source, loc(x, y))) {
+			if (square_object(source, grid)) {
 				struct object *obj;
-				dest->squares[dest_y][dest_x].obj = square_object(source, loc(x, y));
+				dest->squares[dest_grid.y][dest_grid.x].obj =
+					square_object(source, grid);
 
-				for (obj = square_object(source, loc(x, y)); obj; obj = obj->next) {
+				for (obj = square_object(source, grid); obj; obj = obj->next) {
 					/* Adjust position */
-					obj->grid = loc(dest_x, dest_y);
+					obj->grid = dest_grid;
 				}
-				source->squares[y][x].obj = NULL;
-			}
-
-			/* Monsters */
-			if (square(source, loc(x, y)).mon > 0) {
-				struct monster *source_mon = square_monster(source, loc(x, y));
-				struct monster *dest_mon = NULL;
-				int idx;
-
-				/* Valid monster */
-				if (!source_mon->race)
-					continue;
-
-				/* Make a monster */
-				idx = mon_pop(dest);
-
-				/* Hope this never happens */
-				if (!idx)
-					break;
-
-				/* Copy over */
-				dest_mon = cave_monster(dest, idx);
-				dest->squares[dest_y][dest_x].mon = idx;
-				memcpy(dest_mon, source_mon, sizeof(*source_mon));
-
-				/* Adjust stuff */
-				dest_mon->midx = idx;
-				dest_mon->grid = loc(dest_x, dest_y);
-
-				/* Held objects */
-				if (source_mon->held_obj)
-					dest_mon->held_obj = source_mon->held_obj;
+				source->squares[grid.y][grid.x].obj = NULL;
 			}
 
 			/* Traps */
-			if (square(source, loc(x, y)).trap) {
-				struct trap *trap = square(source, loc(x, y)).trap;
-				dest->squares[dest_y][dest_x].trap = trap;
+			if (square(source, grid)->trap) {
+				struct trap *trap = square(source, grid)->trap;
+				dest->squares[dest_grid.y][dest_grid.x].trap = trap;
 
 				/* Traverse the trap list */
 				while (trap) {
 					/* Adjust location */
-					trap->grid = loc(dest_x, dest_y);
+					trap->grid = dest_grid;
 					trap = trap->next;
 				}
-				source->squares[y][x].trap = NULL;
+				source->squares[grid.y][grid.x].trap = NULL;
 			}
 
 			/* Player */
-			if (square(source, loc(x, y)).mon == -1) 
-				dest->squares[dest_y][dest_x].mon = -1;
+			if (square(source, grid)->mon == -1) {
+				dest->squares[dest_grid.y][dest_grid.x].mon = -1;
+				p->grid = dest_grid;
+			}
 		}
 	}
+
+	/* Monsters */
+	dest->mon_max += source->mon_max;
+	dest->mon_cnt += source->mon_cnt;
+	dest->num_repro += source->num_repro;
+	for (i = 1; i < source->mon_max; i++) {
+		struct monster *source_mon = &source->monsters[i];
+		struct monster *dest_mon = &dest->monsters[mon_skip + i];
+
+		/* Valid monster */
+		if (!source_mon->race) continue;
+
+		/* Copy */
+		memcpy(dest_mon, source_mon, sizeof(struct monster));
+
+		/* Adjust monster index */
+		dest_mon->midx += mon_skip;
+
+		/* Move grid */
+		symmetry_transform(&dest_mon->grid, y0, x0, h, w, rotate, reflect);
+		dest->squares[dest_mon->grid.y][dest_mon->grid.x].mon = dest_mon->midx;
+
+		/* Held or mimicked objects */
+		if (source_mon->held_obj) {
+			struct object *obj;
+			dest_mon->held_obj = source_mon->held_obj;
+			for (obj = source_mon->held_obj; obj; obj = obj->next) {
+				obj->held_m_idx = dest_mon->midx;
+			}
+			source_mon->held_obj = NULL;
+		}
+		if (source_mon->mimicked_obj) {
+			dest_mon->mimicked_obj = source_mon->mimicked_obj;
+			dest_mon->mimicked_obj->mimicking_m_idx =
+				dest_mon->midx;
+			source_mon->mimicked_obj = NULL;
+		}
+	}
+
+	/* Find max monster group id */
+	for (i = 1; i < z_info->level_monster_max; i++) {
+		if (dest->monster_groups[i]) max_group_id = i;
+	}
+
+	/* Copy monster groups */
+	for (i = 1; i < z_info->level_monster_max - max_group_id; i++) {
+		struct monster_group *group = source->monster_groups[i];
+		struct mon_group_list_entry *entry;
+
+		/* Copy monster group list */
+		dest->monster_groups[i + max_group_id] = source->monster_groups[i];
+
+		/* Adjust monster group indices */
+		if (!group) continue;
+		entry = group->member_list;
+		group->index += max_group_id;
+		group->leader += mon_skip;
+		while (entry) {
+			int idx = entry->midx;
+			struct monster *mon = &dest->monsters[mon_skip + idx];
+			entry->midx = mon->midx;
+			assert(entry->midx == mon_skip + idx);
+			mon->group_info[0].index += max_group_id;
+			entry = entry->next;
+		}
+	}
+	monster_groups_verify(dest);
 
 	/* Copy object list */
 	dest->objects = mem_realloc(dest->objects,
@@ -305,23 +482,22 @@ bool chunk_copy(struct chunk *dest, struct chunk *source, int y0, int x0,
 		dest->objects[dest->obj_max + i] = source->objects[i];
 		if (dest->objects[dest->obj_max + i] != NULL)
 			dest->objects[dest->obj_max + i]->oidx = dest->obj_max + i;
+		source->objects[i] = NULL;
 	}
 	dest->obj_max += source->obj_max + 1;
-
-	/* Copy monster group list */
-	for (i = 0; i < z_info->level_monster_max; i++) {
-		if (dest->monster_groups[i]) max_group_id = i;
-	}
-	for (i = 0; i < z_info->level_monster_max - max_group_id; i++) {
-		dest->monster_groups[i + max_group_id] = source->monster_groups[i];
-	}
+	source->obj_max = 1;
+	object_lists_check_integrity(dest, NULL);
 
 	/* Miscellany */
-	for (i = 0; i < z_info->f_max + 1; i++)
+	for (i = 0; i < FEAT_MAX + 1; i++)
 		dest->feat_count[i] += source->feat_count[i];
 
-	dest->obj_rating += source->obj_rating;
-	dest->mon_rating += source->mon_rating;
+	if (dest->obj_rating < UINT32_MAX - source->obj_rating) {
+		dest->obj_rating += source->obj_rating;
+	} else {
+		dest->obj_rating = UINT32_MAX;
+	}
+	add_to_monster_rating(dest, source->mon_rating);
 
 	if (source->good_item)
 		dest->good_item = true;
@@ -344,7 +520,7 @@ void chunk_validate_objects(struct chunk *c) {
 			struct loc grid = loc(x, y);
 			for (obj = square_object(c, grid); obj; obj = obj->next)
 				assert(obj->tval != 0);
-			if (square(c, grid).mon > 0) {
+			if (square(c, grid)->mon > 0) {
 				struct monster *mon = square_monster(c, grid);
 				if (mon->held_obj)
 					for (obj = mon->held_obj; obj; obj = obj->next)

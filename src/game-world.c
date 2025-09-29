@@ -39,10 +39,10 @@
 #include "trap.h"
 #include "z-queue.h"
 
-u16b daycount = 0;
-u32b seed_randart;		/* Hack -- consistent random artifacts */
-u32b seed_flavor;		/* Hack -- consistent object colors */
-s32b turn;				/* Current game turn */
+uint16_t daycount = 0;
+uint32_t seed_randart;		/* Consistent random artifacts */
+uint32_t seed_flavor;		/* Consistent object colors */
+int32_t turn;			/* Current game turn */
 bool character_generated;	/* The character exists */
 bool character_dungeon;		/* The character has a dungeon */
 struct level *world;
@@ -65,7 +65,7 @@ struct level *world;
  *
  * Note that currently the fastest monster is "Fast (+30)".
  */
-const byte extract_energy[200] =
+const uint8_t extract_energy[200] =
 {
 	/* Slow */     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
 	/* Slow */     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
@@ -92,7 +92,7 @@ const byte extract_energy[200] =
 /**
  * Find a level by its name
  */
-struct level *level_by_name(char *name)
+struct level *level_by_name(const char *name)
 {
 	struct level *lev = world;
 	while (lev) {
@@ -174,10 +174,10 @@ static void recharged_notice(const struct object *obj, bool all)
 	if (!notify) return;
 
 	/* Describe (briefly) */
-	object_desc(o_name, sizeof(o_name), obj, ODESC_BASE);
+	object_desc(o_name, sizeof(o_name), obj, ODESC_BASE, player);
 
 	/* Disturb the player */
-	disturb(player, 0);
+	disturb(player);
 
 	/* Notify the player */
 	if (obj->number > 1) {
@@ -290,6 +290,13 @@ static void decrease_timeouts(void)
 
 		/* Special cases */
 		switch (i) {
+            case TMD_FOOD:
+            {
+                /* Handled separately */
+                decr = 0;
+                break;
+            }
+
 			case TMD_CUT:
 			{
 				/* Check for truly "mortal" wound */
@@ -320,7 +327,8 @@ static void decrease_timeouts(void)
 				if (!los(cave, player->grid, mon->grid)) {
 					/* Out of sight is out of mind */
 					mon_clear_timed(mon, MON_TMD_COMMAND, MON_TMD_FLG_NOTIFY);
-					player_clear_timed(player, TMD_COMMAND, true);
+					player_clear_timed(player, TMD_COMMAND,
+						true, true);
 				} else {
 					/* Keep monster timer aligned */
 					mon_dec_timed(mon, MON_TMD_COMMAND, decr, 0);
@@ -329,7 +337,7 @@ static void decrease_timeouts(void)
 			}
 		}
 		/* Decrement the effect */
-		player_dec_timed(player, i, decr, false);
+		player_dec_timed(player, i, decr, false, true);
 	}
 
 	/* Curse effects always decrement by 1 */
@@ -381,8 +389,8 @@ static void make_noise(struct player *p)
 	struct loc next = p->grid;
 	int y, x, d;
 	int noise = 0;
+	int noise_increment = p->timed[TMD_COVERTRACKS] ? 4 : 1;
     struct queue *queue = q_new(cave->height * cave->width);
-	struct loc decoy = cave_find_decoy(cave);
 
 	/* Set all the grids to silence */
 	for (y = 1; y < cave->height - 1; y++) {
@@ -391,15 +399,10 @@ static void make_noise(struct player *p)
 		}
 	}
 
-	/* If there's a decoy, use that instead of the player */
-	if (!loc_is_zero(decoy)) {
-		next = decoy;
-	}
-
 	/* Player makes noise */
 	cave->noise.grids[next.y][next.x] = noise;
 	q_push_int(queue, grid_to_i(next, cave->width));
-	noise++;
+	noise += noise_increment;
 
 	/* Propagate noise */
 	while (q_len(queue) > 0) {
@@ -409,7 +412,7 @@ static void make_noise(struct player *p)
 		/* If we've reached the current noise level, put it back and step */
 		if (cave->noise.grids[next.y][next.x] == noise) {
 			q_push_int(queue, grid_to_i(next, cave->width));
-			noise++;
+			noise += noise_increment;
 			continue;
 		}
 
@@ -427,7 +430,7 @@ static void make_noise(struct player *p)
 			if (cave->noise.grids[grid.y][grid.x] != 0) continue;
 
 			/* Skip the player grid */
-			if (loc_eq(player->grid, grid)) continue;
+			if (loc_eq(p->grid, grid)) continue;
 
 			/* Save the noise */
 			cave->noise.grids[grid.y][grid.x] = noise;
@@ -475,7 +478,7 @@ static void update_scent(void)
 	}
 
 	/* Scentless player */
-	if (player->timed[TMD_SCENTLESS]) return;
+	if (player->timed[TMD_COVERTRACKS]) return;
 
 	/* Lay down new scent around the player */
 	for (y = 0; y < 5; y++) {
@@ -532,11 +535,11 @@ void process_world(struct chunk *c)
 
 	/* Compact the monster list if we're approaching the limit */
 	if (cave_monster_count(c) + 32 > z_info->level_monster_max)
-		compact_monsters(64);
+		compact_monsters(c, 64);
 
 	/* Too many holes in the monster list - compress */
 	if (cave_monster_count(c) + 32 < cave_monster_max(c))
-		compact_monsters(0);
+		compact_monsters(c, 0);
 
 	/*** Check the Time ***/
 
@@ -544,23 +547,20 @@ void process_world(struct chunk *c)
 	if (!(turn % ((10L * z_info->day_length) / 4)))
 		play_ambient_sound();
 
-	/*** Handle stores and sunshine ***/
-
+	/* Handle stores and sunshine */
 	if (!player->depth) {
 		/* Daybreak/Nighfall in town */
 		if (!(turn % ((10L * z_info->day_length) / 2))) {
-			bool dawn;
-
 			/* Check for dawn */
-			dawn = (!(turn % (10L * z_info->day_length)));
+			bool dawn = (!(turn % (10L * z_info->day_length)));
 
-			/* Day breaks */
-			if (dawn)
+			if (dawn) {
+				/* Day breaks */
 				msg("The sun has risen.");
-
-			/* Night falls */
-			else
+			} else {
+				/* Night falls */
 				msg("The sun has fallen.");
+			}
 
 			/* Illuminate */
 			cave_illuminate(c, dawn);
@@ -578,15 +578,21 @@ void process_world(struct chunk *c)
 	}
 
 	/* Check for creature generation */
-	if (one_in_(z_info->alloc_monster_chance))
-		(void)pick_and_place_distant_monster(c, player, z_info->max_sight + 5,
-											 true, player->depth);
+	if (one_in_(z_info->alloc_monster_chance)) {
+		(void)pick_and_place_distant_monster(c, player->grid,
+			z_info->max_sight + 5, true, player->depth);
+	}
 
 	/*** Damage (or healing) over Time ***/
 
 	/* Take damage from poison */
-	if (player->timed[TMD_POISONED])
-		take_hit(player, 1, "poison");
+	if (player->timed[TMD_POISONED]) {
+		take_hit(player, player_apply_damage_reduction(player, 1),
+			"poison");
+		if (player->is_dead) {
+			return;
+		}
+	}
 
 	/* Take damage from cuts, worse from serious cuts */
 	if (player->timed[TMD_CUT]) {
@@ -603,7 +609,11 @@ void process_world(struct chunk *c)
 		}
 
 		/* Take damage */
-		take_hit(player, i, "a fatal wound");
+		take_hit(player, player_apply_damage_reduction(player, i),
+			"a fatal wound");
+		if (player->is_dead) {
+			return;
+		}
 	}
 
 	/* Side effects of diminishing bloodlust */
@@ -611,6 +621,9 @@ void process_world(struct chunk *c)
 		player_over_exert(player, PY_EXERT_HP | PY_EXERT_CUT | PY_EXERT_SLOW,
 						  MAX(0, 10 - player->timed[TMD_BLOODLUST]),
 						  player->chp / 10);
+		if (player->is_dead) {
+			return;
+		}
 	}
 
 	/* Timed healing */
@@ -639,33 +652,43 @@ void process_world(struct chunk *c)
 
 	/*** Check the Food, and Regenerate ***/
 
-	/* Digest normally */
-	if (!(turn % 100)) {
-		/* Basic digestion rate based on speed */
-		i = turn_energy(player->state.speed) * 2;
+	/* Digest */
+	if (!player_timed_grade_eq(player, TMD_FOOD, "Full")) {
+		/* Digest normally */
+		if (!(turn % 100)) {
+			/* Basic digestion rate based on speed */
+			i = turn_energy(player->state.speed);
 
-		/* Regeneration takes more food */
-		if (player_of_has(player, OF_REGEN)) i += 30;
+			/* Adjust for food value */
+			i = (i * 100) / z_info->food_value;
 
-		/* Slow digestion takes less food */
-		if (player_of_has(player, OF_SLOW_DIGEST)) i /= 5;
+			/* Regeneration takes more food */
+			if (player_of_has(player, OF_REGEN)) i *= 2;
 
-		/* Minimal digestion */
-		if (i < 1) i = 1;
+			/* Slow digestion takes less food */
+			if (player_of_has(player, OF_SLOW_DIGEST)) i /= 2;
 
-		/* Digest some food */
-		player_dec_timed(player, TMD_FOOD, i, false);
-	}
+			/* Minimal digestion */
+			if (i < 1) i = 1;
 
-	/* Gorged */
-	if (player_timed_grade_eq(player, TMD_FOOD, "Gorged") && one_in_(5)) {
-		/* Up it comes... */
-		msg("You vomit.");
-		disturb(player, 1);
+			/* Digest some food */
+			player_dec_timed(player, TMD_FOOD, i, false, true);
+		}
 
-		/* Lose a random amount */
-		(void) player_dec_timed(player, TMD_FOOD,
-								randint1(player->timed[TMD_FOOD] - 100), false);
+		/* Fast metabolism */
+		if (player->timed[TMD_HEAL]) {
+			player_dec_timed(player, TMD_FOOD,
+				8 * z_info->food_value, false, true);
+			if (player->timed[TMD_FOOD] < PY_FOOD_HUNGRY) {
+				player_set_timed(player, TMD_HEAL, 0, true,
+					true);
+			}
+		}
+	} else {
+		/* Digest quickly when gorged */
+		player_dec_timed(player, TMD_FOOD, 5000 / z_info->food_value,
+			false, true);
+		player->upkeep->update |= PU_BONUS;
 	}
 
 	/* Faint or starving */
@@ -674,27 +697,30 @@ void process_world(struct chunk *c)
 		if (!player->timed[TMD_PARALYZED] && one_in_(10)) {
 			/* Message */
 			msg("You faint from the lack of food.");
-			disturb(player, 1);
+			disturb(player);
 
 			/* Faint (bypass free action) */
-			(void)player_inc_timed(player, TMD_PARALYZED, 1 + randint0(5),
-								   true, false);
+			(void)player_inc_timed(player, TMD_PARALYZED,
+				1 + randint0(5), true, true, false);
 		}
 	} else if (player_timed_grade_eq(player, TMD_FOOD, "Starving")) {
 		/* Calculate damage */
 		i = (PY_FOOD_STARVE - player->timed[TMD_FOOD]) / 10;
 
 		/* Take damage */
-		take_hit(player, i, "starvation");
+		take_hit(player, player_apply_damage_reduction(player, i),
+			"starvation");
+		if (player->is_dead) {
+			return;
+		}
 	}
 
 	/* Regenerate Hit Points if needed */
 	if (player->chp < player->mhp)
 		player_regen_hp(player);
 
-	/* Regenerate mana if needed */
-	if (player->csp < player->msp)
-		player_regen_mana(player);
+	/* Regenerate or lose mana */
+	player_regen_mana(player);
 
 	/* Timeout various things */
 	decrease_timeouts();
@@ -702,9 +728,11 @@ void process_world(struct chunk *c)
 	/* Process light */
 	player_update_light(player);
 
-	/* Update noise and scent */
-	make_noise(player);
-	update_scent();
+	/* Update noise and scent (not if resting) */
+	if (!player_is_resting(player)) {
+		make_noise(player);
+		update_scent();
+	}
 
 
 	/*** Process Inventory ***/
@@ -712,7 +740,7 @@ void process_world(struct chunk *c)
 	/* Handle experience draining */
 	if (player_of_has(player, OF_DRAIN_EXP)) {
 		if ((player->exp > 0) && one_in_(10)) {
-			s32b d = damroll(10, 6) +
+			int32_t d = damroll(10, 6) +
 				(player->exp / 100) * z_info->life_drain_percent;
 			player_exp_lose(player, d / 10, false);
 		}
@@ -731,14 +759,20 @@ void process_world(struct chunk *c)
 	for (y = 0; y < c->height; y++) {
 		for (x = 0; x < c->width; x++) {
 			struct loc grid = loc(x, y);
-			struct trap *trap = square(c, grid).trap;
+			struct trap *trap = square(c, grid)->trap;
+			bool changed = false;
 			while (trap) {
 				if (trap->timeout) {
 					trap->timeout--;
-					if (!trap->timeout)
-						square_light_spot(c, grid);
+					if (!trap->timeout) {
+						changed = true;
+					}
 				}
 				trap = trap->next;
+			}
+			if (changed && square_isseen(c, grid)) {
+				square_memorize_traps(c, grid);
+				square_light_spot(c, grid);
 			}
 		}
 	}
@@ -746,15 +780,19 @@ void process_world(struct chunk *c)
 
 	/*** Involuntary Movement ***/
 
-	/* Delayed Word-of-Recall */
-	if (player->word_recall) {
+	/* Delayed Word-of-Recall; suspended in arenas */
+	if (player->word_recall && !player->upkeep->arena_level) {
 		/* Count down towards recall */
 		player->word_recall--;
 
 		/* Activate the recall */
 		if (!player->word_recall) {
-			/* Disturbing! */
-			disturb(player, 0);
+			/*
+			 * Disturbing!  Also, flush the command queue to avoid
+			 * losing an action on the new level
+			 */
+			disturb(player);
+			cmdq_flush();
 
 			/* Determine the level */
 			if (player->depth) {
@@ -775,14 +813,11 @@ void process_world(struct chunk *c)
 
 		/* Activate the descent */
 		if (player->deep_descent == 0) {
-			int target_increment;
-			int target_depth = player->max_depth;
-
 			/* Calculate target depth */
-			target_increment = (4 / z_info->stair_skip) + 1;
-			target_depth = dungeon_get_next_level(player->max_depth, target_increment);
-
-			disturb(player, 0);
+			int target_increment = (4 / z_info->stair_skip) + 1;
+			int target_depth = dungeon_get_next_level(player,
+				player->max_depth, target_increment);
+			disturb(player);
 
 			/* Determine the level */
 			if (target_depth > player->depth) {
@@ -813,12 +848,24 @@ static void process_player_cleanup(void)
 		/* Increment the total energy counter */
 		player->total_energy += player->upkeep->energy_use;
 
+		/*
+		 * Since the player used energy, the command wasn't
+		 * canceled.  Therefore allow the bloodlust check on
+		 * the player's next command unless this was a background
+		 * command and the last player-issued command passed the
+		 * bloodlust check but was canceled (skip_cmd_coercion is two
+		 * in that case).
+		 */
+		if (player->skip_cmd_coercion) {
+			--player->skip_cmd_coercion;
+		}
+
 		/* Player can be damaged by terrain */
 		player_take_terrain_damage(player, player->grid);
 
 		/* Do nothing else if player has auto-dropped stuff */
 		if (!player->upkeep->dropping) {
-			/* Hack -- constant hallucination */
+			/* Constant hallucination */
 			if (player->timed[TMD_IMAGE])
 				player->upkeep->redraw |= (PR_MAP);
 
@@ -844,6 +891,14 @@ static void process_player_cleanup(void)
 				}
 			}
 		}
+	} else if (player->skip_cmd_coercion > 1) {
+		/*
+		 * The last command was a backround command executing while
+		 * skipping the bloodlust check on the player's next command.
+		 * Set skip_cmd_coercion back to one in preparation for the
+		 * player's next turn.
+		 */
+		player->skip_cmd_coercion = 1;
 	}
 
 	/* Clear SHOW flag and player drop status */
@@ -888,7 +943,7 @@ void process_player(void)
 		handle_stuff(player);
 		event_signal(EVENT_REFRESH);
 
-		/* Hack -- Pack Overflow */
+		/* Pack Overflow */
 		pack_overflow(NULL);
 
 		/* Assume free turn */
@@ -904,7 +959,7 @@ void process_player(void)
 				!player->timed[TMD_PARALYZED] &&
 				!player->timed[TMD_TERROR] &&
 				!player->timed[TMD_AFRAID])
-				effect_simple(EF_DETECT_GOLD, source_none(), "0", 0, 0, 0, 3, 3, NULL);
+				effect_simple(EF_DETECT_ORE, source_none(), "0", 0, 0, 0, 3, 3, NULL);
 		}
 
 		/* Paralyzed or Knocked Out player gets no turn */
@@ -926,7 +981,7 @@ void process_player(void)
 		}
 
 		/* Get a command from the queue if there is one */
-		if (!cmdq_pop(CMD_GAME))
+		if (!cmdq_pop(CTX_GAME))
 			break;
 
 		if (!player->upkeep->playing)
@@ -959,7 +1014,7 @@ void on_new_level(void)
 	}
 
 	/* Disturb */
-	disturb(player, 1);
+	disturb(player);
 
 	/* Track maximum player level */
 	if (player->max_lev < player->lev)
@@ -993,6 +1048,9 @@ void on_new_level(void)
 	if (player->depth)
 		display_feeling(false);
 
+	/* Check the surroundings */
+	search(player);
+
 	/* Give player minimum energy to start a new level, but do not reduce
 	 * higher value from savefile for level in progress */
 	if (player->energy < z_info->move_energy)
@@ -1004,7 +1062,10 @@ void on_new_level(void)
  */
 static void on_leave_level(void) {
 	/* Cancel any command */
-	player_clear_timed(player, TMD_COMMAND, false);
+	player_clear_timed(player, TMD_COMMAND, false, false);
+
+	/* Don't allow command repeat if moved away from item used. */
+	cmd_disable_repeat_floor_item();
 
 	/* Any pending processing */
 	notice_stuff(player);
@@ -1044,7 +1105,7 @@ void run_game_loop(void)
 		event_signal(EVENT_ANIMATE);
 		
 		/* Process monster with even more energy first */
-		process_monsters(cave, player->energy + 1);
+		process_monsters(player->energy + 1);
 		if (player->is_dead || !player->upkeep->playing ||
 			player->upkeep->generate_level)
 			break;
@@ -1073,7 +1134,7 @@ void run_game_loop(void)
 			return;
 		else if (!player->upkeep->generate_level) {
 			/* Process the rest of the monsters */
-			process_monsters(cave, 0);
+			process_monsters(0);
 
 			/* Mark all monsters as ready to act when they have the energy */
 			reset_monsters();
@@ -1114,7 +1175,7 @@ void run_game_loop(void)
 				}
 			}
 
-			prepare_next_level(&cave, player);
+			prepare_next_level(player);
 			on_new_level();
 
 			player->upkeep->generate_level = false;
@@ -1122,7 +1183,9 @@ void run_game_loop(void)
 			/* Kill arena monster */
 			if (arena) {
 				player->upkeep->arena_level = false;
-				kill_arena_monster(player->upkeep->health_who);
+				if (player->upkeep->health_who) {
+					kill_arena_monster(player->upkeep->health_who);
+				}
 			}
 		}
 
@@ -1133,7 +1196,7 @@ void run_game_loop(void)
 			event_signal(EVENT_ANIMATE);
 
 			/* Process monster with even more energy first */
-			process_monsters(cave, player->energy + 1);
+			process_monsters(player->energy + 1);
 			if (player->is_dead || !player->upkeep->playing ||
 				player->upkeep->generate_level)
 				break;

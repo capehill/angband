@@ -40,30 +40,6 @@ enum
 	MFLAG_MAX
 };
 
-
-/**
- * The monster flag types
- */
-enum monster_flag_type {
-	RFT_NONE = 0,	/* placeholder flag */
-	RFT_OBV,		/* an obvious property */
-	RFT_DISP,		/* for display purposes */
-	RFT_GEN,		/* related to generation */
-	RFT_NOTE,		/* especially noteworthy for lore */
-	RFT_BEHAV,		/* behaviour-related */
-	RFT_DROP,		/* drop details */
-	RFT_DET,		/* detection properties */
-	RFT_ALTER,		/* environment shaping */
-	RFT_RACE_N,		/* types of monster (noun) */
-	RFT_RACE_A,		/* types of monster (adjective) */
-	RFT_VULN,		/* vulnerabilities with no corresponding resistance */
-	RFT_VULN_I,		/* vulnerabilities with a corresponding resistance */
-	RFT_RES,		/* elemental resistances */
-	RFT_PROT,		/* immunity from status effects */
-
-	RFT_MAX
-};
-
 #define MFLAG_SIZE                FLAG_SIZE(MFLAG_MAX)
 
 #define mflag_has(f, flag)        flag_has_dbg(f, MFLAG_SIZE, flag, #f, #flag)
@@ -92,6 +68,30 @@ enum
 	#include "list-mon-race-flags.h"
 	#undef RF
 	RF_MAX
+};
+
+
+/**
+ * Categories for the monster race flags
+ */
+enum monster_flag_type {
+	RFT_NONE = 0,	/* placeholder flag */
+	RFT_OBV,		/* an obvious property */
+	RFT_DISP,		/* for display purposes */
+	RFT_GEN,		/* related to generation */
+	RFT_NOTE,		/* especially noteworthy for lore */
+	RFT_BEHAV,		/* behaviour-related */
+	RFT_DROP,		/* drop details */
+	RFT_DET,		/* detection properties */
+	RFT_ALTER,		/* environment shaping */
+	RFT_RACE_N,		/* types of monster (noun) */
+	RFT_RACE_A,		/* types of monster (adjective) */
+	RFT_VULN,		/* vulnerabilities with no corresponding resistance */
+	RFT_VULN_I,		/* vulnerabilities with a corresponding resistance */
+	RFT_RES,		/* elemental resistances */
+	RFT_PROT,		/* immunity from status effects */
+
+	RFT_MAX
 };
 
 #define RF_SIZE                FLAG_SIZE(RF_MAX)
@@ -135,8 +135,8 @@ enum
  * The monster flag structure
  */
 struct monster_flag {
-	u16b index;				/* the RF_ index */
-	u16b type;				/* RFT_ category */
+	uint16_t index;			/* the RF_ index */
+	uint16_t type;			/* RFT_ category */
 	const char *desc;		/* lore description */
 };
 
@@ -171,9 +171,9 @@ struct monster_spell_level {
 
 	int power;				/* Spell power at which this level starts */
 	char *lore_desc;		/* Description of the attack used in lore text */
-	byte lore_attr;			/* Color of the attack used in lore text */
-	byte lore_attr_resist;	/* Color used in lore text when resisted */
-	byte lore_attr_immune;	/* Color used in lore text when resisted strongly */
+	uint8_t lore_attr;		/* Color of the attack used in lore text */
+	uint8_t lore_attr_resist;	/* Color used in lore text when resisted */
+	uint8_t lore_attr_immune;	/* Color used in lore text when resisted strongly */
 	char *message;			/* Description of the attack */
 	char *blind_message;	/* Description of the attack if unseen */
 	char *miss_message;		/* Description of a missed attack */
@@ -186,11 +186,31 @@ struct monster_spell_level {
 struct monster_spell {
 	struct monster_spell *next;
 
-	u16b index;				/* Numerical index (RSF_FOO) */
+	uint16_t index;				/* Numerical index (RSF_FOO) */
 	int msgt;				/* Flag for message colouring */
 	int hit;				/* To-hit level for the attack */
 	struct effect *effect;	/* Effect(s) of the spell */
 	struct monster_spell_level *level;	/* Spell power dependent details */
+};
+
+
+/**
+ * Alternate spell message for a particular monster.
+ */
+enum monster_altmsg_type {
+	MON_ALTMSG_SEEN,
+	MON_ALTMSG_UNSEEN,
+	MON_ALTMSG_MISS
+};
+struct monster_altmsg {
+	struct monster_altmsg *next;
+
+	char *message;				/* The alternate text;
+							"" for no message */
+	enum monster_altmsg_type msg_type;	/* Which of the spell's messages
+							to override */
+	uint16_t index;				/* The spell's numerical
+							index (RSF_FOO) */
 };
 
 
@@ -200,15 +220,11 @@ struct monster_spell {
 struct monster_base {
 	struct monster_base *next;
 
-	char *name;						/* Name for recognition in code */
-	char *text;						/* In-game name */
-
+	char *name;			/* Name for recognition in code */
+	char *text;			/* In-game name */
 	bitflag flags[RF_SIZE];         /* Flags */
-	bitflag spell_flags[RSF_SIZE];  /* Spell flags */
-	
-	wchar_t d_char;					/* Default monster character */
-
-	struct monster_pain *pain;				/* Pain messages */
+	wchar_t d_char;			/* Default monster character */
+	struct monster_pain *pain;	/* Pain messages */
 };
 
 
@@ -339,18 +355,18 @@ struct monster_race {
 	int level;				/* Level of creature */
 	int rarity;				/* Rarity of creature */
 
-	byte d_attr;			/* Default monster attribute */
+	uint8_t d_attr;			/* Default monster attribute */
 	wchar_t d_char;			/* Default monster character */
 
-	byte max_num;			/* Maximum population allowed per level */
+	uint8_t max_num;		/* Maximum population allowed per level */
 	int cur_num;			/* Monster population on current level */
 
+	struct monster_altmsg *spell_msgs;
 	struct monster_drop *drops;
-    
-    struct monster_friends *friends;
-	
-    struct monster_friends_base *friends_base;
-    
+
+	struct monster_friends *friends;
+	struct monster_friends_base *friends_base;
+
 	struct monster_mimic *mimic_kinds;
 
 	struct monster_shape *shapes;
@@ -367,38 +383,38 @@ struct monster_race {
  * of objects (if any) being carried by the monster (see above).
  */
 struct monster {
-	struct monster_race *race;			/* Monster's (current) race */
+	struct monster_race *race;		/* Monster's (current) race */
 	struct monster_race *original_race;	/* Changed monster's original race */
 	int midx;
 
-	struct loc grid;					/* Location on map */
+	struct loc grid;			/* Location on map */
 
-	s16b hp;							/* Current Hit points */
-	s16b maxhp;							/* Max Hit points */
+	int16_t hp;				/* Current Hit points */
+	int16_t maxhp;				/* Max Hit points */
 
-	s16b m_timed[MON_TMD_MAX];			/* Timed monster status effects */
+	int16_t m_timed[MON_TMD_MAX];		/* Timed monster status effects */
 
-	byte mspeed;						/* Monster "speed" */
-	byte energy;						/* Monster "energy" */
+	uint8_t mspeed;				/* Monster "speed" */
+	uint8_t energy;				/* Monster "energy" */
 
-	byte cdis;							/* Current dis from player */
+	uint8_t cdis;				/* Current dis from player */
 
-	bitflag mflag[MFLAG_SIZE];			/* Temporary monster flags */
+	bitflag mflag[MFLAG_SIZE];		/* Temporary monster flags */
 
 	struct object *mimicked_obj;		/* Object this monster is mimicking */
-	struct object *held_obj;			/* Object being held (if any) */
+	struct object *held_obj;		/* Object being held (if any) */
 
-	byte attr;  						/* attr last used for drawing monster */
+	uint8_t attr;  				/* attr last used for drawing monster */
 
 	struct player_state known_pstate;	/* Known player state */
 
-    struct target target;				/* Monster target */
+	struct target target;			/* Monster target */
 
 	struct monster_group_info group_info[GROUP_MAX];/* Monster group details */
-	struct heatmap heatmap;				/* Monster location heatmap */
+	struct heatmap heatmap;			/* Monster location heatmap */
 
-    byte min_range;						/* What is the closest we want to be? */
-    byte best_range;					/* How close do we want to be? */
+	uint8_t min_range;			/* What is the closest we want to be? */
+	uint8_t best_range;			/* How close do we want to be? */
 };
 
 /** Variables **/

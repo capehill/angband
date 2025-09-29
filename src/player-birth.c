@@ -95,14 +95,14 @@ struct birther
 	const struct player_race *race;
 	const struct player_class *class;
 
-	s16b age;
-	s16b wt;
-	s16b ht;
-	s16b sc;
+	int16_t age;
+	int16_t wt;
+	int16_t ht;
+	int16_t sc;
 
-	s32b au;
+	int32_t au;
 
-	s16b stat[STAT_MAX];
+	int16_t stat[STAT_MAX];
 
 	char *history;
 	char name[PLAYER_NAME_LEN];
@@ -117,6 +117,7 @@ struct birther
 
 static int stats[STAT_MAX];
 static int points_spent[STAT_MAX];
+static int points_inc[STAT_MAX];
 static int points_left;
 
 static bool quickstart_allowed;
@@ -158,6 +159,9 @@ static void save_roller_data(birther *tosave)
 	for (i = 0; i < STAT_MAX; i++)
 		tosave->stat[i] = player->stat_birth[i];
 
+	if (tosave->history) {
+		string_free(tosave->history);
+	}
 	tosave->history = player->history;
 	player->history = NULL;
 	my_strcpy(tosave->name, player->full_name, sizeof(tosave->name));
@@ -190,8 +194,8 @@ static void load_roller_data(birther *saved, birther *prev_player)
 	player->race     = saved->race;
 	player->class    = saved->class;
 	player->age      = saved->age;
-	player->wt       = player->wt_birth = player->wt;
-	player->ht       = player->ht_birth = player->ht;
+	player->wt       = player->wt_birth = saved->wt;
+	player->ht       = player->ht_birth = saved->ht;
 	player->au_birth = saved->au;
 	player->au       = z_info->start_gold;
 
@@ -203,12 +207,19 @@ static void load_roller_data(birther *saved, birther *prev_player)
 	}
 
 	/* Load previous history */
-	player->history = saved->history;
+	if (player->history) {
+		string_free(player->history);
+	}
+	player->history = string_make(saved->history);
 	my_strcpy(player->full_name, saved->name, sizeof(player->full_name));
 
 	/* Save the current data if the caller is interested in it. */
-	if (prev_player)
+	if (prev_player) {
+		if (prev_player->history) {
+			string_free(prev_player->history);
+		}
 		*prev_player = temp;
+	}
 }
 
 
@@ -376,9 +387,9 @@ static void player_embody(struct player *p)
 /**
  * Get the player's starting money
  */
-static void get_money(void)
+static void get_money(struct player *p)
 {
-	player->au = player->au_birth = z_info->start_gold;
+	p->au = p->au_birth = z_info->start_gold;
 }
 
 void player_init(struct player *p)
@@ -386,30 +397,15 @@ void player_init(struct player *p)
 	int i;
 	struct player_options opts_save = p->opts;
 
-	if (p->upkeep) {
-		if (p->upkeep->inven)
-			mem_free(p->upkeep->inven);
-		if (p->upkeep->quiver)
-			mem_free(p->upkeep->quiver);
-		mem_free(p->upkeep);
-	}
-	if (p->timed)
-		mem_free(p->timed);
-	if (p->obj_k) {
-		mem_free(p->obj_k->brands);
-		mem_free(p->obj_k->slays);
-		mem_free(p->obj_k->curses);
-		mem_free(p->obj_k);
-	}
+	player_cleanup_members(p);
 
 	/* Wipe the player */
 	memset(p, 0, sizeof(struct player));
 
 	/* Start with no artifacts made yet */
 	for (i = 0; z_info && i < z_info->a_max; i++) {
-		struct artifact *art = &a_info[i];
-		art->created = false;
-		art->seen = false;
+		mark_artifact_created(&a_info[i], false);
+		mark_artifact_seen(&a_info[i], false);
 	}
 
 	/* Start with no quests */
@@ -423,12 +419,13 @@ void player_init(struct player *p)
 
 	for (i = 1; z_info && i < z_info->r_max; i++) {
 		struct monster_race *race = &r_info[i];
-		struct monster_lore *lore = &l_list[i];
+		struct monster_lore *lore = get_lore(race);
 		race->cur_num = 0;
 		race->max_num = 100;
 		if (rf_has(race->flags, RF_UNIQUE))
 			race->max_num = 1;
 		lore->pkills = 0;
+		lore->thefts = 0;
 	}
 
 	p->upkeep = mem_zalloc(sizeof(struct player_upkeep));
@@ -436,7 +433,7 @@ void player_init(struct player *p)
 								  sizeof(struct object *));
 	p->upkeep->quiver = mem_zalloc(z_info->quiver_size *
 								   sizeof(struct object *));
-	p->timed = mem_zalloc(TMD_MAX * sizeof(s16b));
+	p->timed = mem_zalloc(TMD_MAX * sizeof(int16_t));
 	p->obj_k = mem_zalloc(sizeof(struct object));
 	p->obj_k->brands = mem_zalloc(z_info->brand_max * sizeof(bool));
 	p->obj_k->slays = mem_zalloc(z_info->slay_max * sizeof(bool));
@@ -503,10 +500,79 @@ void wield_all(struct player *p)
 
 	/* Now add the unwielded split objects to the gear */
 	if (new_pile) {
-		pile_insert_end(&player->gear, new_pile);
-		pile_insert_end(&player->gear_k, new_known_pile);
+		pile_insert_end(&p->gear, new_pile);
+		pile_insert_end(&p->gear_k, new_known_pile);
 	}
 	return;
+}
+
+
+/**
+ * Initialize the global player as if the full birth process happened.
+ * \param nrace Is the name of the race to use.  It may be NULL to use *races.
+ * \param nclass Is the name of the class to use.  It may be NULL to use
+ * *classes.
+ * \param nplayer Is the name to use for the player.  It may be NULL.
+ * \return The return value will be true if the full birth process will be
+ * successful.  It will be false if the process failed.  One reason for that
+ * would be that the requested race or class could not be found.
+ * Requires a prior call to init_angband().  Intended for use by test cases
+ * or stub front ends that need a fully initialized player.
+ */
+bool player_make_simple(const char *nrace, const char *nclass,
+	const char* nplayer)
+{
+	int ir = 0, ic = 0;
+
+	if (nrace) {
+		const struct player_race *rc = races;
+		int nr = 0;
+
+		while (1) {
+			if (!rc) return false;
+			if (streq(rc->name, nrace)) break;
+			rc = rc->next;
+			++ir;
+			++nr;
+		}
+		while (rc) {
+			rc = rc->next;
+			++nr;
+		}
+		ir = nr - ir  - 1;
+	}
+
+	if (nclass) {
+		const struct player_class *cc = classes;
+		int nc = 0;
+
+		while (1) {
+			if (!cc) return false;
+			if (streq(cc->name, nclass)) break;
+			cc = cc->next;
+			++ic;
+			++nc;
+		}
+		while (cc) {
+			cc = cc->next;
+			++nc;
+		}
+		ic = nc - ic - 1;
+	}
+
+	cmdq_push(CMD_BIRTH_INIT);
+	cmdq_push(CMD_BIRTH_RESET);
+	cmdq_push(CMD_CHOOSE_RACE);
+	cmd_set_arg_choice(cmdq_peek(), "choice", ir);
+	cmdq_push(CMD_CHOOSE_CLASS);
+	cmd_set_arg_choice(cmdq_peek(), "choice", ic);
+	cmdq_push(CMD_NAME_CHOICE);
+	cmd_set_arg_string(cmdq_peek(), "name",
+		(nplayer == NULL) ? "Simple" : nplayer);
+	cmdq_push(CMD_ACCEPT_CHARACTER);
+	cmdq_execute(CTX_BIRTH);
+
+	return true;
 }
 
 
@@ -532,6 +598,8 @@ static void player_outfit(struct player *p)
 		struct obj_property *prop = lookup_obj_property(OBJ_PROPERTY_FLAG, i);
 		if (prop->subtype == OFT_LIGHT) of_on(p->obj_k->flags, i);
 		if (prop->subtype == OFT_DIG) of_on(p->obj_k->flags, i);
+		if (prop->subtype == OFT_THROW) of_on(p->obj_k->flags, i);
+		if (prop->subtype == OFT_CURSE_ONLY) of_on(p->obj_k->flags, i);
 	}
 
 	/* Give the player starting equipment */
@@ -548,6 +616,26 @@ static void player_outfit(struct player *p)
 			num = 1;
 		}
 
+		/* Exclude if configured to do so based on birth options. */
+		if (si->eopts) {
+			bool included = true;
+			int eind = 0;
+
+			while (si->eopts[eind] && included) {
+				if (si->eopts[eind] > 0) {
+					if (p->opts.opt[si->eopts[eind]]) {
+						included = false;
+					}
+				} else {
+					if (!p->opts.opt[-si->eopts[eind]]) {
+						included = false;
+					}
+				}
+				++eind;
+			}
+			if (!included) continue;
+		}
+
 		/* Prepare a new item */
 		obj = object_new();
 		object_prep(obj, kind, 0, MINIMISE);
@@ -556,8 +644,8 @@ static void player_outfit(struct player *p)
 
 		known_obj = object_new();
 		obj->known = known_obj;
-		object_set_base_known(obj);
-		object_flavor_aware(obj);
+		object_set_base_known(p, obj);
+		object_flavor_aware(p, obj);
 		obj->known->pval = obj->pval;
 		obj->known->effect = obj->effect;
 		obj->known->notice |= OBJ_NOTICE_ASSESSED;
@@ -614,8 +702,10 @@ static void recalculate_stats(int *stats_local_local, int points_left_local)
 	event_signal(EVENT_STATS);
 }
 
-static void reset_stats(int stats_local[STAT_MAX], int points_spent_local_local[STAT_MAX],
-						int *points_left_local, bool update_display)
+static void reset_stats(int stats_local[STAT_MAX],
+		int points_spent_local[STAT_MAX],
+		int points_inc_local[STAT_MAX],
+		int *points_left_local, bool update_display)
 {
 	int i;
 
@@ -625,7 +715,8 @@ static void reset_stats(int stats_local[STAT_MAX], int points_spent_local_local[
 	for (i = 0; i < STAT_MAX; i++) {
 		/* Initial stats are all 10 and costs are zero */
 		stats_local[i] = 10;
-		points_spent_local_local[i] = 0;
+		points_spent_local[i] = 0;
+		points_inc_local[i] = birth_stat_costs[stats_local[i] + 1];
 	}
 
 	/* Use the new "birth stat" values to work out the "other"
@@ -633,13 +724,15 @@ static void reset_stats(int stats_local[STAT_MAX], int points_spent_local_local[
 	   changed. */
 	if (update_display) {
 		recalculate_stats(stats_local, *points_left_local);
-		event_signal_birthpoints(points_spent_local_local, *points_left_local);	
+		event_signal_birthpoints(points_spent_local, points_inc_local,
+			*points_left_local);
 	}
 }
 
 static bool buy_stat(int choice, int stats_local[STAT_MAX],
-					 int points_spent_local[STAT_MAX], int *points_left_local,
-					 bool update_display)
+		int points_spent_local[STAT_MAX],
+		int points_inc_local[STAT_MAX],
+		int *points_left_local, bool update_display)
 {
 	/* Must be a valid stat, and have a "base" of below 18 to be adjusted */
 	if (!(choice >= STAT_MAX || choice < 0) &&	(stats_local[choice] < 18)) {
@@ -647,14 +740,18 @@ static bool buy_stat(int choice, int stats_local[STAT_MAX],
 		   it has already cost to get this far). */
 		int stat_cost = birth_stat_costs[stats_local[choice] + 1];
 
+		assert(stat_cost == points_inc_local[choice]);
 		if (stat_cost <= *points_left_local) {
 			stats_local[choice]++;
 			points_spent_local[choice] += stat_cost;
+			points_inc_local[choice] =
+				birth_stat_costs[stats_local[choice] + 1];
 			*points_left_local -= stat_cost;
 
 			if (update_display) {
 				/* Tell the UI the new points situation. */
-				event_signal_birthpoints(points_spent_local, *points_left_local);
+				event_signal_birthpoints(points_spent_local,
+					points_inc_local, *points_left_local);
 
 				/* Recalculate everything that's changed because
 				   the stat has changed, and inform the UI. */
@@ -670,7 +767,9 @@ static bool buy_stat(int choice, int stats_local[STAT_MAX],
 }
 
 
-static bool sell_stat(int choice, int stats_local[STAT_MAX], int points_spent_local[STAT_MAX],
+static bool sell_stat(int choice, int stats_local[STAT_MAX],
+	int points_spent_local[STAT_MAX],
+	int points_inc_local[STAT_MAX],
 	int *points_left_local, bool update_display)
 {
 	/* Must be a valid stat, and we can't "sell" stats below the base of 10. */
@@ -679,18 +778,21 @@ static bool sell_stat(int choice, int stats_local[STAT_MAX], int points_spent_lo
 
 		stats_local[choice]--;
 		points_spent_local[choice] -= stat_cost;
+		points_inc_local[choice] =
+			birth_stat_costs[stats_local[choice] + 1];
 		*points_left_local += stat_cost;
 
 		if (update_display) {
 			/* Tell the UI the new points situation. */
-			event_signal_birthpoints(points_spent_local, *points_left_local);
+			event_signal_birthpoints(points_spent_local,
+				points_inc_local, *points_left_local);
 
 			/* Recalculate everything that's changed because
 			   the stat has changed, and inform the UI. */
 			recalculate_stats(stats_local, *points_left_local);
-	
-			return true;
 		}
+
+		return true;
 	}
 
 	/* Didn't adjust stat. */
@@ -700,20 +802,19 @@ static bool sell_stat(int choice, int stats_local[STAT_MAX], int points_spent_lo
 
 /**
  * This picks some reasonable starting values for stats based on the
- * current race/class combo, etc.  For now I'm disregarding concerns
- * about role-playing, etc, and using the simple outline from
- * http://angband.oook.cz/forum/showpost.php?p=17588&postcount=6:
+ * current race/class combo, etc. using the discussion from
+ * https://angband.live/forums/forum/angband/vanilla/1589-do-we-need-points-based-stat-generation-at-all
  *
  * 0. buy base STR 17
- * 1. if possible buy adj DEX of 18/10
+ * 1. buy base DEX of up to 17, stopping at the last breakpoint for blows
  * 2. spend up to half remaining points on each of spell-stat and con, 
  *    but only up to max base of 16 unless a pure class 
  *    [mage or priest or warrior]
  * 3. If there are any points left, spend as much as possible in order 
  *    on DEX and then the non-spell-stat.
  */
-static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX], 
-						   int *points_left)
+static void generate_stats(int st[STAT_MAX], int spent[STAT_MAX],
+		int inc[STAT_MAX], int *left)
 {
 	int step = 0;
 	bool maxed[STAT_MAX] = { 0 };
@@ -722,23 +823,25 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 		player->class->magic.books[0].realm->stat : 0;
 	bool caster = player->class->max_attacks < 5 ? true : false;
 	bool warrior = player->class->max_attacks > 5 ? true : false;
+	int blows = 10;
+	int dex_break = 10;
 
-	while (*points_left && step >= 0) {
+	while (*left && step >= 0) {
 	
 		switch (step) {
 		
 			/* Buy base STR 17 */
 			case 0: {
 			
-				if (!maxed[STAT_STR] && stats[STAT_STR] < 17) {
-					if (!buy_stat(STAT_STR, stats, points_spent,
-								  points_left, false))
+				if (!maxed[STAT_STR] && st[STAT_STR] < 17) {
+					if (!buy_stat(STAT_STR, st, spent, inc,
+							left, false))
 						maxed[STAT_STR] = true;
 				} else {
 					step++;
 					
 					/* If pure caster skip to step 3 */
-					if (caster){
+					if (caster) {
 						step = 3;
 					}
 				}
@@ -746,13 +849,17 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 				break;
 			}
 
-			/* Try and buy adj DEX of 18/10 */
+			/* Buy base DEX of 17, record best breakpoint */
 			case 1: {
-				if (!maxed[STAT_DEX] && player->state.stat_top[STAT_DEX]
-					< 18+10) {
-					if (!buy_stat(STAT_DEX, stats, points_spent,
-								  points_left, false))
+				if (!maxed[STAT_DEX] && st[STAT_DEX] < 17) {
+					if (!buy_stat(STAT_DEX, st, spent, inc,
+							left, true)) {
 						maxed[STAT_DEX] = true;
+					}
+					if (player->state.num_blows / 10 > blows) {
+						blows = player->state.num_blows / 10;
+						dex_break = st[STAT_DEX];
+					}
 				} else {
 					step++;
 				}
@@ -760,61 +867,61 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 				break;
 			}
 
-			/* If we can't get 18/10 dex, sell it back. */
+			/* Sell back DEX that isn't getting us an extra blow. */
 			case 2: {
-				if (player->state.stat_top[STAT_DEX] < 18+10) {
-					while (stats[STAT_DEX] > 10)
-						sell_stat(STAT_DEX, stats, points_spent,
-								  points_left, false);
+				while (st[STAT_DEX] > dex_break) {
+					sell_stat(STAT_DEX, st, spent, inc,
+						left, false);
 					maxed[STAT_DEX] = false;
 				}
 				step++;
+				break;
 			}
 
 			/* 
 			 * Spend up to half remaining points on each of spell-stat and 
 			 * con, but only up to max base of 16 unless a pure class 
-			 * [mage or priest or warrior]
+			 * [caster or warrior]
 			 */
 			case 3: 
 			{
-				int points_trigger = *points_left / 2;
+				int points_trigger = *left / 2;
 				
 				if (warrior) {
-					points_trigger = *points_left;
+					points_trigger = *left;
 				} else {
 					while (!maxed[spell_stat] &&
-						   (caster || stats[spell_stat] < 18) &&
-						   points_spent[spell_stat] < points_trigger) {
+						   (caster || st[spell_stat] < 18) &&
+						   spent[spell_stat] < points_trigger) {
 
-						if (!buy_stat(spell_stat, stats, points_spent,
-									  points_left, false)) {
+						if (!buy_stat(spell_stat, st,
+								spent, inc,
+								left, false)) {
 							maxed[spell_stat] = true;
 						}
 
-						if (points_spent[spell_stat] > points_trigger) {
+						if (spent[spell_stat] > points_trigger) {
 						
-							sell_stat(spell_stat, stats, points_spent,
-									  points_left, false);
+							sell_stat(spell_stat,
+								st, spent, inc,
+								left, false);
 							maxed[spell_stat] = true;
 						}
 					}
 				}
 
-				/* Skip CON for casters because DEX is more important early
-				 * and is handled in 4 */
 				while (!maxed[STAT_CON] &&
-					   stats[STAT_CON] < 16 &&
-					   points_spent[STAT_CON] < points_trigger) {
+					   st[STAT_CON] < 16 &&
+					   spent[STAT_CON] < points_trigger) {
 					   
-					if (!buy_stat(STAT_CON, stats, points_spent,
-								  points_left, false)) {
+					if (!buy_stat(STAT_CON, st, spent, inc,
+							left, false)) {
 						maxed[STAT_CON] = true;
 					}
 
-					if (points_spent[STAT_CON] > points_trigger) {
-						sell_stat(STAT_CON, stats, points_spent,
-								  points_left, false);
+					if (spent[STAT_CON] > points_trigger) {
+						sell_stat(STAT_CON, st, spent,
+							inc, left, false);
 						maxed[STAT_CON] = true;
 					}
 				}
@@ -843,8 +950,8 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 				}
 
 				/* Buy until we can't buy any more. */
-				while (buy_stat(next_stat, stats, points_spent, points_left,
-								false));
+				while (buy_stat(next_stat, st, spent, inc, left,
+						false));
 				maxed[next_stat] = true;
 
 				break;
@@ -858,11 +965,11 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 		}
 	}
 	/* Tell the UI the new points situation. */
-	event_signal_birthpoints(points_spent, *points_left);
+	event_signal_birthpoints(spent, inc, *left);
 
 	/* Recalculate everything that's changed because
 	   the stat has changed, and inform the UI. */
-	recalculate_stats(stats, *points_left);
+	recalculate_stats(st, *left);
 }
 
 /**
@@ -872,6 +979,8 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
 void player_generate(struct player *p, const struct player_race *r,
 					 const struct player_class *c, bool old_history)
 {
+	int i;
+
 	if (!c)
 		c = p->class;
 	if (!r)
@@ -889,17 +998,33 @@ void player_generate(struct player *p, const struct player_race *r,
 	/* Hitdice */
 	p->hitdie = p->race->r_mhp + p->class->c_mhp;
 
-	/* Initial hitpoints */
-	p->mhp = p->hitdie;
-
 	/* Pre-calculate level 1 hitdice */
 	p->player_hp[0] = p->hitdie;
+
+	/*
+	 * Fill in overestimates of hitpoints for additional levels.  Do not
+	 * do the actual rolls so the player can not reset the birth screen
+	 * to get a desirable set of initial rolls.
+	 */
+	for (i = 1; i < p->lev; i++) {
+		p->player_hp[i] = p->player_hp[i - 1] + p->hitdie;
+	}
+
+	/* Initial hitpoints */
+	p->mhp = p->player_hp[p->lev - 1];
 
 	/* Roll for age/height/weight */
 	get_ahw(p);
 
-	if (!old_history)
+	/* Always start with a well fed player */
+	p->timed[TMD_FOOD] = PY_FOOD_FULL - 1;
+
+	if (!old_history) {
+		if (p->history) {
+			string_free(p->history);
+		}
 		p->history = get_history(p->race->history);
+	}
 }
 
 
@@ -961,7 +1086,7 @@ void do_cmd_birth_init(struct command *cmd)
 void do_cmd_birth_reset(struct command *cmd)
 {
 	player_init(player);
-	reset_stats(stats, points_spent, &points_left, false);
+	reset_stats(stats, points_spent, points_inc, &points_left, false);
 	do_birth_reset(quickstart_allowed, &quickstart_prev);
 	rolled_stats = false;
 }
@@ -972,8 +1097,8 @@ void do_cmd_choose_race(struct command *cmd)
 	cmd_get_arg_choice(cmd, "choice", &choice);
 	player_generate(player, player_id2race(choice), NULL, false);
 
-	reset_stats(stats, points_spent, &points_left, false);
-	generate_stats(stats, points_spent, &points_left);
+	reset_stats(stats, points_spent, points_inc, &points_left, false);
+	generate_stats(stats, points_spent, points_inc, &points_left);
 	rolled_stats = false;
 }
 
@@ -983,8 +1108,8 @@ void do_cmd_choose_class(struct command *cmd)
 	cmd_get_arg_choice(cmd, "choice", &choice);
 	player_generate(player, NULL, player_id2class(choice), false);
 
-	reset_stats(stats, points_spent, &points_left, false);
-	generate_stats(stats, points_spent, &points_left);
+	reset_stats(stats, points_spent, points_inc, &points_left, false);
+	generate_stats(stats, points_spent, points_inc, &points_left);
 	rolled_stats = false;
 }
 
@@ -994,7 +1119,8 @@ void do_cmd_buy_stat(struct command *cmd)
 	if (!rolled_stats) {
 		int choice;
 		cmd_get_arg_choice(cmd, "choice", &choice);
-		buy_stat(choice, stats, points_spent, &points_left, true);
+		buy_stat(choice, stats, points_spent, points_inc,
+			&points_left, true);
 	}
 }
 
@@ -1004,7 +1130,8 @@ void do_cmd_sell_stat(struct command *cmd)
 	if (!rolled_stats) {
 		int choice;
 		cmd_get_arg_choice(cmd, "choice", &choice);
-		sell_stat(choice, stats, points_spent, &points_left, true);
+		sell_stat(choice, stats, points_spent, points_inc,
+			&points_left, true);
 	}
 }
 
@@ -1013,13 +1140,20 @@ void do_cmd_reset_stats(struct command *cmd)
 	/* .choice is whether to regen stats */
 	int choice;
 
-	reset_stats(stats, points_spent, &points_left, true);
+	reset_stats(stats, points_spent, points_inc, &points_left, true);
 
 	cmd_get_arg_choice(cmd, "choice", &choice);
 	if (choice)
-		generate_stats(stats, points_spent, &points_left);
+		generate_stats(stats, points_spent, points_inc, &points_left);
 
 	rolled_stats = false;
+}
+
+void do_cmd_refresh_stats(struct command *cmd)
+{
+	/* Refreshing is a no-op when using rolled stats. */
+	if (rolled_stats) return;
+	event_signal_birthpoints(points_spent, points_inc, points_left);
 }
 
 void do_cmd_roll_stats(struct command *cmd)
@@ -1047,10 +1181,12 @@ void do_cmd_roll_stats(struct command *cmd)
 
 	/* Give the UI some dummy info about the points situation. */
 	points_left = 0;
-	for (i = 0; i < STAT_MAX; i++)
+	for (i = 0; i < STAT_MAX; i++) {
 		points_spent[i] = 0;
+		points_inc[i] = 0;
+	}
 
-	event_signal_birthpoints(points_spent, points_left);
+	event_signal_birthpoints(points_spent, points_inc, points_left);
 
 	/* Lock out buying and selling of stats based on rolled stats. */
 	rolled_stats = true;
@@ -1078,8 +1214,6 @@ void do_cmd_choose_name(struct command *cmd)
 
 	/* Set player name */
 	my_strcpy(player->full_name, str, sizeof(player->full_name));
-
-	string_free((char *) str);
 }
 
 void do_cmd_choose_history(struct command *cmd)
@@ -1093,8 +1227,6 @@ void do_cmd_choose_history(struct command *cmd)
 	/* Get the new history */
 	cmd_get_arg_string(cmd, "history", &str);
 	player->history = string_make(str);
-
-	string_free((char *) str);
 }
 
 void do_cmd_accept_character(struct command *cmd)
@@ -1119,11 +1251,8 @@ void do_cmd_accept_character(struct command *cmd)
 	/* Embody */
 	player_embody(player);
 
-	/* Always start with a well fed player */
-	player->timed[TMD_FOOD] = PY_FOOD_FULL - 1;
-
 	/* Give the player some money */
-	get_money();
+	get_money(player);
 
 	/* Initialise the spells */
 	player_spells_init(player);
@@ -1137,20 +1266,20 @@ void do_cmd_accept_character(struct command *cmd)
 	player->obj_k->to_h = 1;
 	player->obj_k->to_d = 1;
 
-	/* Initialise the stores */
+	/* Initialise the stores, dungeon */
 	store_reset();
+	chunk_list_max = 0;
 
 	/* Player learns innate runes */
 	player_learn_innate(player);
 
-	/* Randomize the artifacts if required */
-	if (OPT(player, birth_randarts)) {
-		/* First restore the standard artifacts */
-		cleanup_parser(&randart_parser);
-		deactivate_randart_file();
-		run_parser(&artifact_parser);
+	/* Restore the standard artifacts (randarts may have been loaded) */
+	cleanup_parser(&randart_parser);
+	deactivate_randart_file();
+	run_parser(&artifact_parser);
 
-		/* Now generate the new randarts */
+	/* Now only randomize the artifacts if required */
+	if (OPT(player, birth_randarts)) {
 		seed_randart = randint0(0x10000000);
 		do_randart(seed_randart, true);
 		deactivate_randart_file();
@@ -1176,6 +1305,12 @@ void do_cmd_accept_character(struct command *cmd)
 
 	/* Disable repeat command, so we don't try to be born again */
 	cmd_disable_repeat();
+
+	/* No longer need the cached history. */
+	string_free(prev.history);
+	prev.history = NULL;
+	string_free(quickstart_prev.history);
+	quickstart_prev.history = NULL;
 
 	/* Now we're really done.. */
 	event_signal(EVENT_LEAVE_BIRTH);

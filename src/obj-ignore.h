@@ -19,6 +19,8 @@
 #ifndef OBJ_IGNORE_H
 #define OBJ_IGNORE_H
 
+struct player;
+
 /*
  * Used for mapping the values below to names.
  */
@@ -66,9 +68,9 @@ enum
  * Structure to describe ego item short name. 
  */
 struct ego_desc {
-  s16b e_idx;
-  u16b itype;
-  const char *short_name;
+	int16_t e_idx;
+	uint16_t itype;
+	const char *short_name;
 };
 
 /*
@@ -86,16 +88,16 @@ extern bool **ego_ignore_types;
 
 /* obj-ignore.c */
 void ignore_birth_init(void);
-void rune_autoinscribe(int i);
+void rune_autoinscribe(struct player *p, int i);
 const char *get_autoinscription(struct object_kind *kind, bool aware);
-int apply_autoinscription(struct object *obj);
-int remove_autoinscription(s16b kind);
-int add_autoinscription(s16b kind, const char *inscription, bool aware);
-void autoinscribe_ground(void);
-void autoinscribe_pack(void);
+int apply_autoinscription(struct player *p, struct object *obj);
+int remove_autoinscription(int16_t kind);
+int add_autoinscription(int16_t kind, const char *inscription, bool aware);
+void autoinscribe_ground(struct player *p);
+void autoinscribe_pack(struct player *p);
 void object_ignore_flavor_of(const struct object *obj);
 ignore_type_t ignore_type_of(const struct object *obj);
-byte ignore_level_of(const struct object *obj);
+uint8_t ignore_level_of(const struct object *obj);
 bool ego_has_ignore_type(struct ego_item *ego, ignore_type_t itype);
 void kind_ignore_clear(struct object_kind *kind);
 void ego_ignore(struct object *obj);
@@ -107,15 +109,12 @@ bool kind_is_ignored_unaware(const struct object_kind *kind);
 void kind_ignore_when_aware(struct object_kind *kind);
 void kind_ignore_when_unaware(struct object_kind *kind);
 bool object_is_ignored(const struct object *obj);
-bool ignore_item_ok(const struct object *obj);
-bool ignore_known_item_ok(const struct object *obj);
-void ignore_drop(void);
+bool ignore_item_ok(const struct player *p, const struct object *obj);
+bool ignore_known_item_ok(const struct player *p, const struct object *obj);
+void ignore_drop(struct player *p);
 const char *ignore_name_for_type(ignore_type_t type);
 
-extern byte ignore_level[];
+extern uint8_t ignore_level[];
 extern const size_t ignore_size;
-
-/* ui-options.c */
-int ego_item_name(char *buf, size_t buf_size, struct ego_desc *desc);
 
 #endif /* !OBJ_IGNORE_H */

@@ -86,9 +86,18 @@ bool monster_is_not_invisible(const struct monster *mon)
 }
 
 /**
- * Monster is unique
+ * Monster's unshifted form is unique
  */
 bool monster_is_unique(const struct monster *mon)
+{
+	return rf_has((mon->original_race) ?
+		mon->original_race->flags : mon->race->flags, RF_UNIQUE);
+}
+
+/**
+ * Monster's current form is unique
+ */
+bool monster_is_shape_unique(const struct monster *mon)
 {
 	return rf_has(mon->race->flags, RF_UNIQUE);
 }
@@ -152,6 +161,14 @@ bool monster_has_spirit(const struct monster *mon)
 bool monster_is_evil(const struct monster *mon)
 {
 	return rf_has(mon->race->flags, RF_EVIL);
+}
+
+/**
+ * Monster can be frightened
+ */
+bool monster_is_fearful(const struct monster *mon)
+{
+	return rf_has(mon->race->flags, RF_NO_FEAR) ? false : true;
 }
 
 /**
@@ -282,5 +299,21 @@ bool monster_can_be_scared(const struct monster *mon)
 			}
 		}
 	}
+	return true;
+}
+
+/**
+ * Monster attracted to a decoy, not the player
+ */
+bool monster_is_decoyed(const struct monster *mon)
+{
+	struct loc decoy = cave_find_decoy(cave);
+
+	/* No decoy */
+	if (loc_is_zero(decoy)) return false;
+
+	/* Monster can't see the decoy */
+	if (!los(cave, mon->grid, decoy)) return false;
+
 	return true;
 }

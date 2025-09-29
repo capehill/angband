@@ -18,6 +18,7 @@
 
 #include "angband.h"
 #include "player-history.h"
+#include "ui-history.h"
 #include "ui-input.h"
 #include "ui-output.h"
 
@@ -63,8 +64,8 @@ void history_display(void)
 		row = 0;
 		for (i = first_item; row <= page_size && i < max_item; i++)
 		{
-			strnfmt(buf, sizeof(buf), "%10d%7d\'  %s",
-				history_list_local[i].turn,
+			strnfmt(buf, sizeof(buf), "%10ld%7d\'  %s",
+				(long)history_list_local[i].turn,
 				history_list_local[i].dlev * 50,
 				history_list_local[i].event);
 
@@ -95,12 +96,14 @@ void history_display(void)
 				break;
 			}
 
+			case 'j':
 			case ARROW_DOWN: {
 				size_t scroll_to = first_item + 1;
 				first_item = (scroll_to < max_item ? scroll_to : max_item);
 				break;
 			}
 
+			case 'k':
 			case ARROW_UP: {
 				int scroll_to = first_item - 1;
 				first_item = (scroll_to >= 0 ? scroll_to : 0);
@@ -133,8 +136,8 @@ void dump_history(ang_file *file)
 	file_putf(file, "      Turn   Depth  Note\n");
 
 	for (i = 0; i < max_item; i++) {
-		strnfmt(buf, sizeof(buf), "%10d%7d\'  %s",
-				history_list_local[i].turn,
+		strnfmt(buf, sizeof(buf), "%10ld%7d\'  %s",
+				(long)history_list_local[i].turn,
 				history_list_local[i].dlev * 50,
 				history_list_local[i].event);
 

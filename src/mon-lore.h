@@ -27,22 +27,23 @@
  */
 typedef struct monster_lore
 {
-	int ridx;				/* Index of monster race */
+	int ridx;			/* Index of monster race */
 
-	s16b sights;			/* Count sightings of this monster */
-	s16b deaths;			/* Count deaths from this monster */
+	uint16_t sights;		/* Count sightings of this monster */
+	uint16_t deaths;		/* Count deaths from this monster */
 
-	s16b pkills;			/* Count monsters killed in this life */
-	s16b tkills;			/* Count monsters killed in all lives */
+	uint16_t pkills;		/* Count monsters killed in this life */
+	uint16_t thefts;		/* Count objects stolen in this life */
+	uint16_t tkills;		/* Count monsters killed in all lives */
 
-	byte wake;				/* Number of times woken up (?) */
-	byte ignore;			/* Number of times ignored (?) */
+	uint8_t wake;			/* Number of times woken up (?) */
+	uint8_t ignore;			/* Number of times ignored (?) */
 
-	byte drop_gold;			/* Max number of gold dropped at once */
-	byte drop_item;			/* Max number of item dropped at once */
+	uint8_t drop_gold;		/* Max number of gold dropped at once */
+	uint8_t drop_item;		/* Max number of item dropped at once */
 
-	byte cast_innate;		/* Max number of innate spells seen */
-	byte cast_spell;		/* Max number of other spells seen */
+	uint8_t cast_innate;		/* Max number of innate spells seen */
+	uint8_t cast_spell;		/* Max number of other spells seen */
 
 	struct monster_blow *blows; /* Knowledge of blows */
 
@@ -63,6 +64,7 @@ typedef struct monster_lore
 	bool drop_known;
 	bool sleep_known;
 	bool spell_freq_known;
+	bool innate_freq_known;
 } monster_lore;
 
 /**
@@ -74,8 +76,7 @@ void get_attack_colors(int *melee_colors);
 void lore_append_kills(textblock *tb, const struct monster_race *race,
 					   const struct monster_lore *lore,
 					   const bitflag known_flags[RF_SIZE]);
-void lore_append_flavor(textblock *tb, const struct monster_race *race,
-						bool append_utf8);
+void lore_append_flavor(textblock *tb, const struct monster_race *race);
 void lore_append_movement(textblock *tb, const struct monster_race *race,
 						  const struct monster_lore *lore,
 						  bitflag known_flags[RF_SIZE]);

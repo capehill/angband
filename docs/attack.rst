@@ -88,14 +88,22 @@ Your Weapon
 Carrying a weapon in your backpack does you no good. You must wield a
 weapon before it can be used in a fight. A secondary weapon can be kept by
 keeping it in the backpack, and switching it with the primary weapon when
-needed. This is most often used when switching between a melee weapon and a
-digging tool, or when carrying two weapons, each of which provides a rare
-power that the character needs at two separate times.
+needed. This is most often used when switching between two weapons, each of
+which provides a rare power that the character needs at two separate times.
+Note that a digging tool need only be carried in your pack, as when you try
+to dig your best digging tool will automatically be used.
+
+.. index::
+   single: to-hit; equipment values
+   single; to-dam; equipment values
 
 Weapons have two main magical characteristics, their enchanted ability to
 hit and their enchanted ability to do damage, expressed as '(+#,+#)'. A
 normal weapon would be '(+0,+0)'. Many weapons in Angband have bonuses to
 hit and/or to damage.
+
+.. index::
+   single; blows; upper limit
 
 Angband assumes that your youth in the rough environment near the dungeons
 has taught you the relative merits of different weapons, and displays as
@@ -108,8 +116,8 @@ The weight of a weapon is also a consideration. Heavy weapons may hit
 harder, but they are also harder to use. Depending on your strength,
 dexterity, character class, and weapon weight, you may get attacks more
 quickly: high dexterity and strength and low weapon weight are the main
-factors. Warriors may get up to a maximum of 6 attacks per round: mages and
-priests are limited to only 4: other classes may get up to 5. Your attacks
+factors. Warriors may get up to a maximum of 6 attacks per round: pure
+spellcasters are limited to only 4: other classes may get up to 5. Your attacks
 per round with a weapon are displayed as a decimal, e.g. 2.3 or 3.4 etc.
 The fractions take the form of unused energy which is carried over to your
 next turn.
@@ -136,6 +144,9 @@ identification.
 
 Some of the more common ego weapons are described at the end of this file.
 
+.. index::
+   single: armour class; effect on attacks
+
 Your Armor Class
 ================
 
@@ -151,6 +162,10 @@ some of the damage that your character would have taken from normal
 attacks. Third, acid damage is reduced by wearing body armor (but the
 armor may be damaged instead). It is obvious that a high armor class is
 vital for surviving the deeper levels of Angband.
+
+.. index::
+   single: armour class; equipment values
+   single: to-hit; armour values
 
 Armor class values are always displayed between a set of square brackets,
 as '[#]' or '[#,+#]'. The first value is the base armor class of the
@@ -174,30 +189,38 @@ work on a monster type or they won't; some monsters resist particular effects
 but not all do.
 
 Hold Monster:
-  Paralyses a monster until you hit them  
-  Doubles chance of player getting a critical hit  
-  Normal duration 3-8 turns  
+  Paralyses a monster until you hit them.
+  Increases chance of player getting a critical hit.
+  Normal duration 3-8 turns.
 
 Stun Monster:
-  Reduces the monster's melee accuracy and damage by 10%  
-  1 in 10 chance that the monster will miss the turn  
-  Doubles chance of player getting a critical hit  
-  Normal duration 5-10 turns  
+  Reduces the monster's melee accuracy and damage by 25%.
+  1 in 10 chance that the monster will miss the turn.
+  Increases chance of player getting a critical hit.
+  Normal duration 5-10 turns.
 
 Confuse Monster:
-  Monster spells fail 50% more often  
-  Monster 20% more likely to miss target with spells/ranged attacks  
-  Monster ball & bolt spells sometimes go in the wrong direction  
-  30% chance of erratic movement  
-  Doubles chance of critical hit  
-  Normal duration 5-10 turns  
+  Monster spells fail 50% more often.
+  Monster at least 40% more likely to miss target with spells/ranged attacks.
+  Monster ball & bolt spells sometimes go in the wrong direction.
+  30% chance of erratic movement, more when more confused.
+  Increases chance of player getting a critical hit.
+  Normal duration 5-10 turns.
 
 Slow Monster:
-  -2 speed
-  normal duration 10 or more turns
+  -2 speed, more if more slowed.
+  Normal duration 10 or more turns.
 
 Sleep Monster:
-  Puts monsters to sleep, but they can wake up again quite easily
+  Puts monsters to sleep, but they can wake up again quite easily.
+
+Scare Monster:
+  Monster will run away.
+  Monster spells fail 20% more often.
+
+Disenchant Monster:
+  Monster spells fail 50% more often.
+  Normal duration 5-10 turns.
 
 
 Non-melee attacks and resistances
@@ -248,11 +271,12 @@ handled in different ways for the player and the monster, and for different
 attack forms.
 
 Bolt spells will hit the first monster (or the player) in the line of fire:
-ball spells and breaths may centre on a target which may be hiding behind
+ball spells may centre on a target which may be hiding behind
 other targets. Ball spells and breath weapons affect an area: other
 monsters caught in the blast take reduced damage depending on their distance
 from the centre of the blast. Breath weapons are proportional to a
-fraction of the monster's current hit points, with a maximum cap on the
+fraction of the monster's current hit points and drop off in power with
+distance from the monster, with a maximum cap on the
 damage (which is higher for the most common of such attacks, owing to the
 fact that the resistances are also easier to find). Bolt and ball spell
 damage is calculated differently - often (but not always) relative to
@@ -287,6 +311,9 @@ The character may also gain immunity to fire, cold, lightning and acid if
 he is fortunate to find any of the few artifacts that provide these
 immunities: immunity means that no damage is taken, and the character's
 equipment is also totally protected. Immunities are EXTREMELY rare.
+
+.. index::
+   single: experience points; draining attacks
 
 Another attack that the player will come into contact with all too often is
 the soul-chilling nature of the undead, which can drain the character's
@@ -345,10 +372,7 @@ cut status are displayed at the bottom of the screen.
 There are resistances available to chaos, disenchantment, confusion, nexus,
 sound, shards, light and darkness: all of these will reduce the damage and
 prevent side-effects other than physical damage. With these resistances, as
-with nether resistance, damage is a random fraction: for light and dark, it
-is between 4/7 and 4/12, for sound and confusion it is between 5/7 and
-5/12, and for chaos, disenchantment, nexus, shards and nether it is between
-6/7 and 6/12.
+with nether resistance, damage is a random fraction between 1/2 and 2/3.
 
 It should be noted that not all of these are actually vital to completing
 the game: indeed, of the above list, only fire, cold, acid, lightning,
@@ -366,10 +390,11 @@ A note on speed
 ===============
 
 Monsters which do not move at normal speed generally move "slowly" (-10 to
-speed), "fast" (+10), "very fast" (+20) or "incredibly fast" (+30). (It will
-surprise nobody that Morgoth is one of the few monsters in the last
-category.) This is further adjusted by the fact that any non-unique monster
-may have a random adjustment from (-2) to (+2) to its own speed.
+speed), "fairly quickly" (+5), "quickly" (+10), "very quickly" (+20) or
+"incredibly quickly" (+30). (It will surprise nobody that Morgoth is one of
+the few monsters in the last category.) This is further adjusted by the fact
+that any non-unique monster may have a random adjustment from (-2) to (+2)
+to its own speed.
 
 Generally, (+10) is exactly double normal speed, and (-10) exactly half.
 (+20) is about three times normal speed, but after that there is less
@@ -422,16 +447,14 @@ Ego Melee Weapons:
   will increase your wisdom and your armour class. This weapon will do
   extra damage when used against evil, demonic and undead creatures, and
   will also give you the ability to see invisible creatures. These weapons
-  are basically extremely powerful versions of Blessed Blades and can be
-  wielded by priests with no penalty. These weapons, like (Defender)
+  are basically extremely powerful versions of Blessed Blades and give
+  melee bonuses to priests and paladins. These weapons, like (Defender)
   weapons, also will sustain one random stat.
 
 (Blessed)
-  A blessed blade will increase your wisdom. If you are a priest, wielding
-  a non-blessed sword or polearm causes a small penalty while attacking and
-  may infuriate your god, decreasing the chances that she will accept your
-  prayers: a blessed blade may be wielded without this penalty. Blessed
-  blades also have one extra, random, power.
+  A blessed blade will increase your wisdom. If you are a priest or paladin,
+  wielding one gives you bonuses for melee combat. Blessed blades also have
+  one extra, random, power.
 
 Weapon of Westernesse
   A Weapon of Westernesse is one of the more powerful weapons. It does
@@ -449,9 +472,7 @@ Elemental Branded Weapons
   do treble its base damage to creatures not resistant to that element. (It
   should be noted that the magical damage bonus is not affected by this: a
   weapon of Flame '(2d6) (+5,+6)' does 6d6+6 damage per hit, not 6d6+18,
-
   against creatures which are not fire-resistant.) There are weapons of
-
   Flame, Frost, Lightning, Acid and Poison brands.
 
 Weapons of Slaying enemies

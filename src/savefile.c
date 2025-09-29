@@ -20,6 +20,8 @@
 #include "game-world.h"
 #include "init.h"
 #include "savefile.h"
+#include "save-charoutput.h"
+#include "z-file.h"
 
 /**
  * The savefile code.
@@ -76,22 +78,22 @@ bool character_saved;
 /**
  * Magic bits at beginning of savefile
  */
-static const byte savefile_magic[4] = { 83, 97, 118, 101 };
-static const byte savefile_name[4] = "VNLA";
+static const uint8_t savefile_magic[4] = { 83, 97, 118, 101 };
+static const uint8_t savefile_name[4] = { 'V', 'N', 'L', 'A' };
 
 /* Some useful types */
 typedef int (*loader_t)(void);
 
 struct blockheader {
 	char name[16];
-	u32b version;
-	u32b size;
+	uint32_t version;
+	uint32_t size;
 };
 
 struct blockinfo {
 	char name[16];
 	loader_t loader;
-	u32b version;
+	uint32_t version;
 };
 
 /**
@@ -100,7 +102,7 @@ struct blockinfo {
 static const struct {
 	char name[16];
 	void (*save)(void);
-	u32b version;	
+	uint32_t version;
 } savers[] = {
 	{ "description", wr_description, 1 },
 	{ "rng", wr_randomizer, 1 },
@@ -154,10 +156,10 @@ static const struct blockinfo loaders[] = {
 
 
 /* Buffer bits */
-static byte *buffer;
-static u32b buffer_size;
-static u32b buffer_pos;
-static u32b buffer_check;
+static uint8_t *buffer;
+static uint32_t buffer_size;
+static uint32_t buffer_pos;
+static uint32_t buffer_check;
 
 #define BUFFER_INITIAL_SIZE		1024
 #define BUFFER_BLOCK_INCREMENT	1024
@@ -185,7 +187,7 @@ void note(const char *message)
  * Base put/get
  * ------------------------------------------------------------------------ */
 
-static void sf_put(byte v)
+static void sf_put(uint8_t v)
 {
 	assert(buffer != NULL);
 	assert(buffer_size > 0);
@@ -202,7 +204,7 @@ static void sf_put(byte v)
 	buffer_check += v;
 }
 
-static byte sf_get(void)
+static uint8_t sf_get(void)
 {
 	if ((buffer == NULL) || (buffer_size <= 0) || (buffer_pos >= buffer_size))
 		quit("Broken savefile - probably from a development version");
@@ -218,33 +220,33 @@ static byte sf_get(void)
  * Accessor functions
  * ------------------------------------------------------------------------ */
 
-void wr_byte(byte v)
+void wr_byte(uint8_t v)
 {
 	sf_put(v);
 }
 
-void wr_u16b(u16b v)
+void wr_u16b(uint16_t v)
 {
-	sf_put((byte)(v & 0xFF));
-	sf_put((byte)((v >> 8) & 0xFF));
+	sf_put((uint8_t)(v & 0xFF));
+	sf_put((uint8_t)((v >> 8) & 0xFF));
 }
 
-void wr_s16b(s16b v)
+void wr_s16b(int16_t v)
 {
-	wr_u16b((u16b)v);
+	wr_u16b((uint16_t)v);
 }
 
-void wr_u32b(u32b v)
+void wr_u32b(uint32_t v)
 {
-	sf_put((byte)(v & 0xFF));
-	sf_put((byte)((v >> 8) & 0xFF));
-	sf_put((byte)((v >> 16) & 0xFF));
-	sf_put((byte)((v >> 24) & 0xFF));
+	sf_put((uint8_t)(v & 0xFF));
+	sf_put((uint8_t)((v >> 8) & 0xFF));
+	sf_put((uint8_t)((v >> 16) & 0xFF));
+	sf_put((uint8_t)((v >> 24) & 0xFF));
 }
 
-void wr_s32b(s32b v)
+void wr_s32b(int32_t v)
 {
-	wr_u32b((u32b)v);
+	wr_u32b((uint32_t)v);
 }
 
 void wr_string(const char *str)
@@ -258,38 +260,38 @@ void wr_string(const char *str)
 }
 
 
-void rd_byte(byte *ip)
+void rd_byte(uint8_t *ip)
 {
 	*ip = sf_get();
 }
 
-void rd_u16b(u16b *ip)
+void rd_u16b(uint16_t *ip)
 {
 	(*ip) = sf_get();
-	(*ip) |= ((u16b)(sf_get()) << 8);
+	(*ip) |= ((uint16_t)(sf_get()) << 8);
 }
 
-void rd_s16b(s16b *ip)
+void rd_s16b(int16_t *ip)
 {
-	rd_u16b((u16b*)ip);
+	rd_u16b((uint16_t*)ip);
 }
 
-void rd_u32b(u32b *ip)
+void rd_u32b(uint32_t *ip)
 {
 	(*ip) = sf_get();
-	(*ip) |= ((u32b)(sf_get()) << 8);
-	(*ip) |= ((u32b)(sf_get()) << 16);
-	(*ip) |= ((u32b)(sf_get()) << 24);
+	(*ip) |= ((uint32_t)(sf_get()) << 8);
+	(*ip) |= ((uint32_t)(sf_get()) << 16);
+	(*ip) |= ((uint32_t)(sf_get()) << 24);
 }
 
-void rd_s32b(s32b *ip)
+void rd_s32b(int32_t *ip)
 {
-	rd_u32b((u32b*)ip);
+	rd_u32b((uint32_t*)ip);
 }
 
 void rd_string(char *str, int max)
 {
-	byte tmp8u;
+	uint8_t tmp8u;
 	int i = 0;
 
 	do {
@@ -304,7 +306,7 @@ void rd_string(char *str, int max)
 
 void strip_bytes(int n)
 {
-	byte tmp8u;
+	uint8_t tmp8u;
 	while (n--) rd_byte(&tmp8u);
 }
 
@@ -322,8 +324,9 @@ void pad_bytes(int n)
 
 static bool try_save(ang_file *file)
 {
-	byte savefile_head[SAVEFILE_HEAD_SIZE];
+	uint8_t savefile_head[SAVEFILE_HEAD_SIZE];
 	size_t i, pos;
+	bool success = true;
 
 	/* Start off the buffer */
 	buffer = mem_alloc(BUFFER_INITIAL_SIZE);
@@ -354,17 +357,25 @@ static bool try_save(ang_file *file)
 
 		assert(pos == SAVEFILE_HEAD_SIZE);
 
-		file_write(file, (char *)savefile_head, SAVEFILE_HEAD_SIZE);
-		file_write(file, (char *)buffer, buffer_pos);
+		if (! file_write(file, (char *)savefile_head,
+				SAVEFILE_HEAD_SIZE)) {
+			success = false;
+		}
+		if (! file_write(file, (char *)buffer, buffer_pos)) {
+			success = false;
+		}
 
 		/* pad to 4 byte multiples */
-		if (buffer_pos % 4)
-			file_write(file, "xxx", 4 - (buffer_pos % 4));
+		if (buffer_pos % 4) {
+			if (! file_write(file, "xxx", 4 - (buffer_pos % 4))) {
+				success = false;
+			}
+		}
 	}
 
 	mem_free(buffer);
 
-	return true;
+	return success;
 }
 
 /**
@@ -373,36 +384,32 @@ static bool try_save(ang_file *file)
 bool savefile_save(const char *path)
 {
 	ang_file *file;
-	int count = 0;
 	char new_savefile[1024];
 	char old_savefile[1024];
 
-	/* New savefile */
-	strnfmt(old_savefile, sizeof(old_savefile), "%s%u.old", path,
-			Rand_simple(1000000));
-	while (file_exists(old_savefile) && (count++ < 100))
-		strnfmt(old_savefile, sizeof(old_savefile), "%s%u%u.old", path,
-				Rand_simple(1000000),count);
+	/* Generate a CharOutput.txt, mainly for angband.live, when saving. */
+	(void) save_charoutput();
 
-	count = 0;
+	/* New savefile */
+	safe_setuid_grab();
+	file_get_savefile(old_savefile, sizeof(old_savefile), path, "old");
 
 	/* Open the savefile */
-	safe_setuid_grab();
-	strnfmt(new_savefile, sizeof(new_savefile), "%s%u.new", path,
-			Rand_simple(1000000));
-	while (file_exists(new_savefile) && (count++ < 100))
-		strnfmt(new_savefile, sizeof(new_savefile), "%s%u%u.new", path,
-				Rand_simple(1000000),count);
+        file_get_savefile(new_savefile, sizeof(new_savefile), path, "new");
 
 	file = file_open(new_savefile, MODE_WRITE, FTYPE_SAVE);
 	safe_setuid_drop();
 
 	if (file) {
-		file_write(file, (char *) &savefile_magic, 4);
-		file_write(file, (char *) &savefile_name, 4);
-
-		character_saved = try_save(file);
+		if (file_write(file, (char *) &savefile_magic, 4)
+			&& file_write(file, (char *) &savefile_name, 4)) {
+			character_saved = try_save(file);
+		} else {
+			character_saved = false;
+		}
 		file_close(file);
+	} else {
+		character_saved = false;
 	}
 
 	if (character_saved) {
@@ -450,7 +457,7 @@ bool savefile_save(const char *path)
  * Check the savefile header file clearly inicates that it's a savefile
  */
 static bool check_header(ang_file *f) {
-	byte head[8];
+	uint8_t head[8];
 
 	if (file_read(f, (char *) &head, 8) == 8 &&
 			memcmp(&head[0], savefile_magic, 4) == 0 &&
@@ -464,7 +471,7 @@ static bool check_header(ang_file *f) {
  * Get the next block header from the savefile
  */
 static errr next_blockheader(ang_file *f, struct blockheader *b) {
-	byte savefile_head[SAVEFILE_HEAD_SIZE];
+	uint8_t savefile_head[SAVEFILE_HEAD_SIZE];
 	size_t len;
 
 	len = file_read(f, (char *)savefile_head, SAVEFILE_HEAD_SIZE);
@@ -476,10 +483,10 @@ static errr next_blockheader(ang_file *f, struct blockheader *b) {
 	}
 
 #define RECONSTRUCT_U32B(from) \
-	((u32b) savefile_head[from]) | \
-	((u32b) savefile_head[from+1] << 8) | \
-	((u32b) savefile_head[from+2] << 16) | \
-	((u32b) savefile_head[from+3] << 24);
+	((uint32_t) savefile_head[from]) | \
+	((uint32_t) savefile_head[from+1] << 8) | \
+	((uint32_t) savefile_head[from+2] << 16) | \
+	((uint32_t) savefile_head[from+3] << 24);
 
 	my_strcpy(b->name, (char *)&savefile_head, sizeof b->name);
 	b->version = RECONSTRUCT_U32B(16);
@@ -589,8 +596,11 @@ static int get_desc(void) {
  */
 const char *savefile_get_description(const char *path) {
 	struct blockheader b;
+	ang_file *f;
 
-	ang_file *f = file_open(path, MODE_READ, FTYPE_TEXT);
+	safe_setuid_grab();
+	f = file_open(path, MODE_READ, FTYPE_TEXT);
+	safe_setuid_drop();
 	if (!f) return NULL;
 
 	/* Blank the description */
@@ -620,7 +630,11 @@ const char *savefile_get_description(const char *path) {
 bool savefile_load(const char *path, bool cheat_death)
 {
 	bool ok;
-	ang_file *f = file_open(path, MODE_READ, FTYPE_TEXT);
+	ang_file *f;
+
+	safe_setuid_grab();
+	f = file_open(path, MODE_READ, FTYPE_TEXT);
+	safe_setuid_drop();
 	if (!f) {
 		note("Couldn't open savefile.");
 		return false;
@@ -628,10 +642,6 @@ bool savefile_load(const char *path, bool cheat_death)
 
 	ok = try_load(f, loaders);
 	file_close(f);
-
-	if (player->chp < 0) {
-		player->is_dead = true;
-	}
 
 	if (player->is_dead && cheat_death) {
 			player->is_dead = false;
@@ -644,4 +654,26 @@ bool savefile_load(const char *path, bool cheat_death)
 	player->upkeep->playing = true;
 
 	return ok;
+}
+
+
+/**
+ * Fill the given buffer with the panic save equivalent for a savefile.
+ *
+ * \param buf Is the buffer to fill.  The result wil be an empty string if
+ * the result can't fit in the given buffer or the savefile name or panic
+ * save directory are invalid.
+ * \param len Is the maximum number of characters that the buffer can hold.
+ * \param path Is the name of the savefile to use.  The storage for that must
+ * not overlap buffer.
+ */
+void savefile_get_panic_name(char *buf, size_t len, const char *path)
+{
+	size_t name_offset = path_filename_index(path);
+	size_t used = path_build(buf, len, ANGBAND_DIR_PANIC,
+		path + name_offset);
+
+	if (len > 0 && (used == 0 || !suffix(buf, path + name_offset))) {
+		buf[0] = '\0';
+	}
 }

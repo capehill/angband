@@ -36,7 +36,7 @@ struct projection *projections;
  * Specify attr/char pairs for visual special effects for project()
  * Ideally move these and PROJ-type colors to the UI - NRM
  */
-byte proj_to_attr[PROJ_MAX][BOLT_MAX];
+uint8_t proj_to_attr[PROJ_MAX][BOLT_MAX];
 wchar_t proj_to_char[PROJ_MAX][BOLT_MAX];
 
 /**
@@ -120,8 +120,8 @@ const char *proj_idx_to_name(int type)
  * This algorithm is similar to, but slightly different from, the one used
  * by "update_view_los()", and very different from the one used by "los()".
  */
-int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
-				 int flg)
+int project_path(struct chunk *c, struct loc *gp, int range, struct loc grid1,
+	struct loc grid2, int flg)
 {
 	int y, x;
 
@@ -144,7 +144,7 @@ int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
 	int m;
 
 	/* Possible decoy */
-	struct loc decoy = cave_find_decoy(cave);
+	struct loc decoy = cave_find_decoy(c);
 
 	/* No path necessary (or allowed) */
 	if (loc_eq(grid1, grid2)) return (0);
@@ -193,22 +193,28 @@ int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
 			/* Save grid */
 			gp[n++] = loc(x, y);
 
-			/* Hack -- Check maximum range */
+			/* Check maximum range */
 			if ((n + (k >> 1)) >= range) break;
 
 			/* Sometimes stop at finish grid */
 			if (!(flg & (PROJECT_THRU)))
 				if (loc_eq(loc(x, y), grid2)) break;
 
-			/* Stop at non-initial wall grids, except where that would
-			 * leak info during targetting */
-			if (!(flg & (PROJECT_INFO))) {
-				if ((n > 0) && !square_isprojectable(cave, loc(x, y))) break;
-			} else if ((n > 0) && square_isbelievedwall(cave, loc(x, y))) break;
+			/* Don't stop if making paths through rock for generation */
+			if (!(flg & (PROJECT_ROCK))) {
+				/* Stop at non-initial wall grids, except where that would
+				 * leak info during targetting */
+				if (!(flg & (PROJECT_INFO))) {
+					if ((n > 0) && !square_isprojectable(c, loc(x, y)))
+						break;
+				} else if ((n > 0) && square_isbelievedwall(c, loc(x, y))) {
+					break;
+				}
+			}
 
 			/* Sometimes stop at non-initial monsters/players, decoys */
 			if (flg & (PROJECT_STOP)) {
-				if ((n > 0) && (square(cave, loc(x, y)).mon != 0)) break;
+				if ((n > 0) && (square(c, loc(x, y))->mon != 0)) break;
 				if (loc_eq(loc(x, y), decoy)) break;
 			}
 
@@ -252,22 +258,28 @@ int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
 			/* Save grid */
 			gp[n++] = loc(x, y);
 
-			/* Hack -- Check maximum range */
+			/* Check maximum range */
 			if ((n + (k >> 1)) >= range) break;
 
 			/* Sometimes stop at finish grid */
 			if (!(flg & (PROJECT_THRU)))
 				if (loc_eq(loc(x, y), grid2)) break;
 
-			/* Stop at non-initial wall grids, except where that would
-			 * leak info during targetting */
-			if (!(flg & (PROJECT_INFO))) {			
-				if ((n > 0) && !square_isprojectable(cave, loc(x, y))) break;
-			} else if ((n > 0) && square_isbelievedwall(cave, loc(x, y))) break;
+			/* Don't stop if making paths through rock for generation */
+			if (!(flg & (PROJECT_ROCK))) {
+				/* Stop at non-initial wall grids, except where that would
+				 * leak info during targetting */
+				if (!(flg & (PROJECT_INFO))) {
+					if ((n > 0) && !square_isprojectable(c, loc(x, y)))
+						break;
+				} else if ((n > 0) && square_isbelievedwall(c, loc(x, y))) {
+					break;
+				}
+			}
 
 			/* Sometimes stop at non-initial monsters/players, decoys */
 			if (flg & (PROJECT_STOP)) {
-				if ((n > 0) && (square(cave, loc(x, y)).mon != 0)) break;
+				if ((n > 0) && (square(c, loc(x, y))->mon != 0)) break;
 				if (loc_eq(loc(x, y), decoy)) break;
 			}
 
@@ -305,22 +317,28 @@ int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
 			/* Save grid */
 			gp[n++] = loc(x, y);
 
-			/* Hack -- Check maximum range */
+			/* Check maximum range */
 			if ((n + (n >> 1)) >= range) break;
 
 			/* Sometimes stop at finish grid */
 			if (!(flg & (PROJECT_THRU)))
 				if (loc_eq(loc(x, y), grid2)) break;
 
-			/* Stop at non-initial wall grids, except where that would
-			 * leak info during targetting */
-			if (!(flg & (PROJECT_INFO))) {
-				if ((n > 0) && !square_isprojectable(cave, loc(x, y))) break;
-			} else if ((n > 0) && square_isbelievedwall(cave, loc(x, y))) break;
+			/* Don't stop if making paths through rock for generation */
+			if (!(flg & (PROJECT_ROCK))) {
+				/* Stop at non-initial wall grids, except where that would
+				 * leak info during targetting */
+				if (!(flg & (PROJECT_INFO))) {
+					if ((n > 0) && !square_isprojectable(c, loc(x, y)))
+						break;
+				} else if ((n > 0) && square_isbelievedwall(c, loc(x, y))) {
+					break;
+				}
+			}
 
 			/* Sometimes stop at non-initial monsters/players, decoys */
 			if (flg & (PROJECT_STOP)) {
-				if ((n > 0) && (square(cave, loc(x, y)).mon != 0)) break;
+				if ((n > 0) && (square(c, loc(x, y))->mon != 0)) break;
 				if (loc_eq(loc(x, y), decoy)) break;
 			}
 
@@ -349,9 +367,15 @@ bool projectable(struct chunk *c, struct loc grid1, struct loc grid2, int flg)
 {
 	struct loc grid_g[512];
 	int grid_n = 0;
+	int max_range = z_info->max_range;
+
+	/* Check for shortened projection range */
+	if ((flg & PROJECT_SHORT) && player->timed[TMD_COVERTRACKS]) {
+		max_range /= 4;
+	}
 
 	/* Check the projection path */
-	grid_n = project_path(grid_g, z_info->max_range, grid1, grid2, flg);
+	grid_n = project_path(c, grid_g, max_range, grid1, grid2, flg);
 
 	/* No grid is ever projectable from itself */
 	if (!grid_n) return false;
@@ -384,7 +408,7 @@ struct loc origin_get_loc(struct source origin)
 	switch (origin.what) {
 		case SRC_MONSTER: {
 			struct monster *who = cave_monster(cave, origin.which.monster);
-			return who->grid;
+			return who ? who->grid : loc(-1, -1);
 		}
 
 		case SRC_TRAP: {
@@ -393,7 +417,8 @@ struct loc origin_get_loc(struct source origin)
 		}
 
 		case SRC_PLAYER:
-		case SRC_OBJECT:	/* At the moment only worn cursed objects use this */
+		case SRC_OBJECT:	/* Currently only worn cursed objects use this */
+		case SRC_CHEST_TRAP:
 			return player->grid;
 
 		case SRC_NONE:
@@ -410,8 +435,7 @@ struct loc origin_get_loc(struct source origin)
  *   \param origin Origin of the projection
  *   \param rad Radius of explosion (0 = beam/bolt, 1 to 20 = ball), or maximum
  *	  length of arc from the source.
- *   \param y Target location (or location to travel towards)
- *   \param x Target location (or location to travel towards)
+ *   \param finish Target location (or location to travel towards)
  *   \param dam Base damage to apply to monsters, terrain, objects, or player
  *   \param typ Type of projection (fire, frost, dispel demons etc.)
  *   \param flg Extra bit flags that control projection behavior
@@ -540,9 +564,9 @@ struct loc origin_get_loc(struct source origin)
  * projection path.  Note that in general, the player will *always* see part
  * of the path, since it either starts at the player or ends on the player.
  *
- * Hack -- we assume that every "projection" is "self-illuminating".
+ * We assume that every "projection" is "self-illuminating".
  *
- * Hack -- when only a single monster is affected, we automatically track
+ * When only a single monster is affected, we automatically track
  * (and recall) that monster, unless "PROJECT_JUMP" is used.
  *
  * Note that we must call "handle_stuff()" after affecting terrain features
@@ -551,12 +575,12 @@ struct loc origin_get_loc(struct source origin)
  */
 bool project(struct source origin, int rad, struct loc finish,
 			 int dam, int typ, int flg,
-			 int degrees_of_arc, byte diameter_of_source,
+			 int degrees_of_arc, uint8_t diameter_of_source,
 			 const struct object *obj)
 {
 	int i, j, k, dist_from_centre;
 
-	u32b dam_temp;
+	uint32_t dam_temp;
 
 	struct loc centre;
 	struct loc start;
@@ -592,7 +616,7 @@ bool project(struct source origin, int rad, struct loc finish,
 	bool player_sees_grid[256];
 
 	/* Precalculated damage values for each distance. */
-	int *dam_at_dist = malloc((z_info->max_range + 1) * sizeof(*dam_at_dist));
+	int *dam_at_dist = mem_alloc((z_info->max_range + 1) * sizeof(*dam_at_dist));
 
 	/* Flush any pending output */
 	handle_stuff(player);
@@ -637,7 +661,7 @@ bool project(struct source origin, int rad, struct loc finish,
 		blast_grid[num_grids] =  finish;
 		centre = finish;
 		distance_to_grid[num_grids] = 0;
-		sqinfo_on(square(cave, finish).info, SQUARE_PROJECT);
+		sqinfo_on(square(cave, finish)->info, SQUARE_PROJECT);
 		num_grids++;
 	} else {
 		/* Start from caster */
@@ -645,8 +669,8 @@ bool project(struct source origin, int rad, struct loc finish,
 		int x = start.x;
 
 		/* Calculate the projection path */
-		num_path_grids = project_path(path_grid, z_info->max_range, start,
-									  finish, flg);
+		num_path_grids = project_path(cave, path_grid,
+			z_info->max_range, start, finish, flg);
 
 		/* Some beams have limited length. */
 		if (flg & (PROJECT_BEAM)) {
@@ -666,8 +690,9 @@ bool project(struct source origin, int rad, struct loc finish,
 				int ny = path_grid[i].y;
 				int nx = path_grid[i].x;
 
-				/* Hack -- Balls explode before reaching walls. */
-				if (!square_ispassable(cave, path_grid[i]) && (rad > 0))
+				/* Balls explode before reaching walls. */
+				if (!square_ispassable(cave, path_grid[i]) && (rad > 0) &&
+					!(flg & (PROJECT_BEAM)))
 					break;
 
 				/* Advance */
@@ -680,13 +705,13 @@ bool project(struct source origin, int rad, struct loc finish,
 					blast_grid[num_grids].y = y;
 					blast_grid[num_grids].x = x;
 					distance_to_grid[num_grids] = 0;
-					sqinfo_on(square(cave, loc(x, y)).info, SQUARE_PROJECT);
+					sqinfo_on(square(cave, loc(x, y))->info, SQUARE_PROJECT);
 					num_grids++;
 				} else if (i == num_path_grids - 1) {
 					blast_grid[num_grids].y = y;
 					blast_grid[num_grids].x = x;
 					distance_to_grid[num_grids] = 0;
-					sqinfo_on(square(cave, loc(x, y)).info, SQUARE_PROJECT);
+					sqinfo_on(square(cave, loc(x, y))->info, SQUARE_PROJECT);
 					num_grids++;
 				}
 
@@ -737,7 +762,7 @@ bool project(struct source origin, int rad, struct loc finish,
 		if (num_grids == 0) {
 			blast_grid[num_grids] = centre;
 			distance_to_grid[num_grids] = 0;
-			sqinfo_on(square(cave, centre).info, SQUARE_PROJECT);
+			sqinfo_on(square(cave, centre)->info, SQUARE_PROJECT);
 			num_grids++;
 		}
 
@@ -745,6 +770,7 @@ bool project(struct source origin, int rad, struct loc finish,
 		for (y = centre.y - rad; y <= centre.y + rad; y++) {
 			for (x = centre.x - rad; x <= centre.x + rad; x++) {
 				struct loc grid = loc(x, y);
+				bool on_path = false;
 
 				/* Center grid has already been stored. */
 				if (loc_eq(grid, centre))
@@ -767,19 +793,18 @@ bool project(struct source origin, int rad, struct loc finish,
 				if ((flg & (PROJECT_THRU)) || square_ispassable(cave, grid)) {
 					/* If this is a wall grid, ... */
 					if (!square_isprojectable(cave, grid)) {
+						bool can_see_one = false;
 						/* Check neighbors */
-						for (i = 0, k = 0; i < 8; i++) {
-							int yy = y + ddy_ddd[i];
-							int xx = x + ddx_ddd[i];
-
-							if (los(cave, centre, loc(xx, yy))) {
-								k++;
+						for (i = 0; i < 8; i++) {
+							struct loc adj_grid = loc_sum(grid, ddgrid_ddd[i]);
+							if (los(cave, centre, adj_grid)) {
+								can_see_one = true;
 								break;
 							}
 						}
 
 						/* Require at least one adjacent grid in LOS. */
-						if (!k)
+						if (!can_see_one)
 							continue;
 					}
 				} else if (!square_isprojectable(cave, grid))
@@ -790,8 +815,14 @@ bool project(struct source origin, int rad, struct loc finish,
 				if (dist_from_centre > rad)
 					continue;
 
+				/* Mark grids which are on the projection path */
+				for (i = 0; i < num_path_grids; i++) {
+					if (loc_eq(grid, path_grid[i])) {
+						on_path = true;
+					}
+				}
 
-				/* Do we need to consider a  restricted angle? */
+				/* Do we need to consider a restricted angle? */
 				if (flg & (PROJECT_ARC)) {
 					/* Use angle comparison to delineate an arc. */
 					int n2y, n2x, tmp, rotate, diff;
@@ -800,37 +831,26 @@ bool project(struct source origin, int rad, struct loc finish,
 					n2y = y - start.y + 20;
 					n2x = x - start.x + 20;
 
-					/* 
-					 * Find the angular difference (/2) between 
-					 * the lines to the end of the arc's center-
-					 * line and to the current grid.
+					/* Find the angular difference (/2) between the lines to
+					 * the end of the arc's center-line and to the current grid.
 					 */
 					rotate = 90 - get_angle_to_grid[n1y][n1x];
 					tmp = ABS(get_angle_to_grid[n2y][n2x] + rotate) % 180;
 					diff = ABS(90 - tmp);
 
-					/* 
-					 * If difference is not greater then that 
-					 * allowed, and the grid is in LOS, accept it.
-					 */
-					if (diff < (degrees_of_arc + 6) / 4) {
-						if (los(cave, centre, grid)) {
-							blast_grid[num_grids].y = y;
-							blast_grid[num_grids].x = x;
-							distance_to_grid[num_grids] = dist_from_centre;
-							sqinfo_on(square(cave, grid).info, SQUARE_PROJECT);
-							num_grids++;
-						}
-					}
-				} else {
-					/* Accept all grids in LOS */
-					if (los(cave, centre, loc(x, y))) {
-						blast_grid[num_grids].y = y;
-						blast_grid[num_grids].x = x;
-						distance_to_grid[num_grids] = dist_from_centre;
-						sqinfo_on(square(cave, grid).info, SQUARE_PROJECT);
-						num_grids++;
-					}
+					/* If difference is greater then that allowed, skip it,
+					 * unless it's on the target path */
+					if ((diff >= (degrees_of_arc + 6) / 4) && !on_path)
+						continue;
+				}
+
+				/* Accept remaining grids if in LOS or on the projection path */
+				if (los(cave, centre, grid) || on_path) {
+					blast_grid[num_grids].y = y;
+					blast_grid[num_grids].x = x;
+					distance_to_grid[num_grids] = dist_from_centre;
+					sqinfo_on(square(cave, grid)->info, SQUARE_PROJECT);
+					num_grids++;
 				}
 			}
 		}
@@ -848,8 +868,8 @@ bool project(struct source origin, int rad, struct loc finish,
 			/* If a particular diameter for the source of the explosion's
 			 * energy is given, it is full strength to that diameter and
 			 * then reduces */
-			dam_temp = (diameter_of_source * dam) / ((i + 1) * 10);
-			if (dam_temp > (u32b) dam) {
+			dam_temp = (diameter_of_source * dam) / (i + 1);
+			if (dam_temp > (uint32_t) dam) {
 				dam_temp = dam;
 			}
 		}
@@ -949,7 +969,7 @@ bool project(struct source origin, int rad, struct loc finish,
 			int y = last_hit_grid.y;
 
 			/* Track if possible */
-			if (square(cave, loc(x, y)).mon > 0) {
+			if (square(cave, loc(x, y))->mon > 0) {
 				struct monster *mon = square_monster(cave, loc(x, y));
 
 				/* Recall and track */
@@ -970,15 +990,18 @@ bool project(struct source origin, int rad, struct loc finish,
 			power = mon->race->spell_power;
 
 			/* Breaths from powerful monsters get power effects as well */
-			if (monster_is_powerful(mon) && (flg & (PROJECT_PLAY)))
+			if (monster_is_powerful(mon))
 				power = MAX(power, 80);
 		}
 		for (i = 0; i < num_grids; i++) {
 			if (project_p(origin, distance_to_grid[i], blast_grid[i],
-						  dam_at_dist[distance_to_grid[i]], typ, power)) {
+						  dam_at_dist[distance_to_grid[i]], typ, power,
+						  flg & PROJECT_SELF)) {
 				notice = true;
-				if (player->is_dead)
+				if (player->is_dead) {
+					mem_free(dam_at_dist);
 					return notice;
+				}
 				break;
 			}
 		}
@@ -997,13 +1020,13 @@ bool project(struct source origin, int rad, struct loc finish,
 	/* Clear all the processing marks. */
 	for (i = 0; i < num_grids; i++) {
 		/* Clear the mark */
-		sqinfo_off(square(cave, blast_grid[i]).info, SQUARE_PROJECT);
+		sqinfo_off(square(cave, blast_grid[i])->info, SQUARE_PROJECT);
 	}
 
 	/* Update stuff if needed */
 	if (player->upkeep->update) update_stuff(player);
 
-	free(dam_at_dist);
+	mem_free(dam_at_dist);
 
 	/* Return "something was noticed" */
 	return (notice);

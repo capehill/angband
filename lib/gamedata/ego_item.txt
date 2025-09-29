@@ -22,6 +22,12 @@
 # flags-off: flag | flag | etc
 # values: label[value] | label[value] | etc.
 # min-values: label[value] | label[value] | etc.
+# act: name
+# time: timeout random value
+# brand: code
+# slay: code
+# curse: name : power
+# desc: description
 
 # Some fields accept randomized numbers of the form "10+2d3M4" where
 # 10 is the non-variable base, 2d3 is a standard die roll, and
@@ -30,7 +36,13 @@
 # optional, and the number of dice is optional and assumed to be 1
 # when not specified.  10+2d3M4 has the range 12-20.  10+M4 has the
 # range 10-14.  10+2d3 has the range 12-16.  10+d3 has the range 11-13.
-# 2d3, d3, M4, 2d3M4, and d3M4 are all acceptable as well.
+# 2d3, d3, M4, 2d3M4, and d3M4 are all acceptable as well.  Randomized
+# expressions which begin with "-" are currently handled differently in
+# the "values" line than they are elsewhere.  In the "values" line, the
+# leading "-" sets the sign on the base value (i.e. 10 in the example).
+# On other lines, a leading "-" in the randomized expression means multiply
+# what follows by negative one.  As a result, something like "-d4" will not
+# work as you want when used for a "values" line.  Use "-5+1d4" instead.
 
 # 'name' indicates the beginning of an entry.
 
@@ -58,15 +70,6 @@
 # One or more 'item' lines are used when we don't want all object kinds of
 # this tval to be possible for this ego-item.
 
-# 'effect' is for the effect when an item is activated.  Fields are the
-# name of the effect (as found in src/list-effects.h) and possibly one or
-# two parameters to the effect.
-
-# 'dice' provides a random value to be used by an activation effect
-
-# 'time' gives a random value to be used as the time to recharge for an
-# activatable item.
-
 # 'flags' is for flags, which can be either object flags (as found in
 # src/list-object-flags.h) or kind flags (src/list-kind-flags.h).  As many
 # flags: lines may be used as are needed to specify all the flags, and
@@ -77,14 +80,40 @@
 # lanterns to take fuel, so we add a 'flags-off:TAKES_FUEL' line to subtract
 # that flag.
 
-# 'values' is for object modifiers which take a value - stats, slays, brands,
-# resistances and so on.  An example is SLAY_UNDEAD[3], which denotes that
-# the weapon concerned has a basic 3x slay against undead creatures.  Like
-# flags, values are separated by '|' and as many values: lines as needed
-# can be used.
+# 'values' is for properties that take a value.  Valid properties are the
+# object modifiers (as found in list-stats.h and list-object-modifiers.h)
+# or resistances ('RES_' prepended to the element name from list-elements.h).
+# The value appears in brackets after the property name.  For object modifiers,
+# the value can be any random expression.  For resistances, it must be a plain
+# integer value with the useful ones being 1 (resist), 3 (immune), and -1
+# (vulnerable).  Like flags, values are separated by '|' and as many values:
+# lines as needed can be used.
 
 # 'min-values' is for minimum values of values recorded in a 'values' line.
 # These work like minimum combat values, but for value-defined modifiers.
+# While resistances can be specified on a 'values' line, they can not appear
+# in a 'min-values' line.  Also, unlike the 'values' line, all the values must
+# be plain integers:  full random expressions are not allowed.
+
+# 'act' is any activation that the ego might have - most have none.  The
+# activation is specified by its name, as found in activation.txt.
+
+# 'time' gives a random value to be used as the time to recharge for the
+# activation.
+
+# 'brand' adds a brand to the ego.  It should be omitted for egos without
+# brands and may appear more than once for egos with multiple brands.  Specify
+# the brand to be added by its code in brand.txt.
+
+# 'slay' adds a slay to the ego.  It should be omitted for egos without slays
+# and may appear more than once for egos with multiple slays.  Specify the slay
+# to be added by its code in slay.txt.
+
+# 'curse' adds curse to the ego.  It should be omitted for egos without curses
+# and may appear more than once for egos with multiple curses.  A curse has a
+# name (as given in curse.txt) and a power.  The power is a positive integer
+# and indicates how hard it is to remove the curse.  A larger power is more
+# difficult to remove.
 
 # 'desc' is for description. As many desc: lines may be used as are needed
 # to describe the object. Note that lines will need spaces at their
@@ -96,10 +125,10 @@
 
 name:of Shadows
 info:1000:10
-alloc:8:10 to 100
+alloc:40:10 to 100
 item:light:Lantern
 values:STEALTH[d2] | RES_LIGHT[1] | LIGHT[-4]
-min-values:STEALTH[0]
+min-values:STEALTH[0] | LIGHT[-4]
 
 name:of Brightness
 info:2000:10
@@ -649,6 +678,7 @@ name:of Backbiting
 info:0:0
 alloc:0:10 to 80
 combat:-26+d25:-26+d25:0
+min-combat:255:255:0
 type:shot
 type:arrow
 type:bolt
@@ -1099,7 +1129,7 @@ info:12500:10
 alloc:5:40 to 100
 combat:0:0:d10
 min-combat:255:0:0
-item:dragon armor:Pseudo-Dragon Scale Mail
+item:dragon armor:Shining Dragon Scale Mail
 item:dragon armor:Law Dragon Scale Mail
 item:dragon armor:Gold Dragon Scale Mail
 item:dragon armor:Chaos Dragon Scale Mail
@@ -1110,7 +1140,7 @@ name:of Elvenkind
 info:15000:25
 alloc:3:50 to 127
 combat:0:0:d10
-item:dragon armor:Pseudo-Dragon Scale Mail
+item:dragon armor:Shining Dragon Scale Mail
 item:dragon armor:Law Dragon Scale Mail
 item:dragon armor:Gold Dragon Scale Mail
 item:dragon armor:Chaos Dragon Scale Mail

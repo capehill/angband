@@ -1,6 +1,195 @@
 Welcome to the changelog for Angband 4. This file tracks the changes made since
 3.5.1.
 
+Angband 4.2.5
+=============
+
+This version sees the return of the borg automatic player, removed in the major
+restructure leading up to version 4.0.0, resurrected by Adam Goodman.  In now
+standard fashion, it also contains a great many bug fixes and code improvements
+by backwardsEric.  Headline changes are:
+ - return of the borg
+ - fix problems caused by some necromancer spells
+ - hydras now bash rather than open doors
+ - clarification of symbols on the character sheet
+ - torch random artifacts can drop deeper in the dungeon
+ - improvements to stats and debug commands
+ - autobuild for NDS, DOS, msys2 and nmake
+ - too many areas of code improvement to mention individually
+
+Angband 4.2.4
+=============
+
+This version contains a LOT of bug-fixing and code improvements, again
+mostly by backwardsEric.  The main changes were:
+
+ - use C99 types instead of the angband special types
+ - Single Combat maybe finally bug-free
+ - improvements to the birth process
+ - improvements to the NDS port
+ - many improvements to auto-building and all the front ends
+ - improvements to changing of background colours
+ - adding of a panic directory for panic saves
+ - new tests, and improvements to current ones
+ - re-organisation of effects code
+ - add a player argument to a lot of functions that needed it
+ - import a lot of historical documentation
+ - lots of tidying and neatening
+
+Angband 4.2.3
+=============
+
+This version contains considerable bug-fixing - mostly by backwardsEric.  There
+is also a new offical site, basically the same as the old rephial.org but hosted
+on Github at http://angband.github.io/angband.  The main changes were:
+
+ - updates to necromancer and ranger spells
+ - improvements to quiver inscriptions
+ - many improvements to dungeon generation, especially robustness
+ - many improvements to testing and building the game, especially with SDL2
+ - make the duration of multiple timed effects exactly the same
+ - allow selection for effects that used to give a random choice of effects
+ - fix a bug that made radius of artifact lights too small by one
+ - improvements to handling in-game information on effects
+ - better documentation in datafiles
+ - debugging commands now use the Angband 4 command system
+ - upgrade of the NDS port to the 3DS with many improvements
+
+Angband 4.2.2
+=============
+
+This version is almost entirely bug-fixing and quality-of-life improvements,
+plus a few balance tweaks.  The game was also set up to automatically build and
+run tests on Github.
+
+ - many bugfixes and UI improvements
+ - a further significant overhaul of blackguard spells
+ - tweaks to some priest spells
+ - new knowledge menu for player shapes
+ - increase to chest frequency
+ - uniques can no longer be trampled
+ - adjustment to food system, including much quicker reduction of Full status
+ - afraid monsters with nowhere to run become held
+ - throwing weapons can be stored in the quiver
+ - improved method for default stat point allocation at birth
+ - tweaks to powerful modifiers in randart generation
+
+Angband 4.2.1
+=============
+
+This version is maybe best described as consolidating the big changes made in
+version 4.2.0. Again, there are too many individual changes to list, so this
+is a summary.
+
+ - percentage combat is refined to become an actually playable option
+ - improvements to throwing
+ - update to town generation
+ - a major update to the new blackguard class
+ - several tweaks to the other new classes
+ - many improvements to the MacOS front-end particularly, but also others
+ - improvements to tiles
+ - addition of fancy color-cycling of monsters
+ - configurability of character sheet
+ - inclusion of some new, rare level types
+ - experimental Windows curses and SDL2 console ports added
+ - many small bugs fixed and quality-of-life improvements made
+
+Angband 4.2.0
+=============
+
+This version is mainly a major overhaul of classes and the monster list.  As
+for the last two 4.x.0 releases, there are too many individual changes to list,
+so what follows is a summary.
+
+Classes
+-------
+Two new realms of magic have been added, nature and shadow, to the existing
+divine and arcane realms.
+ -  Nature realm relies on harnessing the power of the earth, and is opposite
+    to the arcane realm, which uses craft and cunning.
+ -  Divine realm uses harmony and light, and is opposite to the shadow realm
+    which aligns with darkness, power and sacrifice.
+ -  Rangers now use nature magic, like the new Druid class
+ -  Necromancers are the major shadow caster class
+ -  Blackguards are fighters enhanced by shadow magic
+ -  Pure casters (mages, priests, druids, necromancers) use five books (down
+    from nine)
+ -  Hybrid casters (rogues, paladins, rangers, blackguards) use two or three
+    books
+ -  Classes no longer have different rates of gaining experience
+
+Monsters
+--------
+Each base monster type has had its game niche reconsidered, and there has been
+a general push to use Tolkien-inspired monsters where appropriate.  Some of the
+major changes include:
+ -  Ainur - most of these now align with one of the great Valar, and have
+    corresponding powers
+ -  Dragons - these have mostly been made stronger and deeper
+ -  Humanoids - dark elves have been replaced with dwarves, gnomes with Drúedain
+ -  Hydras - each hydra type is like the previous type with a new head and
+    attack added
+ -  People - the association of some of these with player classes has been
+    expanded to include the new classes
+ -  Snakes - some of these are now dangerous
+ -  Spiders - more dangerous and deeper, with unique abilities
+ -  Trees/Ents - these are new, tough to kill enemies
+ -  Wights/Wraiths - wights are all now shallower than wraiths, and the
+    Ringwraiths are much deeper
+
+Game Mechanics
+--------------
+In the course of the class and monster changes, many new mechanics have been
+introduced, with some of the major ones being:
+ -  Player and monster shapechanges
+ -  Variable light and darkness are created by monsters, player gear and player
+    spells, and the player has a meter to measure the light level on their
+	square
+ -  Mages can drain mana from magic devices
+ -  Rogues can steal from monsters
+ -  Temporary brands and slays (Priests, Paladins, Blackguards)
+ -  Necromancers can see in the dark, and can cast less well in light
+ -  Healing of hitpoints every turn for a time (Druids)
+ -  Control of a monster, including making it attack other monsters
+    (Necromancers)
+ -  Shield bashes (Warriors, Paladins, Blackguards)
+ -  Decoys which monsters will attack instead of the player (Rangers)
+ -  Blackguards can go into a state of bloodlust which improves their combat at
+    a price
+ -  Monsters can whip or spit on the player from nearby
+ -  Monster groups act more as a group, with leaders and sometimes bodyguards
+ -  Innate spells (e.g. breaths) and cast spells (e.g. bolts) have separate
+    frequencies
+ -  Deeper in the dungeon shallow monsters are less likely to appear
+ -  Monsters can teleport to the player
+ -  Spiders can weave webs
+ -  Monsters can have innate darkness around them
+ -  Traps added that trigger on leaving their square
+ -  Ringwraiths can inflict the Black Breath
+ -  Monster spells can have different levels depending on monster spell power
+ -  The player now has a hunger meter, and food is more important
+ -  As with classes, all races gain experience at the same rate, except for
+    humans who are faster, and high-elves who are slower
+ -  The Temple has been replaced with a Bookseller who sells books of all realms
+
+Code Improvements
+-----------------
+There have also been some improvements to the codebase, both visible and
+invisible to the player.  The main ones are:
+ -  Addition of an SDL2 front end
+ -  Change to mostly using a single grid rather than x and y coordinates in
+    much of the code
+ -  More readability of datafiles
+ -  Some font improvements
+ -  Some new tiles
+ -  A new online (rather than in-game) help system
+ -  A new experimental (and so far unbalanced) birth option for percentage
+    damage
+ -  An option to start a new game after dying instead of closing the game and
+    re-opening
+ -  Many fixes to bugs and memory leaks
+
+
 Angband 4.1.3
 =============
 

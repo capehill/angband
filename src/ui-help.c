@@ -18,6 +18,7 @@
 #include "angband.h"
 #include "buildid.h"
 #include "init.h"
+#include "ui-help.h"
 #include "ui-input.h"
 #include "ui-output.h"
 #include "ui-term.h"
@@ -47,7 +48,7 @@ bool show_file(const char *name, const char *what, int line, int mode)
 {
 	int i, k, n;
 
-	struct keypress ch;
+	struct keypress ch = KEYPRESS_NULL;
 
 	/* Number of "real" lines passed by */
 	int next = 0;
@@ -143,14 +144,6 @@ bool show_file(const char *name, const char *what, int line, int mode)
 		fff = file_open(path, MODE_READ, FTYPE_TEXT);
 	}
 
-	/* Look in "info" */
-	if (!fff) {
-		strnfmt(caption, sizeof(caption), "User info file '%s'", name);
-
-		path_build(path, sizeof(path), ANGBAND_DIR_INFO, name);
-		fff = file_open(path, MODE_READ, FTYPE_TEXT);
-	}
-
 	/* Oops */
 	if (!fff) {
 		/* Message */
@@ -234,7 +227,7 @@ bool show_file(const char *name, const char *what, int line, int mode)
 			/* Close it */
 			file_close(fff);
 
-			/* Hack -- Re-Open the file */
+			/* Re-Open the file */
 			fff = file_open(path, MODE_READ, FTYPE_TEXT);
 			if (!fff) return (true);
 
@@ -268,7 +261,7 @@ bool show_file(const char *name, const char *what, int line, int mode)
 
 		/* Dump the next lines of the file */
 		for (i = 0; i < hgt - 4; ) {
-			/* Hack -- track the "first" line */
+			/* Track the "first" line */
 			if (!i) line = next;
 
 			/* Get a line of the file or stop */
@@ -287,12 +280,6 @@ bool show_file(const char *name, const char *what, int line, int mode)
 				continue;
 			}
 
-			/* skip | characters */
-			strskip(buf,'|','\\');
-
-			/* escape backslashes */
-			strescape(buf,'\\');
-
 			/* Count the "real" lines */
 			next++;
 
@@ -302,17 +289,17 @@ bool show_file(const char *name, const char *what, int line, int mode)
 			/* Make the line lower case */
 			if (!case_sensitive) string_lower(lc_buf);
 
-			/* Hack -- keep searching */
+			/* Keep searching */
 			if (find && !i && !strstr(lc_buf, find)) continue;
 
-			/* Hack -- stop searching */
+			/* Stop searching */
 			find = NULL;
 
 			/* Dump the line */
 			Term_putstr(0, i+2, -1, COLOUR_WHITE, buf);
 
 			/* Highlight "shower" */
-			if (shower[0]) {
+			if (strlen(shower)) {
 				const char *str = lc_buf;
 
 				/* Display matches */
@@ -332,9 +319,9 @@ bool show_file(const char *name, const char *what, int line, int mode)
 			i++;
 		}
 
-		/* Hack -- failed search */
+		/* Failed search */
 		if (find) {
-			bell("Search string not found!");
+			bell();
 			line = back;
 			find = NULL;
 			continue;
@@ -407,7 +394,13 @@ bool show_file(const char *name, const char *what, int line, int mode)
 
 		/* Go to a specific file */
 		if (ch.code == '%') {
-			char ftmp[80] = "help.hlp";
+			char ftmp[80];
+
+			if (OPT(player, rogue_like_commands)) {
+				my_strcpy(ftmp, "r_index.txt", sizeof(ftmp));
+			} else {
+				my_strcpy(ftmp, "index.txt", sizeof(ftmp));
+			}
 
 			prt("Goto File: ", hgt - 1, 0);
 			if (askfor_aux(ftmp, sizeof(ftmp), NULL)) {
@@ -419,6 +412,7 @@ bool show_file(const char *name, const char *what, int line, int mode)
 		switch (ch.code) {
 			/* up a line */
 			case ARROW_UP:
+			case 'k':
 			case '8': line--; break;
 
 			/* up a page */
@@ -433,6 +427,7 @@ bool show_file(const char *name, const char *what, int line, int mode)
 			/* down a line */
 			case ARROW_DOWN:
 			case '2':
+			case 'j':
 			case KC_ENTER: line++; break;
 
 			/* down a page */
@@ -478,7 +473,8 @@ void do_cmd_help(void)
 	screen_save();
 
 	/* Peruse the main help file */
-	(void)show_file("help.hlp", NULL, 0, 0);
+	(void)show_file((OPT(player, rogue_like_commands)) ?
+		"r_index.txt" : "index.txt", NULL, 0, 0);
 
 	/* Load screen */
 	screen_load();

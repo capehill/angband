@@ -34,7 +34,7 @@ void object_base_name(char *buf, size_t max, int tval, bool plural)
 	size_t end = 0;
 
 	if (kb->name && kb->name[0]) 
-		end = obj_desc_name_format(buf, max, end, kb->name, NULL, plural);
+		(void) obj_desc_name_format(buf, max, end, kb->name, NULL, plural);
 }
 
 
@@ -54,7 +54,7 @@ void object_kind_name(char *buf, size_t max, const struct object_kind *kind,
 
 	/* Use proper name (Healing, or whatever) */
 	else
-		obj_desc_name_format(buf, max, 0, kind->name, NULL, false);
+		(void) obj_desc_name_format(buf, max, 0, kind->name, NULL, false);
 }
 
 
@@ -80,13 +80,13 @@ static const char *obj_desc_get_modstr(const struct object_kind *kind)
  * for almost everything else, and a bit extra for books. 
  */
 static const char *obj_desc_get_basename(const struct object *obj, bool aware,
-										 bool terse, int mode)
+		bool terse, uint32_t mode, const struct player *p)
 {
 	bool show_flavor = !terse && obj->kind->flavor;
 
 	if (mode & ODESC_STORE)
 		show_flavor = false;
-	if (aware && !OPT(player, show_flavors)) show_flavor = false;
+	if (aware && p && !OPT(p, show_flavors)) show_flavor = false;
 
 	/* Artifacts are special */
 	if (obj->artifact && (aware || object_is_known_artifact(obj) || terse ||
@@ -183,12 +183,12 @@ static const char *obj_desc_get_basename(const struct object *obj, bool aware,
  */
 static size_t obj_desc_name_prefix(char *buf, size_t max, size_t end,
 		const struct object *obj, const char *basename,
-		const char *modstr, bool terse)
+		const char *modstr, bool terse, uint16_t number)
 {
-	if (obj->number == 0) {
+	if (number == 0) {
 		strnfcat(buf, max, &end, "no more ");
-	} else if (obj->number > 1) {
-		strnfcat(buf, max, &end, "%d ", obj->number);
+	} else if (number > 1) {
+		strnfcat(buf, max, &end, "%u ", number);
 	} else if (object_is_known_artifact(obj)) {
 		strnfcat(buf, max, &end, "the ");
 	} else if (*basename == '&') {
@@ -268,13 +268,15 @@ size_t obj_desc_name_format(char *buf, size_t max, size_t end,
 			if (!singular || !plural || !endmark) return end;
 
 			if (!pluralise)
-				strnfcat(buf, max, &end, "%.*s", plural - singular - 1,
-						 singular);
+				strnfcat(buf, max, &end, "%.*s",
+					(int) (plural - singular) - 1,
+					singular);
 			else
-				strnfcat(buf, max, &end, "%.*s", endmark - plural, plural);
+				strnfcat(buf, max, &end, "%.*s",
+					(int) (endmark - plural), plural);
 
 			fmt = endmark;
-		} else if (*fmt == '#') {
+		} else if (*fmt == '#' && modstr) {
 			/* Add modstr, with pluralisation if relevant */
 			end = obj_desc_name_format(buf, max, end, modstr, NULL,	pluralise);
 		}
@@ -295,10 +297,13 @@ size_t obj_desc_name_format(char *buf, size_t max, size_t end,
  * Format object obj's name into 'buf'.
  */
 static size_t obj_desc_name(char *buf, size_t max, size_t end,
-		const struct object *obj, bool prefix, int mode, bool terse)
+		const struct object *obj, bool prefix, uint32_t mode,
+		bool terse, const struct player *p)
 {
 	bool store = mode & ODESC_STORE ? true : false;
 	bool spoil = mode & ODESC_SPOIL ? true : false;
+	uint16_t number = (mode & ODESC_ALTNUM) ?
+		(mode & 0xFFFF0000) >> 16 : obj->number;
 	
 	/* Actual name for flavoured objects if aware, or in store, or spoiled */
 	bool aware = object_flavor_is_aware(obj) || store || spoil;
@@ -307,13 +312,15 @@ static size_t obj_desc_name(char *buf, size_t max, size_t end,
 	 * (not one in stack or forced plural) */
 	bool plural = !(mode & ODESC_SINGULAR) &&
 		!obj->artifact &&
-		(obj->number != 1 || (mode & ODESC_PLURAL));
-	const char *basename = obj_desc_get_basename(obj, aware, terse, mode);
+		(number != 1 || (mode & ODESC_PLURAL));
+	const char *basename = obj_desc_get_basename(obj, aware, terse,
+		mode, p);
 	const char *modstr = obj_desc_get_modstr(obj->kind);
 
 	/* Quantity prefix */
 	if (prefix)
-		end = obj_desc_name_prefix(buf, max, end, obj, basename, modstr, terse);
+		end = obj_desc_name_prefix(buf, max, end, obj, basename,
+			modstr, terse, number);
 
 	/* Base name */
 	end = obj_desc_name_format(buf, max, end, basename, modstr, plural);
@@ -337,11 +344,10 @@ static size_t obj_desc_name(char *buf, size_t max, size_t end,
 /**
  * Is obj armor?
  */
-static bool obj_desc_show_armor(const struct object *obj)
+static bool obj_desc_show_armor(const struct object *obj,
+		const struct player *p)
 {
-	if (player->obj_k->ac && (obj->ac || tval_is_armor(obj))) return true;
-
-	return false;
+	return (!p || p->obj_k->ac) && (obj->ac || tval_is_armor(obj));
 }
 
 /**
@@ -355,51 +361,8 @@ static size_t obj_desc_chest(const struct object *obj, char *buf, size_t max,
 	/* The chest is unopened, but we know nothing about its trap/lock */
 	if (obj->pval && !obj->known->pval) return end;
 
-	/* May be empty, disarmed or trapped */
-	if (!obj->pval) {
-		strnfcat(buf, max, &end, " (empty)");
-	} else if (!is_locked_chest(obj)) {
-		if (chest_trap_type(obj) != 0)
-			strnfcat(buf, max, &end, " (disarmed)");
-		else
-			strnfcat(buf, max, &end, " (unlocked)");
-	} else {
-		/* Describe the traps */
-		switch (chest_trap_type(obj))
-		{
-			case 0:
-				strnfcat(buf, max, &end, " (Locked)");
-				break;
-
-			case CHEST_LOSE_STR:
-				strnfcat(buf, max, &end, " (Poison Needle)");
-				break;
-
-			case CHEST_LOSE_CON:
-				strnfcat(buf, max, &end, " (Poison Needle)");
-				break;
-
-			case CHEST_POISON:
-				strnfcat(buf, max, &end, " (Gas Trap)");
-				break;
-
-			case CHEST_PARALYZE:
-				strnfcat(buf, max, &end, " (Gas Trap)");
-				break;
-
-			case CHEST_EXPLODE:
-				strnfcat(buf, max, &end, " (Explosion Device)");
-				break;
-
-			case CHEST_SUMMON:
-				strnfcat(buf, max, &end, " (Summoning Runes)");
-				break;
-
-			default:
-				strnfcat(buf, max, &end, " (Multiple Traps)");
-				break;
-		}
-	}
+	/* Describe the traps */
+	strnfcat(buf, max, &end, " (%s)", chest_trap_name(obj));
 
 	return end;
 }
@@ -409,48 +372,57 @@ static size_t obj_desc_chest(const struct object *obj, char *buf, size_t max,
  * class, missile multipler
  */
 static size_t obj_desc_combat(const struct object *obj, char *buf, size_t max, 
-							  size_t end, int mode)
+		size_t end, uint32_t mode, const struct player *p)
 {
 	bool spoil = mode & ODESC_SPOIL ? true : false;
+	int to_h, to_d, to_a;
 
 	/* Display damage dice if they are known */
 	if (kf_has(obj->kind->kind_flags, KF_SHOW_DICE) &&
-		(player->obj_k->dd && player->obj_k->ds))
+		(!p || (p->obj_k->dd && p->obj_k->ds))) {
 		strnfcat(buf, max, &end, " (%dd%d)", obj->dd, obj->ds);
+	}
 
 	/* Display shooting power as part of the multiplier */
-	if (kf_has(obj->kind->kind_flags, KF_SHOW_MULT))
+	if (kf_has(obj->kind->kind_flags, KF_SHOW_MULT)) {
 		strnfcat(buf, max, &end, " (x%d)",
 				 obj->pval + obj->modifiers[OBJ_MOD_MIGHT]);
+	}
 
 	/* No more if the object hasn't been assessed */
 	if (!((obj->notice & OBJ_NOTICE_ASSESSED) || spoil)) return end;
 
+	to_h = object_to_hit(obj);
+	to_d = object_to_dam(obj);
+	to_a = object_to_ac(obj);
+
 	/* Show weapon bonuses if we know of any */
-	if (player->obj_k->to_h && player->obj_k->to_d &&
-		(tval_is_weapon(obj) || obj->to_d ||
-		 (obj->to_h && !tval_is_body_armor(obj)) ||
-		 (!object_has_standard_to_h(obj) && !obj->artifact && !obj->ego))) {
+	if ((!p || (p->obj_k->to_h && p->obj_k->to_d))
+			&& (tval_is_weapon(obj) || to_d
+			|| (to_h && !tval_is_body_armor(obj))
+			|| ((!object_has_standard_to_h(obj)
+			|| obj->to_h != to_h)
+			&& !obj->artifact && !obj->ego))) {
 		/* In general show full combat bonuses */
-		strnfcat(buf, max, &end, " (%+d,%+d)", obj->to_h, obj->to_d);
+		strnfcat(buf, max, &end, " (%+d,%+d)", to_h, to_d);
 	} else if (obj->to_h < 0 && object_has_standard_to_h(obj)) {
 		/* Special treatment for body armor with only a to-hit penalty */
 		strnfcat(buf, max, &end, " (%+d)", obj->to_h);
-	} else if (obj->to_d != 0 && player->obj_k->to_d) {
+	} else if (to_d != 0 && (!p || p->obj_k->to_d)) {
 		/* To-dam rune known only */
-		strnfcat(buf, max, &end, " (%+d)", obj->to_d);
-	} else if (obj->to_h != 0 && player->obj_k->to_h) {
+		strnfcat(buf, max, &end, " (%+d)", to_d);
+	} else if (to_h != 0 && (!p || p->obj_k->to_h)) {
 		/* To-hit rune known only */
-		strnfcat(buf, max, &end, " (%+d)", obj->to_h);
+		strnfcat(buf, max, &end, " (%+d)", to_h);
 	}
 
 	/* Show armor bonuses */
-	if (player->obj_k->to_a) {
-		if (obj_desc_show_armor(obj))
-			strnfcat(buf, max, &end, " [%d,%+d]", obj->ac, obj->to_a);
-		else if (obj->to_a)
-			strnfcat(buf, max, &end, " [%+d]", obj->to_a);
-	} else if (obj_desc_show_armor(obj)) {
+	if (!p || p->obj_k->to_a) {
+		if (obj_desc_show_armor(obj, p))
+			strnfcat(buf, max, &end, " [%d,%+d]", obj->ac, to_a);
+		else if (to_a)
+			strnfcat(buf, max, &end, " [%+d]", to_a);
+	} else if (obj_desc_show_armor(obj, p)) {
 		strnfcat(buf, max, &end, " [%d]", obj->ac);
 	}
 
@@ -517,7 +489,7 @@ static size_t obj_desc_mods(const struct object *obj, char *buf, size_t max,
  * Describe charges or charging status for re-usable items with magic effects
  */
 static size_t obj_desc_charges(const struct object *obj, char *buf, size_t max,
-							   size_t end, int mode)
+		size_t end, uint32_t mode)
 {
 	bool aware = object_flavor_is_aware(obj) || (mode & ODESC_STORE);
 
@@ -540,9 +512,9 @@ static size_t obj_desc_charges(const struct object *obj, char *buf, size_t max,
  * Add player-defined inscriptions or game-defined descriptions
  */
 static size_t obj_desc_inscrip(const struct object *obj, char *buf,
-							   size_t max, size_t end)
+		size_t max, size_t end, const struct player *p)
 {
-	const char *u[5] = { 0, 0, 0, 0, 0 };
+	const char *u[6] = { 0, 0, 0, 0, 0, 0 };
 	int n = 0;
 
 	/* Get inscription */
@@ -562,7 +534,7 @@ static size_t obj_desc_inscrip(const struct object *obj, char *buf,
 		u[n++] = "cursed";
 
 	/* Note ignore */
-	if (ignore_item_ok(obj))
+	if (p && ignore_item_ok(p, obj))
 		u[n++] = "ignore";
 
 	/* Note unknown properties */
@@ -608,6 +580,11 @@ static size_t obj_desc_aware(const struct object *obj, char *buf, size_t max,
 /**
  * Describes item `obj` into buffer `buf` of size `max`.
  *
+ * \param buf is the buffer for the description.  Must have space for at least
+ * max bytes.
+ * \param max is the size of the buffer, in bytes.
+ * \param obj is the object to describe.
+ * \param mode must be a bitwise-or of zero or one more of the following:
  * ODESC_PREFIX prepends a 'the', 'a' or number
  * ODESC_BASE results in a base description.
  * ODESC_COMBAT will add to-hit, to-dam and AC info.
@@ -615,13 +592,20 @@ static size_t obj_desc_aware(const struct object *obj, char *buf, size_t max,
  * ODESC_PLURAL will pluralise regardless of the number in the stack.
  * ODESC_STORE turns off ignore markers, for in-store display.
  * ODESC_SPOIL treats the object as fully identified.
- *
- * Setting 'prefix' to true prepends a 'the', 'a' or the number in the stack,
- * respectively.
+ * ODESC_CAPITAL capitalises the object name.
+ * ODESC_TERSE causes a terse name to be used.
+ * ODESC_NOEGO omits ego names.
+ * ODESC_ALTNUM causes the high 16 bits of mode to be used as the number
+ * of objects instead of using obj->number.  Note that using ODESC_ALTNUM
+ * is not fully compatible with ODESC_EXTRA:  the display of number of rods
+ * charging does not account for the alternate number.
+ * \param p is the player whose knowledge is factored into the description.
+ * If p is NULL, the description is for an omniscient observer.
  *
  * \returns The number of bytes used of the buffer.
  */
-size_t object_desc(char *buf, size_t max, const struct object *obj, int mode)
+size_t object_desc(char *buf, size_t max, const struct object *obj,
+		uint32_t mode, const struct player *p)
 {
 	bool prefix = mode & ODESC_PREFIX ? true : false;
 	bool spoil = mode & ODESC_SPOIL ? true : false;
@@ -643,7 +627,7 @@ size_t object_desc(char *buf, size_t max, const struct object *obj, int mode)
 	if (tval_is_money(obj))
 		return strnfmt(buf, max, "%d gold pieces worth of %s%s",
 				obj->pval, obj->kind->name,
-				ignore_item_ok(obj) ? " {ignore}" : "");
+				ignore_item_ok(p, obj) ? " {ignore}" : "");
 
 	/* Egos and kinds whose name we know are seen */
 	if (obj->known->ego && !spoil)
@@ -655,7 +639,7 @@ size_t object_desc(char *buf, size_t max, const struct object *obj, int mode)
 	/** Construct the name **/
 
 	/* Copy the base name to the buffer */
-	end = obj_desc_name(buf, max, end, obj, prefix, mode, terse);
+	end = obj_desc_name(buf, max, end, obj, prefix, mode, terse, p);
 
 	/* Combat properties */
 	if (mode & ODESC_COMBAT) {
@@ -664,7 +648,7 @@ size_t object_desc(char *buf, size_t max, const struct object *obj, int mode)
 		else if (tval_is_light(obj))
 			end = obj_desc_light(obj, buf, max, end);
 
-		end = obj_desc_combat(obj->known, buf, max, end, mode);
+		end = obj_desc_combat(obj->known, buf, max, end, mode, p);
 	}
 
 	/* Modifiers, charges, flavour details, inscriptions */
@@ -676,7 +660,7 @@ size_t object_desc(char *buf, size_t max, const struct object *obj, int mode)
 		if (mode & ODESC_STORE)
 			end = obj_desc_aware(obj, buf, max, end);
 		else
-			end = obj_desc_inscrip(obj, buf, max, end);
+			end = obj_desc_inscrip(obj, buf, max, end, p);
 	}
 
 	return end;

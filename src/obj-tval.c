@@ -162,6 +162,11 @@ bool tval_is_sharp_missile(const struct object *obj)
 	}
 }
 
+bool tval_is_bolt(const struct object *obj)
+{
+	return obj->tval == TV_BOLT;
+}
+
 bool tval_is_launcher(const struct object *obj)
 {
 	return obj->tval == TV_BOW;
@@ -355,15 +360,15 @@ bool tval_is_zapper(const struct object *obj)
  */
 static const grouper tval_names[] =
 {
-	#define TV(a, b, c) { TV_##a, b },
+	#define TV(a, b) { TV_##a, b },
 	#include "list-tvals.h"
 	#undef TV
 };
 
 /**
- * Small hack to allow both spellings of armer
+ * Small hack to allow both spellings of armor
  */
-char *de_armour(const char *name)
+static char *de_armour(const char *name)
 {
 	char newname[40];
 	char *armour;
@@ -381,12 +386,13 @@ char *de_armour(const char *name)
  */
 int tval_find_idx(const char *name)
 {
-	size_t i = 0;
-	unsigned int r;
-	char *mod_name;
+	size_t i;
+	char *mod_name, *pe;
+	unsigned long r = strtoul(name, &pe, 10);
 
-	if (sscanf(name, "%u", &r) == 1)
-		return r;
+	if (pe != name) {
+		return (contains_only_spaces(pe) && r < TV_MAX) ? (int)r : -1;
+	}
 
 	mod_name = de_armour(name);
 

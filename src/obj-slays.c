@@ -22,9 +22,11 @@
 #include "mon-lore.h"
 #include "mon-predicate.h"
 #include "obj-desc.h"
+#include "obj-gear.h"
 #include "obj-init.h"
 #include "obj-knowledge.h"
 #include "obj-slays.h"
+#include "obj-tval.h"
 #include "obj-util.h"
 #include "player-timed.h"
 
@@ -115,18 +117,22 @@ void copy_brands(bool **dest, bool *source)
 }
 
 /**
- * Append a random brand, currently to a randart
- * This will later change so that selection is done elsewhere
+ * Append a given brand to a list of brands
  *
- * \param current the list of brands the object already has
- * \param name the name to report for randart logging
+ * \param current the list of brands to modify
+ * \param pick is the index, greater than or equal to zero and less than
+ * z_info->brand_max, of the brand to append
+ * \return true if the given brand is not present in the list or is stronger
+ * than any brand present for the same element; return false and do not
+ * append the given brand if it is weaker than any brand already present in
+ * the list for the same element
+ *
+ * Internally assumes that current has no redundant brands.
  */
-bool append_random_brand(bool **current, struct brand **brand)
+bool append_brand(bool **current, int pick)
 {
-	int i, pick;
-
-	pick = randint1(z_info->brand_max - 1);
-	*brand = &brands[pick];
+	int i;
+	struct brand *brand = &brands[pick];
 
 	/* No existing brands means OK to add */
 	if (!(*current)) {
@@ -138,10 +144,10 @@ bool append_random_brand(bool **current, struct brand **brand)
 	/* Check the existing brands for name matches */
 	for (i = 1; i < z_info->brand_max; i++) {
 		if ((*current)[i]) {
-			/* If we get the same race, check the multiplier */
-			if (streq(brands[i].name, (*brand)->name)) {
+			/* If we get the same element, check the multiplier */
+			if (streq(brands[i].name, brand->name)) {
 				/* Same multiplier or smaller, fail */
-				if ((*brand)->multiplier <= brands[i].multiplier)
+				if (brand->multiplier <= brands[i].multiplier)
 					return false;
 
 				/* Greater multiplier, replace and accept */
@@ -159,18 +165,22 @@ bool append_random_brand(bool **current, struct brand **brand)
 }
 
 /**
- * Append a random slay, currently to a randart
- * This will later change so that selection is done elsewhere
+ * Append a given slay to a list of slays
  *
- * \param current the list of slays the object already has
- * \param name the name to report for randart logging
+ * \param current the list of slays to modify
+ * \param pick is the index, greater than or equal to zero and less than
+ * z_info->slay_max, of the slay to append
+ * \return true if the given slay is not present in the list or is stronger
+ * than any slay present affecting the same set of creatures; return false and
+ * do not append the given slay if it is weaker than any slay already present
+ * and affecting the same set of creatures
+ *
+ * Internally assumes that current has no redundant slays.
  */
-bool append_random_slay(bool **current, struct slay **slay)
+bool append_slay(bool **current, int pick)
 {
-	int i, pick;
-
-	pick = randint1(z_info->slay_max - 1);
-	*slay = &slays[pick];
+	int i;
+	struct slay *slay = &slays[pick];
 
 	/* No existing slays means OK to add */
 	if (!(*current)) {
@@ -182,11 +192,12 @@ bool append_random_slay(bool **current, struct slay **slay)
 	/* Check the existing slays for base/flag matches */
 	for (i = 1; i < z_info->slay_max; i++) {
 		if ((*current)[i]) {
-			/* If we get the same race, check the multiplier */
-			if (streq(slays[i].name, (*slay)->name) &&
-				(slays[i].race_flag == (*slay)->race_flag)) {
+			/*
+			 * If affecting the same creatures, check the multiplier
+			 */
+			if (same_monsters_slain(i, pick)) {
 				/* Same multiplier or smaller, fail */
-				if ((*slay)->multiplier <= slays[i].multiplier)
+				if (slay->multiplier <= slays[i].multiplier)
 					return false;
 
 				/* Greater multiplier, replace and accept */
@@ -204,16 +215,18 @@ bool append_random_slay(bool **current, struct slay **slay)
 }
 
 /**
- * Count a set of brands
- * \param brands The brands to count.
+ * Return the number of brands present
+ *
+ * \param brands_on is an array of z_info->brand_max booleans indicating
+ * whether each brand is present
  */
-int brand_count(bool *brands)
+int brand_count(const bool *brands_on)
 {
 	int i, count = 0;
 
 	/* Count the brands */
 	for (i = 0; i < z_info->brand_max; i++) {
-		if (brands[i]) {
+		if (brands_on[i]) {
 			count++;
 		}
 	}
@@ -223,16 +236,18 @@ int brand_count(bool *brands)
 
 
 /**
- * Count a set of slays
- * \param slays The slays to count.
+ * Return the number of slays present
+ *
+ * \param slays_on is an array of z_info->slay_max booleans indicating whether
+ * each slay is present
  */
-int slay_count(bool *slays)
+int slay_count(const bool *slays_on)
 {
 	int i, count = 0;
 
 	/* Count the slays */
 	for (i = 0; i < z_info->slay_max; i++) {
-		if (slays[i]) {
+		if (slays_on[i]) {
 			count++;
 		}
 	}
@@ -246,7 +261,7 @@ int slay_count(bool *slays)
  * \param slay is the slay we're testing for effectiveness
  * \param mon is the monster we're testing for being slain
  */
-bool react_to_specific_slay(struct slay *slay, const struct monster *mon)
+static bool react_to_specific_slay(struct slay *slay, const struct monster *mon)
 {
 	if (!slay->name) return false;
 	if (!mon->race->base) return false;
@@ -266,71 +281,92 @@ bool react_to_specific_slay(struct slay *slay, const struct monster *mon)
 /**
  * Player has a temporary brand
  *
+ * \param p is the player
  * \param idx is the index of the brand
  */
-static bool player_has_temporary_brand(int idx)
+bool player_has_temporary_brand(const struct player *p, int idx)
 {
-	if (player->timed[TMD_ATT_ACID] && streq(brands[idx].code, "ACID_3")) {
-		return true;
-	}
-	if (player->timed[TMD_ATT_ELEC] && streq(brands[idx].code, "ELEC_3")) {
-		return true;
-	}
-	if (player->timed[TMD_ATT_FIRE] && streq(brands[idx].code, "FIRE_3")) {
-		return true;
-	}
-	if (player->timed[TMD_ATT_COLD] && streq(brands[idx].code, "COLD_3")) {
-		return true;
-	}
-	if (player->timed[TMD_ATT_POIS] && streq(brands[idx].code, "POIS_3")) {
-		return true;
-	}
+	int i = 0;
 
+	while (i < TMD_MAX) {
+		if (timed_effects[i].temp_brand == idx && p->timed[i]) {
+			return true;
+		}
+		++i;
+	}
 	return false;
 }
 
 /**
  * Player has a temporary slay
  *
+ * \param p is the player
  * \param idx is the index of the slay
  */
-static bool player_has_temporary_slay(int idx)
+bool player_has_temporary_slay(const struct player *p, int idx)
 {
-	if (player->timed[TMD_ATT_EVIL] && streq(slays[idx].code, "EVIL_2")) {
-		return true;
+	int i = 0;
+
+	while (i < TMD_MAX) {
+		if (timed_effects[i].temp_slay == idx && p->timed[i]) {
+			return true;
+		}
+		++i;
 	}
-	if (player->timed[TMD_ATT_DEMON] && streq(slays[idx].code, "DEMON_5")) {
-		return true;
+	return false;
+}
+
+/**
+ * Return the multiplicative factor for a brand hitting a given monster.
+ * Account for any elemental vulnerabilities but not for resistances.
+ */
+int get_monster_brand_multiplier(const struct monster *mon,
+		const struct brand *b, bool is_o_combat)
+{
+	int mult = (is_o_combat) ? b->o_multiplier : b->multiplier;
+
+	if (b->vuln_flag && rf_has(mon->race->flags, b->vuln_flag)) {
+		/*
+		 * If especially vulnerable, apply a factor of two to the
+		 * extra damage from the brand.
+		 */
+		if (is_o_combat) {
+			mult = 2 * (mult - 10) + 10;
+		} else {
+			mult *= 2;
+		}
 	}
 
-	return false;
+	return mult;
 }
 
 /**
  * Extract the multiplier from a given object hitting a given monster.
  *
+ * \param p is the player performing the attack
  * \param obj is the object being used to attack
  * \param mon is the monster being attacked
  * \param brand_used is the brand that gave the best multiplier, or NULL
  * \param slay_used is the slay that gave the best multiplier, or NULL
  * \param verb is the verb used in the attack ("smite", etc)
- * \param real is whether this is a real attack (where we update lore) or a
- *  simulation (where we don't)
+ * \param range is whether or not this is a ranged attack
  */
-void improve_attack_modifier(struct object *obj, const struct monster *mon,
-							 int *brand_used, int *slay_used, char *verb,
-							 bool range)
+void improve_attack_modifier(struct player *p, struct object *obj,
+	const struct monster *mon, int *brand_used, int *slay_used,
+	char *verb, bool range)
 {
+	bool pctdam = OPT(p, birth_percent_damage);
 	int i, best_mult = 1;
-	struct monster_lore *lore = get_lore(mon->race);
 
 	/* Set the current best multiplier */
 	if (*brand_used) {
 		struct brand *b = &brands[*brand_used];
-		best_mult = MAX(best_mult, b->multiplier);
+		best_mult = MAX(best_mult,
+			get_monster_brand_multiplier(mon, b, pctdam));
 	} else if (*slay_used) {
 		struct slay *s = &slays[*slay_used];
-		best_mult = MAX(best_mult, s->multiplier);
+		int mult = (pctdam) ? s->o_multiplier : s->multiplier;
+		best_mult = MAX(best_mult, mult);
 	}
 
 	/* Brands */
@@ -341,32 +377,21 @@ void improve_attack_modifier(struct object *obj, const struct monster *mon,
 			if (!obj->brands || !obj->brands[i]) continue;
 		} else {
 			/* Temporary brand */
-			if (!player_has_temporary_brand(i)) continue;
+			if (!player_has_temporary_brand(p, i)) continue;
 		}
  
-		/* Is the monster is vulnerable? */
+		/* Is the monster vulnerable? */
 		if (!rf_has(mon->race->flags, b->resist_flag)) {
+			int mult = get_monster_brand_multiplier(mon, b, pctdam);
+
 			/* Record the best multiplier */
-			if (best_mult < b->multiplier) {
-				best_mult = b->multiplier;
+			if (best_mult < mult) {
+				best_mult = mult;
 				*brand_used = i;
 				my_strcpy(verb, b->verb, 20);
 				if (range)
 					my_strcat(verb, "s", 20);
 			}
-			/* Learn about the brand */
-			if (obj) {
-				object_learn_brand(player, obj, i);
-			}
-
-			/* Learn about the monster */
-			if (monster_is_visible(mon)) {
-				rf_on(lore->flags, b->resist_flag);
-			}
-		} else if (player_knows_brand(player, i)) {
-			/* Learn about resistant monsters */
-			if (monster_is_visible(mon))
-				rf_on(lore->flags, b->resist_flag);
 		}
 	}
 
@@ -378,14 +403,16 @@ void improve_attack_modifier(struct object *obj, const struct monster *mon,
 			if (!obj->slays || !obj->slays[i]) continue;
 		} else {
 			/* Temporary slay */
-			if (!player_has_temporary_slay(i)) continue;
+			if (!player_has_temporary_slay(p, i)) continue;
 		}
  
 		/* Is the monster is vulnerable? */
 		if (react_to_specific_slay(s, mon)) {
+			int mult = pctdam ? s->o_multiplier : s->multiplier;
+
 			/* Record the best multiplier */
-			if (best_mult < s->multiplier) {
-				best_mult = s->multiplier;
+			if (best_mult < mult) {
+				best_mult = mult;
 				*brand_used = 0;
 				*slay_used = i;
 				if (range) {
@@ -394,19 +421,6 @@ void improve_attack_modifier(struct object *obj, const struct monster *mon,
 					my_strcpy(verb, s->melee_verb, 20);
 				}
 			}
-			/* Learn about the slay */
-			if (obj) {
-			object_learn_slay(player, obj, i);
-			}
-
-			/* Learn about the monster */
-			if (monster_is_visible(mon)) {
-				rf_on(lore->flags, s->race_flag);
-			}
-		} else if (player_knows_slay(player, i)) {
-			/* Learn about resistant monsters */
-			if (monster_is_visible(mon))
-				rf_on(lore->flags, s->race_flag);
 		}
 	}
 }
@@ -432,4 +446,189 @@ bool react_to_slay(struct object *obj, const struct monster *mon)
 	}
 
 	return false;
+}
+
+
+/**
+ * Help learn_brand_slay_{melee,launch,throw}().
+ *
+ * \param p is the player learning from the experience.
+ * \param obj1 is an object directly involved in the attack.
+ * \param obj2 is an auxiliary object (i.e. a launcher) involved in the attack.
+ * \param mon is the monster being attacked.
+ * \param allow_off is whether to include brands or slays from equipment that
+ * isn't a weapon or launcher.
+ * \param allow_temp is whether to include temporary brands or slays.
+ */
+static void learn_brand_slay_helper(struct player *p, struct object *obj1,
+		struct object *obj2, const struct monster *mon, bool allow_off,
+		bool allow_temp)
+{
+	struct monster_lore *lore = get_lore(mon->race);
+	int i;
+
+	/* Handle brands. */
+	for (i = 1; i < z_info->brand_max; i++) {
+		int j;
+		struct brand *b;
+		bool learn = false;
+
+		/* Check the objects directly involved. */
+		if (obj1 && obj1->brands && obj1->brands[i]) {
+			learn = true;
+		}
+		if (obj2 && obj2->brands && obj2->brands[i]) {
+			learn = true;
+		}
+
+		/* Check for an off-weapon brand. */
+		if (allow_off) {
+			for (j = 0; j < p->body.count; ++j) {
+				struct object *obj = slot_object(p, j);
+
+				if (obj && obj->brands && obj->brands[i]
+						&& !tval_is_weapon(obj)
+						&& !tval_is_launcher(obj)) {
+					learn = true;
+				}
+			}
+		}
+
+		/*
+		 * Check for the temporary brand (only relevant if the brand
+		 * is not already present).
+		 */
+		if (!learn && !(allow_temp && player_has_temporary_brand(p, i))) {
+			continue;
+		}
+
+		b = &brands[i];
+		if (!b->resist_flag || !rf_has(mon->race->flags, b->resist_flag)) {
+			/* Learn the brand */
+			if (learn) {
+				player_learn_brand(p, i);
+			}
+
+			/* Learn about the monster. */
+			if (b->resist_flag) {
+				lore_learn_flag_if_visible(lore, mon,
+					b->resist_flag);
+			}
+			if (b->vuln_flag) {
+				lore_learn_flag_if_visible(lore, mon,
+					b->vuln_flag);
+			}
+		} else if (player_knows_brand(p, i)) {
+			/* Learn about the monster. */
+			lore_learn_flag_if_visible(lore, mon, b->resist_flag);
+		}
+	}
+
+	/* Handle slays. */
+	for (i = 1; i < z_info->slay_max; ++i) {
+		int j;
+		struct slay *s;
+		bool learn = false;
+
+		/* Check the objects directly involved. */
+		if (obj1 && obj1->slays && obj1->slays[i]) {
+			learn = true;
+		}
+		if (obj2 && obj2->slays && obj2->slays[i]) {
+			learn = true;
+		}
+
+		/* Check for an off-weapon slay. */
+		if (allow_off) {
+			for (j = 0; j < p->body.count; ++j) {
+				struct object *obj = slot_object(p, j);
+
+				if (obj && obj->slays && obj->slays[i]
+						&& !tval_is_weapon(obj)
+						&& !tval_is_launcher(obj)) {
+					learn = true;
+				}
+			}
+		}
+
+		/*
+		 * Check for the temporary slay (only relevant if the slay
+		 * is not already present.
+		 */
+		if (!learn && !(allow_temp && player_has_temporary_slay(p, i))) {
+			continue;
+		}
+
+		s = &slays[i];
+		if (react_to_specific_slay(s, mon)) {
+			/* Learn about the monster. */
+			if (s->race_flag) {
+				lore_learn_flag_if_visible(lore, mon,
+					s->race_flag);
+			}
+			if (monster_is_visible(mon)) {
+				/* Learn the slay */
+				if (learn) {
+					player_learn_slay(p, i);
+				}
+			}
+		} else if (player_knows_slay(p, i)) {
+			/* Learn about unaffected monsters. */
+			if (s->race_flag) {
+				lore_learn_flag_if_visible(lore, mon,
+					s->race_flag);
+			}
+		}
+	}
+}
+
+
+/**
+ * Learn about object and monster properties related to slays and brands from
+ * a melee attack.
+ *
+ * \param p is the player learning from the experience.
+ * \param weapon is the equipped weapon used in the attack; this is a parameter
+ * to allow for the possibility of dual-wielding or body types with multiple
+ * equipped weapons.  May be NULL for an unarmed attack.
+ * \param mon is the monster being attacked.
+ */
+void learn_brand_slay_from_melee(struct player *p, struct object *weapon,
+		const struct monster *mon)
+{
+	learn_brand_slay_helper(p, weapon, NULL, mon, true, true);
+}
+
+
+/**
+ * Learn about object and monster properties related to slays and brands
+ * from a ranged attack with a missile launcher.
+ *
+ * \param p is the player learning from the experience.
+ * \param missile is the missile used in the attack.  Must not be NULL.
+ * \param launcher is the launcher used in the attack; this is a parameter
+ * to allow for body types with multiple equipped launchers.  Must not be NULL.
+ * \param mon is the monster being attacked.
+ */
+void learn_brand_slay_from_launch(struct player *p, struct object *missile,
+		struct object *launcher, const struct monster *mon)
+{
+	assert(missile && launcher);
+	learn_brand_slay_helper(p, missile, launcher, mon, false, false);
+}
+
+
+/**
+ * Learn about object and monster properties related to slays and brands
+ * from a ranged attack with a thrown object.
+ *
+ * \param p is the player learning from the experience.
+ * \param missile is the thrown object used in the attack.  Must not be NULL.
+ * \param mon is the monster being attacked.
+ */
+void learn_brand_slay_from_throw(struct player *p, struct object *missile,
+		const struct monster *mon)
+{
+	assert(missile);
+	learn_brand_slay_helper(p, missile, NULL, mon, false, false);
 }

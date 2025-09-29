@@ -62,7 +62,7 @@ static quality_ignore_struct quality_mapping[] =
 	{ ITYPE_BASIC_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Red" },
 	{ ITYPE_BASIC_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Green" },
 	{ ITYPE_MULTI_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Multi" },
-	{ ITYPE_HIGH_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Pseudo" },
+	{ ITYPE_HIGH_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Shining" },
 	{ ITYPE_HIGH_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Law" },
 	{ ITYPE_HIGH_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Gold" },
 	{ ITYPE_HIGH_DRAGON_ARMOR,		TV_DRAG_ARMOR,	"Chaos" },
@@ -104,7 +104,7 @@ quality_name_struct quality_values[IGNORE_MAX] =
 	{ IGNORE_ALL,				"non-artifact" },
 };
 
-byte ignore_level[ITYPE_MAX];
+uint8_t ignore_level[ITYPE_MAX];
 const size_t ignore_size = ITYPE_MAX;
 bool **ego_ignore_types;
 /* Hackish - ego_ignore_types should be initialised with arrays */
@@ -114,7 +114,7 @@ static int num_ego_types;
 /**
  * Initialise the ignore package 
  */
-void init_ignore(void)
+static void init_ignore(void)
 {
 	int i;
 
@@ -128,7 +128,7 @@ void init_ignore(void)
 /**
  * Clean up the ignore package
  */
-void cleanup_ignore(void)
+static void cleanup_ignore(void)
 {
 	int i;
 	for (i = 0; i < num_ego_types; i++)
@@ -190,23 +190,23 @@ static void rune_add_autoinscription(struct object *obj, int i)
 /**
  * Put a rune autoinscription on all available objects
  */
-void rune_autoinscribe(int i)
+void rune_autoinscribe(struct player *p, int i)
 {
 	struct object *obj;
 
 	/* Check the player knows the rune */
-	if (!player_knows_rune(player, i)) {
+	if (!player_knows_rune(p, i)) {
 		return;
 	}
 
 	/* Autoinscribe each object on the ground */
 	if (cave)
-		for (obj = square_object(cave, player->grid); obj; obj = obj->next)
+		for (obj = square_object(cave, p->grid); obj; obj = obj->next)
 			if (object_has_rune(obj, i))
 				rune_add_autoinscription(obj, i);
 
 	/* Autoinscribe each object in the inventory */
-	for (obj = player->gear; obj; obj = obj->next)
+	for (obj = p->gear; obj; obj = obj->next)
 		if (object_has_rune(obj, i))
 			rune_add_autoinscription(obj, i);
 }
@@ -214,12 +214,12 @@ void rune_autoinscribe(int i)
 /**
  * Put all appropriate rune autoinscriptions on an object
  */
-static void runes_autoinscribe(struct object *obj)
+static void runes_autoinscribe(struct player *p, struct object *obj)
 {
 	int i, rune_max = max_runes();
 
 	for (i = 0; i < rune_max; i++)
-		if (object_has_rune(obj, i) && player_knows_rune(player, i))
+		if (object_has_rune(obj, i) && player_knows_rune(p, i))
 			rune_add_autoinscription(obj, i);
 }
 
@@ -239,19 +239,24 @@ const char *get_autoinscription(struct object_kind *kind, bool aware)
 /**
  * Put an autoinscription on an object
  */
-int apply_autoinscription(struct object *obj)
+int apply_autoinscription(struct player *p, struct object *obj)
 {
 	char o_name[80];
 	bool aware = obj->kind->aware;
 	const char *note = obj ? get_autoinscription(obj->kind, aware) : NULL;
 
-	/* Remove unaware inscription if aware */
-	if (aware && quark_str(obj->note) && quark_str(obj->kind->note_unaware) &&
-		streq(quark_str(obj->note), quark_str(obj->kind->note_unaware)))
+	/*
+	 * Remove unaware inscription if aware and the aware inscription
+	 * differs from the unaware one.
+	 */
+	if (aware && quark_str(obj->note) && quark_str(obj->kind->note_unaware)
+			&& streq(quark_str(obj->note),
+			quark_str(obj->kind->note_unaware)) && (!note
+			|| !streq(quark_str(obj->note), note)))
 		obj->note = 0;
 
 	/* Make rune autoinscription go first, for now */
-	runes_autoinscribe(obj);
+	runes_autoinscribe(p, obj);
 
 	/* No note - don't inscribe */
 	if (!note)
@@ -262,15 +267,15 @@ int apply_autoinscription(struct object *obj)
 		return 0;
 
 	/* Don't inscribe unless the player is carrying it */
-	if (!object_is_carried(player, obj))
+	if (!object_is_carried(p, obj))
 		return 0;
 
 	/* Don't inscribe if ignored */
-	if (ignore_item_ok(obj))
+	if (ignore_item_ok(p, obj))
 		return 0;
 
 	/* Get an object description */
-	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
+	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL, p);
 
 	if (note[0] != 0)
 		obj->note = quark_add(note);
@@ -286,7 +291,7 @@ int apply_autoinscription(struct object *obj)
 /**
  * Deregister an object kind autoinscription
  */
-int remove_autoinscription(s16b kind)
+int remove_autoinscription(int16_t kind)
 {
 	struct object_kind *k = objkind_byid(kind);
 	if (!k)
@@ -314,7 +319,7 @@ int remove_autoinscription(s16b kind)
 /**
  * Register an object kind autoinscription
  */
-int add_autoinscription(s16b kind, const char *inscription, bool aware)
+int add_autoinscription(int16_t kind, const char *inscription, bool aware)
 {
 	struct object_kind *k = objkind_byid(kind);
 	if (!k)
@@ -332,25 +337,25 @@ int add_autoinscription(s16b kind, const char *inscription, bool aware)
 /**
  * Put an autoinscription on all objects on the floor beneath the player
  */
-void autoinscribe_ground(void)
+void autoinscribe_ground(struct player *p)
 {
 	struct object *obj;
 
 	/* Autoinscribe each object in the pile */
-	for (obj = square_object(cave, player->grid); obj; obj = obj->next)
-		apply_autoinscription(obj);
+	for (obj = square_object(cave, p->grid); obj; obj = obj->next)
+		apply_autoinscription(p, obj);
 }
 
 /**
  * Put an autoinscription on all the player's carried objects
  */
-void autoinscribe_pack(void)
+void autoinscribe_pack(struct player *p)
 {
 	struct object *obj;
 
 	/* Autoinscribe each object in the inventory */
-	for (obj = player->gear; obj; obj = obj->next)
-		apply_autoinscription(obj);
+	for (obj = p->gear; obj; obj = obj->next)
+		apply_autoinscription(p, obj);
 }
 
 /**
@@ -456,9 +461,9 @@ static int is_object_good(const struct object *obj)
  * The main point is when the value is undetermined given current info,
  * return the maximum possible value.
  */
-byte ignore_level_of(const struct object *obj)
+uint8_t ignore_level_of(const struct object *obj)
 {
-	byte value = 0;
+	uint8_t value = 0;
 	int i;
 
 	if (!obj->known) return IGNORE_MAX;
@@ -570,7 +575,7 @@ void kind_ignore_when_unaware(struct object_kind *kind)
  */
 bool object_is_ignored(const struct object *obj)
 {
-	byte type;
+	uint8_t type;
 
 	/* Objects that aren't yet known can't be ignored */
 	if (!obj->known)
@@ -591,13 +596,13 @@ bool object_is_ignored(const struct object *obj)
 		 kind_is_ignored_unaware(obj->kind))
 		return true;
 
-	/* Ignore ego items if known */
-	if (obj->known->ego && ego_is_ignored(obj->ego->eidx, ignore_type_of(obj)))
-		return true;
-
 	type = ignore_type_of(obj);
 	if (type == ITYPE_MAX)
 		return false;
+
+	/* Ignore ego items if known */
+	if (obj->known->ego && ego_is_ignored(obj->ego->eidx, type))
+		return true;
 
 	/* Ignore items known not to be artifacts */
 	if ((obj->known->notice & OBJ_NOTICE_ASSESSED) && !obj->artifact &&
@@ -614,9 +619,9 @@ bool object_is_ignored(const struct object *obj)
 /**
  * Determines if an object is eligible for ignoring.
  */
-bool ignore_item_ok(const struct object *obj)
+bool ignore_item_ok(const struct player *p, const struct object *obj)
 {
-	if (player->unignoring)
+	if (p->unignoring)
 		return false;
 
 	return object_is_ignored(obj);
@@ -628,11 +633,11 @@ bool ignore_item_ok(const struct object *obj)
  * This function should only be called on known version of items which have a
  * (real or imaginary) listed base item in the current level
  */
-bool ignore_known_item_ok(const struct object *obj)
+bool ignore_known_item_ok(const struct player *p, const struct object *obj)
 {
 	struct object *base_obj = cave->objects[obj->oidx];
 
-	if (player->unignoring)
+	if (p->unignoring)
 		return false;
 
 	/* Get the real object and check its ignore properties */
@@ -643,21 +648,21 @@ bool ignore_known_item_ok(const struct object *obj)
 /**
  * Drop all {ignore}able items.
  */
-void ignore_drop(void)
+void ignore_drop(struct player *p)
 {
 	struct object *obj;
 
 	/* Scan through the slots backwards */
-	for (obj = gear_last_item(); obj; obj = obj->prev) {
+	for (obj = gear_last_item(p); obj; obj = obj->prev) {
 		/* Skip non-objects and unignoreable objects */
 		assert(obj->kind);
-		if (!ignore_item_ok(obj)) continue;
+		if (!ignore_item_ok(p, obj)) continue;
 
 		/* Check for !d (no drop) inscription */
 		if (!check_for_inscrip(obj, "!d") && !check_for_inscrip(obj, "!*")) {
 			/* Confirm the drop if the item is equipped. */
-			if (object_is_equipped(player->body, obj)) {
-				if (!verify_object("Really take off and drop", obj)) {
+			if (object_is_equipped(p->body, obj)) {
+				if (!verify_object("Really take off and drop", obj, p)) {
 					/* Hack - inscribe the item with !d to prevent repeated
 					 * confirmations. */
 					const char *inscription = quark_str(obj->note);
@@ -676,20 +681,33 @@ void ignore_drop(void)
 			}
 
 			/* We're allowed to drop it. */
-			if (!square_isshop(cave, player->grid)) {
-				player->upkeep->dropping = true;
+			if (!square_isshop(cave, p->grid)) {
+				struct command *drop_cmd;
+
+				p->upkeep->dropping = true;
 				cmdq_push(CMD_DROP);
-				cmd_set_arg_item(cmdq_peek(), "item", obj);
-				cmd_set_arg_number(cmdq_peek(), "quantity", obj->number);
+				drop_cmd = cmdq_peek();
+				assert(drop_cmd);
+				cmd_set_arg_item(drop_cmd, "item", obj);
+				cmd_set_arg_number(drop_cmd, "quantity",
+					obj->number);
+				/*
+				 * This drop is a side effect:  whatever
+				 * command triggered it will be the target
+				 * for CMD_REPEAT rather than repeating the
+				 * drop, and the drop will not trigger
+				 * bloodlust.
+				 */
+				drop_cmd->background_command = 2;
 			}
 		}
 	}
 
 	/* Update the gear */
-	player->upkeep->update |= (PU_INVEN);
+	p->upkeep->update |= (PU_INVEN);
 
 	/* Combine/reorder the pack */
-	player->upkeep->notice |= (PN_COMBINE);
+	p->upkeep->notice |= (PN_COMBINE);
 }
 
 /**

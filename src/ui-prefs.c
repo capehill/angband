@@ -32,6 +32,7 @@
 #include "player.h"
 #include "trap.h"
 #include "ui-display.h"
+#include "ui-entry-renderers.h"
 #include "ui-keymap.h"
 #include "ui-prefs.h"
 #include "ui-term.h"
@@ -42,15 +43,15 @@ int arg_graphics;			/* Command arg -- Request graphics mode */
 bool arg_graphics_nice;		/* Command arg -- Request nice graphics mode */
 int use_graphics;			/* The "graphics" mode is enabled */
 
-byte *monster_x_attr;
+uint8_t *monster_x_attr;
 wchar_t *monster_x_char;
-byte *kind_x_attr;
+uint8_t *kind_x_attr;
 wchar_t *kind_x_char;
-byte *feat_x_attr[LIGHTING_MAX];
+uint8_t *feat_x_attr[LIGHTING_MAX];
 wchar_t *feat_x_char[LIGHTING_MAX];
-byte *trap_x_attr[LIGHTING_MAX];
+uint8_t *trap_x_attr[LIGHTING_MAX];
 wchar_t *trap_x_char[LIGHTING_MAX];
-byte *flavor_x_attr;
+uint8_t *flavor_x_attr;
 wchar_t *flavor_x_char;
 static size_t flavor_max = 0;
 
@@ -88,7 +89,7 @@ static void remove_old_dump(const char *cur_fname, const char *mark)
 	ang_file *cur_file;
 
 	/* Format up some filenames */
-	strnfmt(new_fname, sizeof(new_fname), "%s.new", cur_fname);
+	file_get_tempfile(new_fname, sizeof(new_fname), cur_fname, "new");
 
 	/* Work out what we expect to find */
 	strnfmt(start_line, sizeof(start_line), "%s begin %s",
@@ -104,6 +105,7 @@ static void remove_old_dump(const char *cur_fname, const char *mark)
 	/* Open new file */
 	new_file = file_open(new_fname, MODE_WRITE, FTYPE_TEXT);
 	if (!new_file) {
+		file_close(cur_file);
 		msg("Failed to create file %s", new_fname);
 		return;
 	}
@@ -111,9 +113,9 @@ static void remove_old_dump(const char *cur_fname, const char *mark)
 	/* Loop for every line */
 	while (file_getl(cur_file, buf, sizeof(buf))) {
 		/* Turn on at the start line, turn off at the finish line */
-		if (!strcmp(buf, start_line))
+		if (streq(buf, start_line))
 			between_marks = true;
-		else if (!strcmp(buf, end_line)) {
+		else if (streq(buf, end_line)) {
 			between_marks = false;
 			skip_one = true;
 			changed = true;
@@ -132,7 +134,8 @@ static void remove_old_dump(const char *cur_fname, const char *mark)
 	/* If there are changes use the new file. otherwise just destroy it */
 	if (changed) {
 		char old_fname[1024];
-		strnfmt(old_fname, sizeof(old_fname), "%s.old", cur_fname);
+		file_get_tempfile(old_fname, sizeof(old_fname), cur_fname,
+			"old");
 
 		if (file_move(cur_fname, old_fname)) {
 			file_move(new_fname, cur_fname);
@@ -178,7 +181,7 @@ void dump_monsters(ang_file *fff)
 
 	for (i = 0; i < z_info->r_max; i++) {
 		struct monster_race *race = &r_info[i];
-		byte attr = monster_x_attr[i];
+		uint8_t attr = monster_x_attr[i];
 		wint_t chr = monster_x_char[i];
 
 		/* Skip non-entries */
@@ -204,8 +207,8 @@ void dump_objects(ang_file *fff)
 		if (!kind->name || !kind->tval) continue;
 
 		object_short_name(name, sizeof name, kind->name);
-		file_putf(fff, "object:%s:%s:%d:%d\n", tval_find_name(kind->tval),
-				name, kind_x_attr[i], kind_x_char[i]);
+		file_putf(fff, "object:%s:%s:%d:%ld\n", tval_find_name(kind->tval),
+				name, kind_x_attr[i], (long int)kind_x_char[i]);
 	}
 }
 
@@ -237,7 +240,7 @@ void dump_features(ang_file *fff)
 {
 	int i;
 
-	for (i = 0; i < z_info->f_max; i++) {
+	for (i = 0; i < FEAT_MAX; i++) {
 		struct feature *feat = &f_info[i];
 		size_t j;
 
@@ -249,10 +252,10 @@ void dump_features(ang_file *fff)
 
 		file_putf(fff, "# Terrain: %s\n", feat->name);
 		for (j = 0; j < LIGHTING_MAX; j++) {
-			byte attr = feat_x_attr[j][i];
+			uint8_t attr = feat_x_attr[j][i];
 			wint_t chr = feat_x_char[j][i];
 
-			const char *light = NULL;
+			const char *light = "";
 			if (j == LIGHTING_TORCH)
 				light = "torch";
 			if (j == LIGHTING_LOS)
@@ -262,9 +265,10 @@ void dump_features(ang_file *fff)
 			else if (j == LIGHTING_DARK)
 				light = "dark";
 
-			assert(light);
+			assert(light[0]);
 
-			file_putf(fff, "feat:%s:%s:%d:%d\n", feat->name, light, attr, chr);
+			file_putf(fff, "feat:%s:%s:%d:%d\n",
+				get_feat_code_name(i), light, attr, chr);
 		}
 	}
 }
@@ -277,7 +281,7 @@ void dump_flavors(ang_file *fff)
 	struct flavor *f;
 
 	for (f = flavors; f; f = f->next) {
-		byte attr = flavor_x_attr[f->fidx];
+		uint8_t attr = flavor_x_attr[f->fidx];
 		wint_t chr = flavor_x_char[f->fidx];
 
 		file_putf(fff, "# Item flavor: %s\n", f->text);
@@ -300,14 +304,44 @@ void dump_colors(ang_file *fff)
 
 		const char *name = "unknown";
 
-		/* Skip non-entries */
-		if (!kv && !rv && !gv && !bv) continue;
+		/* Skip non-entries, except those in the basic colors */
+		if (!kv && !rv && !gv && !bv && i >= BASIC_COLORS) continue;
 
 		/* Extract the color name */
 		if (i < BASIC_COLORS) name = color_table[i].name;
 
 		file_putf(fff, "# Color: %s\n", name);
 		file_putf(fff, "color:%d:%d:%d:%d:%d\n\n", i, kv, rv, gv, bv);
+	}
+}
+
+
+/**
+ * Dump the customizable attributes for renderers used in the character
+ * screen.
+ */
+void dump_ui_entry_renderers(ang_file *fff)
+{
+	int n = ui_entry_renderer_get_index_limit(), i;
+
+	file_putf(fff, "# Renderers for parts of the character screen.\n");
+	file_putf(fff, "# Format entry-renderer:name:colors:label_colors:symbols\n");
+	file_putf(fff, "# Use * for colors or label_colors to leave those unchanged\n");
+	file_putf(fff, "# Leave off symbols and the colon before it to leave those unchanged\n");
+	file_putf(fff, "# Look at lib/gamedata/ui_entry_renderers.txt for more information\n");
+	file_putf(fff, "# about how colors, label_colors, and symbols are used\n");
+
+	for (i = ui_entry_renderer_get_min_index(); i < n; i++) {
+		char* colors = ui_entry_renderer_get_colors(i);
+		char* labcolors = ui_entry_renderer_get_label_colors(i);
+		char* symbols = ui_entry_renderer_get_symbols(i);
+
+		file_putf(fff, "entry-renderer:%s:%s:%s:%s\n",
+			ui_entry_renderer_get_name(i), colors, labcolors,
+			symbols);
+		mem_free(symbols);
+		string_free(labcolors);
+		string_free(colors);
 	}
 }
 
@@ -331,18 +365,15 @@ void option_dump(ang_file *fff)
 			/* Require a real flag */
 			if (!window_flag_desc[j]) continue;
 
-			/* Comment */
-			file_putf(fff, "# Window '%s', Flag '%s'\n",
-				angband_term_name[i], window_flag_desc[j]);
-
-			/* Dump the flag */
-			if (window_flag[i] & (1L << j))
+			/* Only dump the flag if true */
+			if (window_flag[i] & (((uint32_t) 1) << j)) {
+				file_putf(fff, "# Window '%s', Flag '%s'\n",
+						  angband_term_name[i], window_flag_desc[j]);
 				file_putf(fff, "window:%d:%d:1\n", i, j);
-			else
-				file_putf(fff, "window:%d:%d:0\n", i, j);
 
-			/* Skip a line */
-			file_putf(fff, "\n");
+				/* Skip a line */
+				file_putf(fff, "\n");
+			}
 		}
 	}
 }
@@ -361,14 +392,11 @@ bool prefs_save(const char *path, void (*dump)(ang_file *), const char *title)
 {
 	ang_file *fff;
 
-	safe_setuid_grab();
-
 	/* Remove old keymaps */
 	remove_old_dump(path, title);
 
 	fff = file_open(path, MODE_APPEND, FTYPE_TEXT);
 	if (!fff) {
-		safe_setuid_drop();
 		return false;
 	}
 
@@ -381,8 +409,6 @@ bool prefs_save(const char *path, void (*dump)(ang_file *), const char *title)
 	file_putf(fff, "\n");
 	pref_footer(fff, title);
 	file_close(fff);
-
-	safe_setuid_drop();
 
 	return true;
 }
@@ -509,7 +535,7 @@ static const char *process_pref_file_expr(char **sp, char *fp)
 			}
 		} else {
 			while (*s && (f != ']')) {
-				t = process_pref_file_expr(&s, &f);
+				(void) process_pref_file_expr(&s, &f);
 			}
 		}
 
@@ -585,14 +611,14 @@ static enum parser_error parse_prefs_object(struct parser *p)
 
 	tval = parser_getsym(p, "tval");
 	sval = parser_getsym(p, "sval");
-	if (!strcmp(tval, "*")) {
+	if (streq(tval, "*")) {
 		/* object:*:* means handle all objects and flavors */
-		byte attr = parser_getint(p, "attr");
+		uint8_t attr = parser_getint(p, "attr");
 		wchar_t chr = parser_getint(p, "char");
 		size_t i;
 		struct flavor *flavor;
 
-		if (strcmp(sval, "*"))
+		if (!streq(sval, "*"))
 			return PARSE_ERROR_UNRECOGNISED_SVAL;
 
 		for (i = 0; i < z_info->k_max; i++) {
@@ -612,8 +638,8 @@ static enum parser_error parse_prefs_object(struct parser *p)
 			return PARSE_ERROR_UNRECOGNISED_TVAL;
 
 		/* object:tval:* means handle all objects and flavors with this tval */
-		if (!strcmp(sval, "*")) {
-			byte attr = parser_getint(p, "attr");
+		if (streq(sval, "*")) {
+			uint8_t attr = parser_getint(p, "attr");
 			wchar_t chr = parser_getint(p, "char");
 			size_t i;
 			struct flavor *flavor;
@@ -645,7 +671,7 @@ static enum parser_error parse_prefs_object(struct parser *p)
 			if (!kind)
 				return PARSE_ERROR_NONE;
 
-			kind_x_attr[kind->kidx] = (byte)parser_getint(p, "attr");
+			kind_x_attr[kind->kidx] = (uint8_t)parser_getint(p, "attr");
 			kind_x_char[kind->kidx] = (wchar_t)parser_getint(p, "char");
 		}
 	}
@@ -667,7 +693,7 @@ static enum parser_error parse_prefs_monster(struct parser *p)
 	if (!monster)
 		return PARSE_ERROR_NO_KIND_FOUND;
 
-	monster_x_attr[monster->ridx] = (byte)parser_getint(p, "attr");
+	monster_x_attr[monster->ridx] = (uint8_t)parser_getint(p, "attr");
 	monster_x_char[monster->ridx] = (wchar_t)parser_getint(p, "char");
 
 	return PARSE_ERROR_NONE;
@@ -678,7 +704,7 @@ static enum parser_error parse_prefs_monster_base(struct parser *p)
 	const char *name;
 	struct monster_base *mb;
 	size_t i;
-	byte a;
+	uint8_t a;
 	wchar_t c;
 
 	struct prefs_data *d = parser_priv(p);
@@ -689,7 +715,7 @@ static enum parser_error parse_prefs_monster_base(struct parser *p)
 	mb = lookup_monster_base(name);
 	if (!mb)
 		return PARSE_ERROR_NO_KIND_FOUND;
-	a = (byte)parser_getint(p, "attr");
+	a = (uint8_t)parser_getint(p, "attr");
 	c = (wchar_t)parser_getint(p, "char");
 
 	for (i = 0; i < z_info->r_max; i++) {
@@ -704,7 +730,7 @@ static enum parser_error parse_prefs_monster_base(struct parser *p)
 	return PARSE_ERROR_NONE;
 }
 
-static void set_trap_graphic(int trap_idx, int light_idx, byte attr, char ch) {
+static void set_trap_graphic(int trap_idx, int light_idx, uint8_t attr, wchar_t ch) {
 	if (light_idx < LIGHTING_MAX) {
 		trap_x_attr[light_idx][trap_idx] = attr;
 		trap_x_char[light_idx][trap_idx] = ch;
@@ -730,7 +756,7 @@ static enum parser_error parse_prefs_trap(struct parser *p)
 	/* idx can be "*" or a name */
 	idx_sym = parser_getsym(p, "idx");
 
-	if (!strcmp(idx_sym, "*")) {
+	if (streq(idx_sym, "*")) {
 		trap_idx = -1;
 	} else {
 		struct trap_kind *trap = lookup_trap(idx_sym);
@@ -771,6 +797,7 @@ static enum parser_error parse_prefs_trap(struct parser *p)
 
 static enum parser_error parse_prefs_feat(struct parser *p)
 {
+	const char *sym = parser_getsym(p, "idx");
 	int idx;
 	const char *lighting;
 	int light_idx;
@@ -779,9 +806,20 @@ static enum parser_error parse_prefs_feat(struct parser *p)
 	assert(d != NULL);
 	if (d->bypass) return PARSE_ERROR_NONE;
 
-	idx = lookup_feat(parser_getsym(p, "idx"));
-	if (idx >= z_info->f_max)
+	idx = lookup_feat_code(sym);
+	if (idx < 0) {
+		/*
+		 * To tolerate user preference files written before the
+		 * post 4.2.4 change that introduced terrain codes,
+		 * try looking up by the feature's printable name.  This
+		 * could be dropped when a future version (4.3.*) drops
+		 * save file compatibility.
+		 */
+		idx = lookup_feat(sym);
+	}
+	if (idx < 0 || idx >= FEAT_MAX) {
 		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
 
 	lighting = parser_getsym(p, "lighting");
 	if (streq(lighting, "torch"))
@@ -798,11 +836,11 @@ static enum parser_error parse_prefs_feat(struct parser *p)
 		return PARSE_ERROR_INVALID_LIGHTING;
 
 	if (light_idx < LIGHTING_MAX) {
-		feat_x_attr[light_idx][idx] = (byte)parser_getint(p, "attr");
+		feat_x_attr[light_idx][idx] = (uint8_t)parser_getint(p, "attr");
 		feat_x_char[light_idx][idx] = (wchar_t)parser_getint(p, "char");
 	} else {
 		for (light_idx = 0; light_idx < LIGHTING_MAX; light_idx++) {
-			feat_x_attr[light_idx][idx] = (byte)parser_getint(p, "attr");
+			feat_x_attr[light_idx][idx] = (uint8_t)parser_getint(p, "attr");
 			feat_x_char[light_idx][idx] = (wchar_t)parser_getint(p, "char");
 		}
 	}
@@ -824,7 +862,7 @@ static enum parser_error parse_prefs_gf(struct parser *p)
 	assert(d != NULL);
 	if (d->bypass) return PARSE_ERROR_NONE;
 
-	/* Parse the type, which is a | seperated list of PROJ_ constants */
+	/* Parse the type, which is a | separated list of PROJ_ constants */
 	s = string_make(parser_getsym(p, "type"));
 	t = strtok(s, "| ");
 	while (t) {
@@ -860,7 +898,7 @@ static enum parser_error parse_prefs_gf(struct parser *p)
 	for (i = 0; i < PROJ_MAX; i++) {
 		if (!types[i]) continue;
 
-		proj_to_attr[i][motion] = (byte)parser_getuint(p, "attr");
+		proj_to_attr[i][motion] = (uint8_t)parser_getuint(p, "attr");
 		proj_to_char[i][motion] = (wchar_t)parser_getuint(p, "char");
 	}
 
@@ -882,7 +920,7 @@ static enum parser_error parse_prefs_flavor(struct parser *p)
 			break;
 
 	if (flavor) {
-		flavor_x_attr[idx] = (byte)parser_getint(p, "attr");
+		flavor_x_attr[idx] = (uint8_t)parser_getint(p, "attr");
 		flavor_x_char[idx] = (wchar_t)parser_getint(p, "char");
 	}
 
@@ -979,7 +1017,7 @@ static enum parser_error parse_prefs_message(struct parser *p)
 	if (a < 0)
 		return PARSE_ERROR_INVALID_COLOR;
 
-	message_color_define(msg_index, (byte)a);
+	message_color_define(msg_index, (uint8_t)a);
 
 	return PARSE_ERROR_NONE;
 }
@@ -993,8 +1031,17 @@ static enum parser_error parse_prefs_color(struct parser *p)
 	if (d->bypass) return PARSE_ERROR_NONE;
 
 	idx = parser_getuint(p, "idx");
-	if (idx > MAX_COLORS)
-		return PARSE_ERROR_OUT_OF_BOUNDS;
+	if (idx >= MAX_COLORS) {
+		/*
+		 * Silently ignore indices that would have been in bounds for
+		 * Angband 4.2.4 or earlier (color table was 256 then) for
+		 * backwards compatibility with existing preference files.
+		 * Flag indices that would be out of bounds even with 4.2.4's
+		 * bigger color table.
+		 */
+		return (idx < 256) ?
+			PARSE_ERROR_NONE : PARSE_ERROR_OUT_OF_BOUNDS;
+	}
 
 	angband_color_table[idx][0] = parser_getint(p, "k");
 	angband_color_table[idx][1] = parser_getint(p, "r");
@@ -1025,13 +1072,52 @@ static enum parser_error parse_prefs_window(struct parser *p)
 	{
 		int value = parser_getuint(p, "value");
 		if (value)
-			d->window_flags[window] |= (1L << flag);
+			d->window_flags[window] |= (((uint32_t) 1) << flag);
 		else
-			d->window_flags[window] &= ~(1L << flag);
+			d->window_flags[window] &= ~(((uint32_t) 1) << flag);
 	}
 
 	d->loaded_window_flag[window] = true;
 
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error parse_prefs_entry_renderer(struct parser *p)
+{
+	const char* name = parser_getsym(p, "name");
+	const char* colors;
+	const char* label_colors;
+	const char* symbols;
+	int index;
+
+	index = ui_entry_renderer_lookup(name);
+	if (index == 0) {
+		return PARSE_ERROR_INVALID_VALUE;
+	}
+	if (parser_hasval(p, "colors")) {
+		colors = parser_getsym(p, "colors");
+		if (streq(colors, "*")) {
+			colors = NULL;
+		}
+	} else {
+		colors = NULL;
+	}
+	if (parser_hasval(p, "labelcolors")) {
+		label_colors = parser_getsym(p, "labelcolors");
+		if (streq(label_colors, "*")) {
+			label_colors = NULL;
+		}
+	} else {
+		label_colors = NULL;
+	}
+	if (parser_hasval(p, "symbols")) {
+		symbols = parser_getsym(p, "symbols");
+	} else {
+		symbols = NULL;
+	}
+	if (ui_entry_renderer_customize(index, colors, label_colors, symbols)) {
+		return PARSE_ERROR_INVALID_VALUE;
+	}
 	return PARSE_ERROR_NONE;
 }
 
@@ -1067,6 +1153,7 @@ static struct parser *init_parse_prefs(bool user)
 	parser_reg(p, "message sym type sym attr", parse_prefs_message);
 	parser_reg(p, "color uint idx int k int r int g int b", parse_prefs_color);
 	parser_reg(p, "window int window uint flag uint value", parse_prefs_window);
+	parser_reg(p, "entry-renderer sym name ?sym colors ?sym labelcolors ?sym symbols", parse_prefs_entry_renderer);
 	register_sound_pref_parser(p);
 
 	return p;
@@ -1133,12 +1220,9 @@ static bool process_pref_file_named(const char *path, bool quiet, bool user) {
 		e = PARSE_ERROR_INTERNAL; /* signal failure to callers */
 	} else {
 		char line[1024];
-		int line_no = 0;
 
 		struct parser *p = init_parse_prefs(user);
 		while (file_getl(f, line, sizeof line)) {
-			line_no++;
-
 			e = parser_parse(p, line);
 			if (e != PARSE_ERROR_NONE) {
 				print_error(path, p);
@@ -1204,9 +1288,10 @@ static bool process_pref_file_layered(const char *name, bool quiet, bool user,
  *
  * Because of the way this function works, there might be some unexpected
  * effects when a pref file triggers another pref file to be loaded.
- * For example, pref/pref.prf causes message.prf to load. This means that the
- * game will load pref/pref.prf, then pref/message.prf, then user/message.prf,
- * and finally user/pref.prf.
+ * For example, lib/customize/pref.prf causes message.prf to load. This means
+ * that the game will load lib/customize/pref.prf, then
+ * lib/customize/message.prf, then message.prf from the user location, and
+ * finally pref.prf from the user location.
  *
  * \param name is the name of the pref file.
  * \param quiet means "don't complain about not finding the file".
@@ -1220,8 +1305,8 @@ bool process_pref_file(const char *name, bool quiet, bool user)
 	bool user_success = false;
 	bool used_fallback = false;
 
-	/* This supports the old behavior: look for a file first in 'pref/', and
-	 * if not found there, then 'user/'. */
+	/* This supports the old behavior: first load from lib/customize then
+         * from the user location. */
 	root_success = process_pref_file_layered(name, quiet, user,
 											 ANGBAND_DIR_CUSTOMIZE,
 											 ANGBAND_DIR_USER,
@@ -1233,7 +1318,7 @@ bool process_pref_file(const char *name, bool quiet, bool user)
 												 current_graphics_mode->path,
 												 NULL, NULL);
 
-	/* Next, we want to force a check for the file in the user/ directory.
+	/* Next, we want to force a check for the file in the user location.
 	 * However, since we used the user directory as a fallback in the previous
 	 * check, we only want to do this if the fallback wasn't used. This cuts
 	 * down on unnecessary parsing. */
@@ -1264,7 +1349,7 @@ void reset_visuals(bool load_prefs)
 	struct flavor *f;
 
 	/* Extract default attr/char code for features */
-	for (i = 0; i < z_info->f_max; i++) {
+	for (i = 0; i < FEAT_MAX; i++) {
 		struct feature *feat = &f_info[i];
 
 		/* Assume we will use the underlying values */
@@ -1338,22 +1423,22 @@ void textui_prefs_init(void)
 	int i;
 	struct flavor *f;
 
-	monster_x_attr = mem_zalloc(z_info->r_max * sizeof(byte));
+	monster_x_attr = mem_zalloc(z_info->r_max * sizeof(uint8_t));
 	monster_x_char = mem_zalloc(z_info->r_max * sizeof(wchar_t));
-	kind_x_attr = mem_zalloc(z_info->k_max * sizeof(byte));
+	kind_x_attr = mem_zalloc(z_info->k_max * sizeof(uint8_t));
 	kind_x_char = mem_zalloc(z_info->k_max * sizeof(wchar_t));
 	for (i = 0; i < LIGHTING_MAX; i++) {
-		feat_x_attr[i] = mem_zalloc(z_info->f_max * sizeof(byte));
-		feat_x_char[i] = mem_zalloc(z_info->f_max * sizeof(wchar_t));
+		feat_x_attr[i] = mem_zalloc(FEAT_MAX * sizeof(uint8_t));
+		feat_x_char[i] = mem_zalloc(FEAT_MAX * sizeof(wchar_t));
 	}
 	for (i = 0; i < LIGHTING_MAX; i++) {
-		trap_x_attr[i] = mem_zalloc(z_info->trap_max * sizeof(byte));
+		trap_x_attr[i] = mem_zalloc(z_info->trap_max * sizeof(uint8_t));
 		trap_x_char[i] = mem_zalloc(z_info->trap_max * sizeof(wchar_t));
 	}
 	for (f = flavors; f; f = f->next)
 		if (flavor_max < f->fidx)
 			flavor_max = f->fidx;
-	flavor_x_attr = mem_zalloc((flavor_max + 1) * sizeof(byte));
+	flavor_x_attr = mem_zalloc((flavor_max + 1) * sizeof(uint8_t));
 	flavor_x_char = mem_zalloc((flavor_max + 1) * sizeof(wchar_t));
 
 	reset_visuals(false);
@@ -1397,4 +1482,30 @@ void do_cmd_pref(void)
 
 	/* Process that pref command */
 	(void)process_pref_file_command(tmp);
+}
+
+/**
+ * ------------------------------------------------------------------------
+ * Utility functions
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Return the first active subwindow with the given flag enabled or NULL if
+ * there isn't an active subwindow with that flag enabled.
+ *
+ * \param flag is the flag to test.
+ */
+term *find_first_subwindow(uint32_t flag)
+{
+	int i = 1;
+
+	while (1) {
+		if (i >= ANGBAND_TERM_MAX) {
+			return NULL;
+		}
+		if ((window_flag[i] & flag) && angband_term[i]) {
+			return angband_term[i];
+		}
+		++i;
+	}
 }

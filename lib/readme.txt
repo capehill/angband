@@ -30,7 +30,6 @@ In general, these files are used to "customize" aspects of the game for
 a given site or a given player.
 
 
-
 === Directory "lib/help" ===
 
 The "lib/help" directory contains the "online help" files.
@@ -76,8 +75,7 @@ correctly.
 
 === Directory "lib/sounds" ===
 
-The "lib/sounds" directory contains the .mp3 sound files, plus the file
-sound.cfg which tells the game which sound files to use for which game events.
+The "lib/sounds" directory contains the .mp3 sound files.
 
 
 === Directory "lib/icons" ===
@@ -89,9 +87,12 @@ The "lib/icons" directory contains the Angband icon files.
 
 The "lib/user" directory is used to put various game-written configuration
 files (such as the monster memory file, lore.txt, and a .prf file with the
-subwindow configuration for the current character).  It also contains the
-directories for scores and savefiles (unless these are held systemwide, as in
-some Linux/Unix installations), and for user created help files.
+subwindow configuration for the current character).  It is the destination
+for character dumps, output from the death screen spoilers, and results
+from the statistics front end or statistics debugging commands.  It also
+contains the directories for scores, savefiles, and randart sets (all of
+those may be held systemwide, as in some Linux/Unix installations), and
+for user-created help files.
 
 
 === Directory "lib/user/save" ===
@@ -103,6 +104,12 @@ Each savefile is named the name of the character, or, on multi-user machines,
 
 The savefiles should be portable between systems, assuming that the
 appropriate renaming is perfomed.
+
+
+=== Directory "lib/user/panic" ===
+
+Is like "lib/user/save" but holds "savefiles" generated in repsonse to the
+game receiving a fatal signal, typically because of a game crash.
 
 
 === Directory "lib/user/scores" ===
@@ -118,15 +125,10 @@ must be present (or creatable) for the game to run correctly.
 
 On some multiuser systems there is a separate systemwide score file.
 
-=== Directory "lib/user/info" ===
 
-The "lib/user/info" is used to search for any "online help" file that cannot
-be found in the "lib/help" directory.
+=== Direcctory "lib/user/archive" ===
 
-Some people use this directory for "online spoiler files", many of which are
-available on the internet, or creatable via the debug commands. Simply put 
-whichever spoilers you want in this directory, then edit the user.hlp file to
-add your files as menu items.  There is a dummy file as an example.
+Holds the randart set files when they are not in use by a character loaded
+into the game.
 
-Note that the default "help.hlp" file allows the "k" key to access user.hlp.
 

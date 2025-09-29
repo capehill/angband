@@ -47,6 +47,10 @@ Each character may have one or more "racially intrinsic skills", based on
 the race of the character. These may include special resistances, or
 abilities such as infravision.
 
+.. index::
+   single: experience points; description
+   see: EXP; experience points
+
 Each character has a number of "experience points", which increases as the
 character defeats monsters and attempts new spells and uses new items.
 Characters also have a level, which is based on experience. The amount of
@@ -56,17 +60,27 @@ experience to gain levels. As the experience rises, so does the level, and
 as the level rises, certain other abilities and characteristics rise as
 well. All characters start at 0 experience and at the first level.
 
+.. index::
+   single: gold; description
+   see: AU; gold
+
 Each character has some gold, which can be used to buy items from the shops
-in the town, and which can be obtained not only from selling items to the
-shops, but also by taking it from dead monsters and by finding it in the
-dungeon. Each character starts out with some gold, the amount of which is
-based on the character's social class (higher is better) and stats (less
-powerful characters start with more gold). Each character also starts out
-with a few useful items, which may be kept, or sold to a shop-keeper for
-more gold.  However, especially valuable items will never sell for the full
-price, as each shopkeeper has a maximum that they are prepared to pay for any
-item. The more generous shopkeepers may buy your items for up to 30,000
-gold pieces: but some are really stingy, and will pay no more than 5,000.
+in the town. A character starts with a fixed amount of gold and some items.
+If you play with the starting kit option on (it is on by default), your
+character will have a few more useful items but less gold. A character can
+find more gold by taking it from dead monsters, finding it on the floors of
+the dungeon or by digging out veins of treasure from the walls of the dungeon.
+If you play with the no selling option off (it is on by default), you can
+sell items to the shopkeepers for gold. A shopkeeper will usually only buy
+certain classes of items, refuse to buy an item the shopkeeper believes is
+worthless and offer less gold for an item than she or he would sell it for.
+A shopkeeper also has an upper limit for the amount of gold offered for an
+item. The more generous shop-keepers will buy an item for up to 30,000 gold
+pieces, but some of the stingy ones will only pay 5,000.
+
+.. index::
+   single: armour class; description
+   see: AC; armour class
 
 Each character has an "armour class", abbreviated to AC, representing how
 well the character can avoid damage. The armour class is affected by
@@ -75,6 +89,12 @@ being able to take blows without being hurt. Armour class on equipment is
 always denoted in square brackets, usually as a figure of '[X,+Y]' where
 X is the intrinsic AC of the armour in question, and Y is the magical bonus
 to armour class provided by that item.
+
+.. index::
+   single: hit points; description
+   see: HP; hit points
+   single: hit dice; description
+   see: HD; hit dice
 
 Each character has "hit points", or hp, representing how much damage the
 character can sustain before they die. How many hit points a character has
@@ -92,6 +112,10 @@ further modified by constitution - a character with high constitution will
 get a flat bonus of a certain number of hit points per level (recalculated
 right back to level 1: if you gain an extra hit point per level, and you
 are 42nd level, you will suddenly be 42 hit points better off.)
+
+.. index::
+   single: spell points; description
+   see: mana; spell points
 
 Each character has spell points, or mana, which limits how many spells (or
 prayers) a character can cast (or pray). The maximum number of spell points
@@ -167,7 +191,7 @@ Gnome
   disarming, perception, and stealth. They have lower strength than humans
   so they are not very good at fighting with hand weapons. Gnomes have good
   infravision.  Gnomes are intrinsically protected against paralysis and 
-  some   slowing effects. Gnomes are excellent at using wands and staves
+  some slowing effects. Gnomes are excellent at using wands and staves
   and can identify them when found.
 
 .. _Dwarf:
@@ -213,10 +237,8 @@ Half-Troll
 
 Dunadan
   Dunedain are a race of hardy men from the West. This elder race surpasses
-  human abilities in every field, especially constitution. However, being
-  men of the world, very little is new to them, and levels are very hard to
-  gain... their hardiness ensures that their constitution cannot be
-  reduced. They have no infravision.
+  human abilities in every field, especially constitution. Their hardiness
+  ensures that their constitution cannot be reduced. They have no infravision.
 
 .. _High-Elf:
 
@@ -227,8 +249,8 @@ High-Elf
   thousands of years before returning to mortal lands. Because of this,
   they are far superior in terms of abilities when compared to their lesser
   Elven kindred. They can also see into the invisible world of ghosts and
-  wraiths. However, they find new experience even harder to come by than
-  Dunedain. Like normal Elves, they resist attacks involving bright light.
+  wraiths. However, they find new experience harder to come by than other
+  races. Like normal Elves, they resist attacks involving bright light.
   They have good infravision and can even see cold-blooded invisible
   creatures.
 
@@ -253,7 +275,7 @@ hit dice, and what spells (if any) the character can learn.
 .. _Warrior:
 
 Warrior
-  A Warrior is a hack-and-slash character, who solves most of his problems
+  A Warrior is a hack-and-slash character, who solves most problems
   by cutting them to pieces, but will occasionally fall back on the help of
   a magical device. Their prime stats are strength, constitution, and
   dexterity, and they will strike more blows with melee weapons than any
@@ -264,7 +286,7 @@ Warrior
 .. _Mage:
 
 Mage
-  A Mage must live by his wits. They cannot hope to simply hack his way
+  A Mage must live by their wits. They cannot hope to simply hack their way
   through the dungeon, and so must therefore use his magic to defeat,
   deceive, confuse, and escape. A mage is not really complete without an
   assortment of magical devices to use in addition to his spells. They can
@@ -277,6 +299,18 @@ Mage
   are their true realm and they will get fewer blows with melee weapons than
   other classes.
 
+.. _Druid:
+
+Druid
+  A Druid is a lover of nature, and at one with the natural world.  Druids
+  have control of their environment and direct power over creatures, leading
+  even to the ability to take their forms. Druid skills are moderate, and
+  they have some fighting ability, especially when transformed.  A druid will
+  usually seek to shape the flow of events to their purpose rather than
+  using devices or missiles, but at high levels they do gain access to
+  potent nature-based magic.  Druids rely on their wisdom, and have good
+  saving throws.
+
 .. _Priest:
 
 Priest
@@ -286,51 +320,70 @@ Priest
   Priests receive their spells from a deity, and therefore do not choose
   which spells they will learn. They are familiar with magical devices,
   preferring to call them "instruments of God", but are not as good as a
-  mage in their use. Priests have great saving throws, and make decent
-  fighters, but they are not as good at using sharp weapons (swords and
-  polearms) owing to the holy strictures about shedding blood, so they
-  are better off using blunt weapons such as maces. Wisdom is the priest's
+  mage in their use. Priests have great saving throws, and make passable
+  fighters, better if they can find a blessed weapon.  Wisdom is the priest's
   primary stat and at high enough levels they can cast many prayers without
   a chance of failure. Priests have poor stealth.
 
-.. _Rogue:
+.. _Necromancer:
 
-Rogue
-  A Rogue is a character that prefers to live by his cunning, but is
-  capable of fighting his way out of a tight spot. He is the master of
-  traps and locks, no device being impossible for him to overcome. A rogue
-  has a high stealth allowing him to sneak around many creatures without
-  having to fight, or sneak up and get the first blow. Rogues' perception
-  is higher than any other class, and many times they will notice a trap or
-  secret door before having to search. A rogue is better than warriors or
-  paladins with magical devices, but still cannot rely on their performance.
-  Rogues can also learn a few spells, but not the powerful offensive spells
-  mages can use, and there will always be a chance of failure even with the
-  simplest spells. A rogue's primary stats are dexterity and intelligence.
-
-.. _Ranger:
-
-Ranger
-  A Ranger is a warrior/mage and a very powerful class. He is a good
-  fighter, and the best of all the classes with missile weapons, especially
-  bows. The ranger learns spells much more slowly than a mage, but is
-  capable of learning all but the most powerful spells. Because a ranger is
-  really a dual class character, more experience is required for him to
-  advance. A ranger has good stealth, good perception, good searching, a
-  good saving throw, and is good with magical devices. Their primary stats
-  are strength, intelligence and dexterity.
+Necromancer
+  A Necromancer seeks to master the spirits of sentient creatures, creating
+  servants of their own will. They have chosen a dark and wicked path, and
+  run a continual risk of harm to their own body and mind. Necromancers love
+  shadows and hate light, automatically shrouding themselves in darkness.
+  Their spells require high intelligence, and frequently harm the caster or
+  place them in danger.  In return they achieve awesome power at high levels.
+  The ultimate aim of the necromancer is to supplant the Dark Enemy and set
+  up a tyranny in his place.
 
 .. _Paladin:
 
 Paladin
-  A Paladin is a warrior/priest. He is a very good fighter, second only to
-  the warrior class, but not very good at missile weapons. He receives
-  prayers at a slower pace then the priest, but can use all but the most
-  powerful prayers. Because a paladin is really a dual class character, it
-  requires more experience to advance him. A paladin lacks much in the way
-  of abilities. He is poor at stealth, perception, searching, and magical
-  devices. He has a decent saving throw due to his divine alliance. Their
+  A Paladin is a warrior/priest. Paladins are very good fighters, second
+  only to the warrior class, but not very good at missile weapons. They
+  receive prayers at a slower pace than the priest, but can use all but the
+  most powerful prayers. A paladin lacks much in the way of abilities.
+  Paladins have poor stealth, perception, searching, and magical device use.
+  They have a decent saving throw due to their divine alliance. Their
   primary stats are strength and wisdom.
+
+.. _Rogue:
+
+Rogue
+  A Rogue is a character that prefers to live by their cunning, but is
+  capable of fighting their way out of a tight spot. The master of traps and
+  locks, to the experienced rogue no device is impossible to overcome. A rogue
+  has a high stealth enabling sneaking around many creatures without
+  having to fight, or sneaking up and get the first blow. They can steal items
+  from monsters, but need to be wary of being caught in the act. Rogues'
+  perception is higher than any other class, and many times they will notice
+  a trap or secret door before having to search. A rogue is better than
+  the more fighting oriented classes with magical devices, but still cannot
+  rely on their performance. Rogues can also learn a few spells, but not the
+  powerful offensive spells mages can use, and there will always be a chance
+  of failure even with the simplest spells. A rogue's primary stats are
+  dexterity and intelligence.
+
+.. _Ranger:
+
+Ranger
+  A Ranger is at home in nature, and good at turning the environment to
+  good use. Rangers are good fighters, and the best of all the classes with
+  missile weapons, especially bows. The ranger learns chiefly spells of
+  survival and forest craft. A ranger has good stealth, good perception,
+  good searching, a good saving throw, and is good with magical devices.
+  Their primary stats are strength, wisdom and dexterity.
+
+.. _Blackguard:
+
+Blackguard
+  A Blackguard is a brawler of no principle, who lives for the joy of maiming
+  and killing. Blackguards prefer heavy weapons and shields, and learn a few
+  spells for the purpose of wreaking more destruction. Their lust for blood
+  is legendary, with a blackguard in full cry nigh on impossible to kill.
+  Blackguards scorn skills apart from slaughter, and require strength and
+  intelligence (or rat-cunning) to thrive in the dungeon.
 
 Stats
 =====
@@ -344,6 +397,10 @@ default setting for these statistics.  Statistics can be permanently
 raised by various potions in the dungeon up to 18/100.  They can also be 
 temporarily drained by some monster attacks.
 
+.. index::
+   single: strength; description
+   see: STR; strength
+
 Strength
   Strength is important in fighting with weapons and in melee combat. A
   high strength can improve your chances of hitting as well as the amount
@@ -352,34 +409,51 @@ Strength
   being slowed. It also allows you to get extra blows with heavier weapons.
   Strength is one of the most important stats in the beginning of the game.
  
+.. index::
+   single: intelligence; description
+   see: INT; intelligence
+
 Intelligence
-  Intelligence affects the spellcasting abilities of mage-like spellcasters:
-  mages, rangers, and rogues. Intelligence will affect the number of spells
-  you may learn each level as well as the number of spell points you
-  receive. Intelligence is the most important stat for mages. A high
-  intelligence may also improve your chances of successfully casting a
-  spell. You cannot learn spells if your intelligence is 7 or lower. A good
-  intelligence can also help with using magic devices, picking locks, and
-  disarming traps.
+  Intelligence affects the spellcasting abilities of spellcasters from the
+  arcane and shadow realms: mages, rogues, necromancers and blackguards.
+  Intelligence will affect the number of spells you may learn each level as
+  well as the number of spell points you receive. Intelligence is the most
+  important stat for mages and necromancers. A high intelligence may also
+  improve your chances of successfully casting a spell. You cannot learn
+  spells if your intelligence is 7 or lower. A good intelligence can also
+  help with using magic devices, picking locks, and disarming traps.
  
+.. index::
+   single: wisdom; description
+   see: WIS; wisdom
+
 Wisdom
   The primary function of wisdom is to determine the ability of a priest or
-  paladin to use prayers, just like intelligence affects spellcasting.
-  Again, high wisdom will increase the number of mana points you have and
-  increase the number of prayers you can learn each level, while improving
-  the chance that a prayer will be successful. A good wisdom increases your
-  saving throw, thereby improving your chances of resisting magical spells
-  cast upon you by monsters.
+  paladin to use prayers, and druids and rangers to use verses, just like
+  intelligence affects spellcasting. Again, high wisdom will increase the
+  number of mana points you have and increase the number of prayers or verses
+  you can learn each level, while improving your chance of success. A good
+  wisdom increases your saving throw, thereby improving your chances of
+  resisting magical spells cast upon you by monsters.
  
+.. index::
+   single: dexterity; description
+   see: DEX; dexterity
+
 Dexterity
   Dexterity is a combination of agility and quickness. A high dexterity may
   allow a character to get multiple blows with lighter weapons. Dexterity
   also increases a character's chances of hitting with any weapon and of
   dodging blows from enemies. Dexterity is also useful in picking locks,
-  disarming traps, and protecting yourself from some of the thieves that
-  inhabit the dungeons. Indeed, if the character has a high enough
-  dexterity, thieves will never be successful in stealing from him.
+  disarming traps, protecting yourself from some of the thieves that
+  inhabit the dungeons, and (for rogues) stealing successfully from others.
+  If the character has a high enough dexterity, thieves will never
+  be successful in stealing from them.
  
+.. index::
+   single: constitution; description
+   see: CON; constitution
+
 Constitution
   Constitution is a character's ability to resist damage to his body, and
   to recover from damage received. Therefore a character with a high
@@ -395,6 +469,9 @@ The starting skill levels of a character are based upon race and class.
 Skill levels may be adjusted by high or low stats, and may increase with 
 the level of the character.
 
+.. index::
+   single: infravision; description
+
 Infravision
   Infravision is the ability to see heat sources. Since most of the dungeon
   is cool or cold, infravision will not allow the player to see walls and
@@ -407,21 +484,45 @@ Infravision
   not increase with character level, and is purely dependent on race and on
   magical equipment.
  
+.. index::
+   single: fighting skill; description
+   see: melee skill; fighting skill
+   seealso: to-hit; fighting skill
+   seealso: to-dam; fighting skill
+   seealso; blows; fighting skill
+
 Fighting
   Fighting is the ability to hit and do damage with weapons or fists.
   Normally a character gets a single blow from any weapon, but with
   high enough dexterity and strength may receive more blows with
   lighter weapons. Strength and dexterity both modify the ability to hit an
-  opponent. This kill increases with the level of the character. Inspecting
+  opponent. This skill increases with the level of the character. Inspecting
   a weapon will show you how quickly you can attack with it.
  
+.. index::
+   single: shooting skill; description
+
 Shooting Ability
-  Using ranged missile weapons (and throwing objects) is included in this
-  skill. Different stats apply to different weapons, but this ability may
-  modify the distance an object is thrown/fired, the amount of damage done,
-  and the ability to hit a creature. This skill increases with the level of
-  the character.
+  Firing ammunition with a bow, sling, or crossbow is included in this skill.
+  Dexterity and this skill affect the chance to hit when firing. It does
+  not influence how far ammunition can be fired (that is set by the damage
+  multiplier for the bow, sling, or crossbow) or the amount of damage a hit
+  causes. This skill increases with the level of the character.
  
+.. index::
+   single: throwing skill; description
+
+Throwing Skill
+  Throwing a weapon or ammunition is included in this skill. Weapons or
+  ammunition specially designed for throwing are much better when thrown
+  than other weapons or ammunition. Dexterity and this skill affect the chance
+  to hit when throwing. It does not influence how far an item can be thrown
+  (that is set by strength and the weight of the thrown item) or the amount
+  of damage a hit causes. This skill increases with the level of the character.
+
+.. index::
+   single: saving throw; description
+
 Saving Throws
   A Saving Throw is the ability of a character to resist the effects of a
   spell cast on him by another person/creature. This does not include
@@ -431,13 +532,21 @@ Saving Throws
   even out. A high wisdom also increases this ability. It is possible to
   get 100% saving throw, making you immune to many attacks.
  
+.. index::
+   single: stealth; description
+
 Stealth
   The ability to move silently about is very useful. Characters with good
   stealth can usually surprise their opponents, gaining the first blow.
   Also, creatures may fail to notice a stealthy character entirely,
   allowing a player to avoid certain fights. This skill is based upon race 
-  and class, but can me magically enhanced.
+  and class, but can be magically enhanced.
  
+.. index::
+   single: disarming skill; description
+   see: disarm physical; disarming skill
+   see: disarm magical; disarming skill
+
 Disarming
   Disarming is the ability to remove traps safely, and also includes
   picking locks on traps and doors. A successful disarming will gain the
@@ -447,11 +556,17 @@ Disarming
   physical traps, and intelligence modifies disarming of magical traps.
   Both these abilities increase with the level of the character.
  
+.. index::
+   single: magic devices skill; description
+
 Magical Devices
   Using a magical device such as a wand or staff requires experience and
   knowledge. Spell users such as mages and priests are therefore much
   better at using a magical device than say a warrior. This skill is
   modified by intelligence, and increases with the level of the character.
+
+.. index::
+   single: searching skill; description
 
 Searching (Perception)
   Perception is the ability to notice traps without actively seeking them
@@ -463,40 +578,70 @@ Stat Bonus Tables
 
 Stats, hit dice, infravision and experience point modifications due to 
 race and class are listed in the following table.  To get the total hit 
-dice and XP modifier, add the "race" and "class" numbers: for instance, 
-a Dwarf Priest has a hit die of 11+2=13 (i.e. they will get 1d13 hit 
-points per level, adjusted for constitution) and an XP modifier of 
-20+20=40%.
+dice, add the "race" and "class" numbers: for instance, a Dwarf Priest
+has a hit die of 11+2=13 (i.e. they will get 1d13 hit points per level,
+adjusted for constitution).
+
+.. index::
+   single: strength; racial bonus
+   single: intelligence; racial bonus
+   single: wisdom; racial bonus
+   single: dexterity; racial bonus
+   single: consistution; racial bonus
+   single: hit dice; base from race
+   single: infravision; racial bonus
 
 ================ ===  ===  ===  ===  ===  =========  ========  ====== 
       Race       STR  INT  WIS  DEX  CON  HD (base)  XP/level  Infra
 ================ ===  ===  ===  ===  ===  =========  ========  ======
-      Human        0    0    0    0    0      10         +0%   None
-      Half-Elf     0   +1   -1   +1   -1      10        +10%   20'
-      Elf         -1   +2   -1   +1   -1       9        +20%   30'
-      Hobbit      -2   +2   +1   +3   +2       7        +10%   40'
-      Gnome       -1   +2    0   +2   +1       8        +25%   40'
-      Dwarf       +2   -3   +2   -2   +2      11        +20%   50'
-      Half-Orc    +2   -1    0    0   +1      10        +10%   30'
-      Half-Troll  +4   -4   -2   -4   +3      12        +20%   30'
-      Dunadan     +1   +2   +2   +2   +3      10        +80%   None
-      High-Elf    +1   +3   -1   +3   +1      10       +100%   40'
-      Kobold      -1   -1    0   +2   +2       8        +15%   50'
+      Human        0    0    0    0    0      10        100%   None
+      Half-Elf     0   +1   -1   +1   -1      10        120%   20'
+      Elf         -1   +2   -1   +1   -1       9        120%   30'
+      Hobbit      -2   +2   +1   +3   +2       7        120%   40'
+      Gnome       -1   +2    0   +2   +1       8        120%   40'
+      Dwarf       +2   -3   +2   -2   +2      11        120%   50'
+      Half-Orc    +2   -1    0    0   +1      10        120%   30'
+      Half-Troll  +4   -4   -2   -4   +3      12        120%   30'
+      Dunadan     +1   +2   +2   +2   +3      10        120%   None
+      High-Elf    +1   +3   -1   +3   +1      10        145%   40'
+      Kobold      -1   -1    0   +2   +2       8        120%   50'
 ================ ===  ===  ===  ===  ===  =========  ========  ======
 
-================ ===  ===  ===  ===  ===  ========== ========
-      Class      STR  INT  WIS  DEX  CON  HD (bonus) XP/level
-================ ===  ===  ===  ===  ===  ========== ========
-      Warrior     +3   -2   -2   +2   +2       9         +0%
-      Mage        -3   +3    0   +0   -2       0        +30%
-      Priest      -1   -3   +3   -1   +1       2        +20%
-      Rogue        0   +1   -3   +3   -1       6        +25%
-      Ranger       0   +2   -2   +1   -1       4        +30%
-      Paladin     +1   -3   +1   -1   +2       6        +35%
-================ ===  ===  ===  ===  ===  ========== ========
+
+.. index::
+   single: strength; class bonus
+   single: intelligence; class bonus
+   single: wisdom; class bonus
+   single: dexterity; class bonus
+   single: consistution; class bonus
+   single: hit dice; class bonus
+
+================= ===  ===  ===  ===  ===  ==========
+      Class       STR  INT  WIS  DEX  CON  HD (bonus)
+================= ===  ===  ===  ===  ===  ==========
+      Warrior      +3   -2   -2   +2   +2       9
+      Mage         -3   +3   +0   +0   -2       0
+      Druid        -2   +0   +3   -2   +0       2
+      Priest       -1   -3   +3   -1   +1       2
+      Necromancer  -3   +3   +0   +0   -2       2
+      Paladin      +1   -3   +1   -1   +2       6
+      Rogue        +0   +1   -3   +3   -1       4
+      Ranger       +0   +0   +2   +1   -1       5
+      Blackguard   +2   +0   -3   +0   +2       8
+================= ===  ===  ===  ===  ===  ==========
  
 Ability Tables
 ==============
+
+.. index::
+   single: disarming skill; racial bonus
+   single: magic devices skill; racial bonus
+   single: saving throw; racial bonus
+   single: stealth; racial bonus
+   single: searching skill; racial bonus
+   single: fighting skill; racial bonus
+   single: shooting skill; racial bonus
+   single: throwing skill; racial bonus
 
 ============ =======  =======  ======  =====  =======  ======  ======  =====
   Race       DisarmP  DisarmM  Device   Save  Stealth  Search   Fight   Bows
@@ -514,23 +659,39 @@ Ability Tables
   Kobold       10       10        5       0       3      10      -5      10
 ============ =======  =======  ======  =====  =======  ======  ======  =====
 
-==========  ======= ======= ======= ======= ======= =======  ======= =======
- Class      DisarmP DisarmM Device   Save   Stealth Search    Fight   Bows 
-==========  ======= ======= ======= ======= ======= =======  ======= =======
- Warrior    25(+15) 20(+10) 18(+7)  18(+10)  0(+0)  10(+12)  70(+45) 55(+45)
- Mage       30(+10) 35(+12) 36(+13) 30(+9)   2(+0)  10(+12)  34(+15) 20(+15)
- Priest     25(+12) 25(+12) 30(+10) 32(+12)  2(+0)  10(+14)  48(+20) 35(+20)
- Rogue      45(+20) 45(+20) 32(+10) 28(+10)  3(+1)  20(+16)  60(+40) 66(+30)
- Ranger     30(+13) 20(+13) 32(+10) 28(+10)  3(+0)  15(+15)  56(+30) 72(+45)
- Paladin    20(+12) 20(+10) 24(+10) 25(+11)  0(+0)  10(+12)  68(+35) 40(+30)
-==========  ======= ======= ======= ======= ======= =======  ======= =======
+
+.. index::
+   single: disarming skill; class bonus
+   single: magic devices skill; class bonus
+   single: saving throw; class bonus
+   single: stealth; class bonus
+   single: searching skill; class bonus
+   single: fighting skill; class bonus
+   single: shooting skill; class bonus
+   single: throwing skill; class bonus
+
+============   ======= ======= ======= ======= ======= =======  ======= =======
+ Class         DisarmP DisarmM Device   Save   Stealth Search    Fight   Bows
+============   ======= ======= ======= ======= ======= =======  ======= =======
+ Warrior       25(+15) 20(+10) 18(+7)  18(+10)  0(+0)  10(+12)  70(+45) 55(+45)
+ Mage          30(+10) 35(+12) 36(+13) 30(+9)   2(+0)  10(+12)  35(+15) 20(+15)
+ Druid         30(+10) 30(+10) 24(+10) 30(+10)  3(+0)  12(+12)  45(+20) 40(+30)
+ Priest        25(+12) 25(+12) 30(+10) 32(+12)  2(+0)  10(+14)  45(+20) 35(+20)
+ Necromancer   30(+10) 35(+12) 36(+13) 30(+9)   2(+0)  10(+12)  35(+25) 20(+15)
+ Paladin       20(+15) 20(+10) 24(+10) 25(+11)  0(+0)  10(+12)  65(+40) 50(+30)
+ Rogue         45(+20) 45(+20) 32(+10) 28(+10)  3(+1)  20(+16)  35(+45) 66(+30)
+ Ranger        40(+15) 30(+10) 28(+10) 32(+10)  3(+0)  15(+15)  60(+40) 72(+45)
+ Blackguard    20(+15) 20(+10) 24(+10) 18(+10) -1(-1)   8(+10)  65(+40) 35(+15)
+============   ======= ======= ======= ======= ======= =======  ======= =======
 
 For character classes, there are two figures: the first figure is the base
 level of the skill, while the second figure (in parentheses) is the bonus
 that the character gains to this skill every ten levels. So, to find out
 the total skill value of any character's skills, add the race value to the
 class value, and then the bonus once for every ten levels that the
-character has.
+character has. Throwing skill is not shown as its adjustments for race
+and class are the same as for the shooting skill except for rogues (72(+45)),
+rangers (66(+30)), and blackguards (40(+30)).
 
 Please note, however, that these numbers are only good for comparing
 characters to each other in the absence of other bonuses from high stats

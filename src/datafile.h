@@ -37,10 +37,12 @@ errr parse_file_quit_not_found(struct parser *p, const char *filename);
 errr parse_file(struct parser *p, const char *filename);
 void cleanup_parser(struct file_parser *fp);
 int lookup_flag(const char **flag_table, const char *flag_name);
+int code_index_in_array(const char *code_name[], const char *code);
 errr grab_rand_value(random_value *value, const char **value_type,
 					 const char *name_and_value);
 errr grab_int_value(int *value, const char **value_type,
 					const char *name_and_value);
+errr grab_int_range(int *lo, int *hi, const char *range, const char *sep);
 errr grab_index_and_int(int *value, int *index, const char **value_type,
 						const char *prefix, const char *name_and_value);
 errr grab_base_and_int(int *value, char **base, const char *name_and_value);
@@ -51,11 +53,13 @@ errr grab_flag(bitflag *flags, const size_t size, const char **flag_table,
 errr remove_flag(bitflag *flags, const size_t size, const char **flag_table,
 				 const char *flag_name);
 
-void write_flags(ang_file *fff, const char *intro_text, bitflag *flags,
+void write_flags(ang_file *fff, const char *intro_text, const bitflag *flags,
 				 int flag_size, const char *names[]);
 void write_mods(ang_file *fff, const int values[]);
 void write_elements(ang_file *fff, const struct element_info *el_info);
-void file_archive(char *fname, char *append);
+void set_archive_user_prefix(const char *pfx);
+void file_archive(const char *fname, const char *append);
+bool randart_file_exists(void);
 void activate_randart_file(void);
 void deactivate_randart_file(void);
 

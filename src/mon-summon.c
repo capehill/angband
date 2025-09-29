@@ -19,6 +19,8 @@
 #include "angband.h"
 #include "cave.h"
 #include "datafile.h"
+#include "game-world.h"
+#include "init.h"
 #include "mon-group.h"
 #include "mon-make.h"
 #include "mon-summon.h"
@@ -141,7 +143,7 @@ static enum parser_error parse_summon_desc(struct parser *p) {
 
 
 
-struct parser *init_parse_summon(void) {
+static struct parser *init_parse_summon(void) {
 	struct parser *p = parser_new();
 	parser_setpriv(p, NULL);
 
@@ -161,7 +163,7 @@ static errr run_parse_summon(struct parser *p) {
 
 static errr finish_parse_summon(struct parser *p) {
 	struct summon *summon, *next;
-	int count = 0;
+	int index;
 
 	/* Count the entries */
 	summon_max = 0;
@@ -173,19 +175,20 @@ static errr finish_parse_summon(struct parser *p) {
 
 	/* Allocate the direct access list and copy the data to it */
 	summons = mem_zalloc((summon_max + 1) * sizeof(*summon));
-	for (summon = parser_priv(p); summon; summon = next, count++) {
-		memcpy(&summons[count], summon, sizeof(*summon));
+	index = summon_max - 1;
+	for (summon = parser_priv(p); summon; summon = next, index--) {
+		memcpy(&summons[index], summon, sizeof(*summon));
 		next = summon->next;
-		summons[count].next = NULL;
+		summons[index].next = NULL;
 
 		mem_free(summon);
 	}
 	summon_max += 1;
 
 	/* Add indices of fallback summons */
-	for (count = 0; count < summon_max; count++) {
-		char *name = summons[count].fallback_name;
-		summons[count].fallback = summon_name_to_idx(name);
+	for (index = 0; index < summon_max; index++) {
+		char *name = summons[index].fallback_name;
+		summons[index].fallback = summon_name_to_idx(name);
 	}
 
 	parser_destroy(p);
@@ -398,34 +401,21 @@ static int call_monster(struct loc grid)
  */
 int summon_specific(struct loc grid, int lev, int type, bool delay, bool call)
 {
-	int i;
-	struct loc near;
+	int d;
+	struct loc near = grid;
 	struct monster *mon;
 	struct monster_race *race;
 	struct monster_group_info info = { 0, 0 };
 
 	/* Look for a location, allow up to 4 squares away */
-	for (i = 0; i < 60; ++i) {
-		/* Pick a distance */
-		int d = (i / 15) + 1;
-
-		/* Pick a location */
-		scatter(cave, &near, grid, d, true);
-
-		/* Require "empty" floor grid */
-		if (!square_isempty(cave, near)) continue;
-
-		/* No summon on glyphs */
-		if (square_iswarded(cave, near) || square_isdecoyed(cave, near)) {
-			continue;
-		}
-
-		/* Okay */
-		break;
+	for (d = 1; d < 5; ++d) {
+		/* Pick a location. */
+		if (scatter_ext(cave, &near, 1, grid, d, true,
+				square_allows_summon) > 0) break;
 	}
 
 	/* Failure */
-	if (i == 60) return (0);
+	if (d == 5) return 0;
 
 	/* Save the "summon" type */
 	summon_specific_type = type;
@@ -440,7 +430,7 @@ int summon_specific(struct loc grid, int lev, int type, bool delay, bool call)
 	get_mon_num_prep(summon_specific_okay);
 
 	/* Pick a monster, using the level calculation */
-	race = get_mon_num((player->depth + lev) / 2 + 5);
+	race = get_mon_num((player->depth + lev) / 2 + 5, player->depth);
 
 	/* Prepare allocation table */
 	get_mon_num_prep(NULL);
@@ -465,12 +455,27 @@ int summon_specific(struct loc grid, int lev, int type, bool delay, bool call)
 	mon = square_monster(cave, near);
 
 	/* If delay, try to let the player act before the summoned monsters,
-	 * including slowing down faster monsters for one turn */
-	/* XXX should this now be hold monster for a turn? */
+	 * including holding faster monsters for the required number of turns */
 	if (delay) {
+		int p_e_per_turn = turn_energy(player->state.speed);
+		int m_e_per_turn = turn_energy(mon->mspeed);
+		/*
+		 * Number of turns for player to move from zero energy, tp, is
+		 * z_info->move_energy / p_e_per_turn.  Number of turns for
+		 * monster to move from zero energy, tm, is
+		 * z_info->move_energy / m_e_per_turn.  The number of turns to
+		 * hold the monster is tp - tm.  That's this, rounding up to be
+		 * safe.
+		 */
+		int turns = (z_info->move_energy
+			 * (m_e_per_turn - p_e_per_turn)
+			 + m_e_per_turn * p_e_per_turn - 1)
+			 / (m_e_per_turn * p_e_per_turn);
+
 		mon->energy = 0;
-		if (mon->race->speed > player->state.speed) {
-			mon_inc_timed(mon, MON_TMD_SLOW, 1,	MON_TMD_FLG_NOMESSAGE);
+		if (turns > 0) {
+			/* Set timer directly to avoid resistance */
+			mon->m_timed[MON_TMD_HOLD] = MIN(turns, 32767);
 		}
 	}
 
@@ -491,7 +496,7 @@ struct monster_race *select_shape(struct monster *mon, int type)
 	get_mon_num_prep(summon_specific_okay);
 
 	/* Pick a monster */
-	race = get_mon_num(player->depth + 5);
+	race = get_mon_num(player->depth + 5, player->depth);
 
 	/* Prepare allocation table */
 	get_mon_num_prep(NULL);

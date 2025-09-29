@@ -180,12 +180,23 @@ void event_signal_message(game_event_type type, int t, const char *s)
 	game_event_dispatch(type, &data);
 }
 
-void event_signal_birthpoints(int stats[6], int remaining)
+/**
+ * Signal a change or refresh in the point buy for birth stats.
+ *
+ * \param points points[i] is the number of points already spent to increase
+ * the ith stat, i >= 0 and i < STAT_MAX.
+ * \param inc_points inc_points[i] is the number of additional points it would
+ * take to incrase the ith stat by one, i >= 0 and i < STAT_MAX.
+ * \param remaining is the number of poitns that remain to be spent.
+ */
+void event_signal_birthpoints(const int *points, const int *inc_points,
+		int remaining)
 {
 	game_event_data data;
 
-	data.birthstats.stats = stats;
-	data.birthstats.remaining = remaining;
+	data.birthpoints.points = points;
+	data.birthpoints.inc_points = inc_points;
+	data.birthpoints.remaining = remaining;
 
 	game_event_dispatch(EVENT_BIRTHPOINTS, &data);
 }
@@ -246,5 +257,28 @@ void event_signal_missile(game_event_type type,
 	data.missile.y = y;
 	data.missile.x = x;
 
+	game_event_dispatch(type, &data);
+}
+
+void event_signal_size(game_event_type type, int h, int w)
+{
+	game_event_data data;
+
+	data.size.h = h;
+	data.size.w = w;
+	game_event_dispatch(type, &data);
+}
+
+void event_signal_tunnel(game_event_type type, int nstep, int npierce, int ndug,
+		int dstart, int dend, bool early)
+{
+	game_event_data data;
+
+	data.tunnel.nstep = nstep;
+	data.tunnel.npierce = npierce;
+	data.tunnel.ndug = ndug;
+	data.tunnel.dstart = dstart;
+	data.tunnel.dend = dend;
+	data.tunnel.early = early;
 	game_event_dispatch(type, &data);
 }

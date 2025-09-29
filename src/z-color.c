@@ -27,7 +27,7 @@
 /**
  * Global table of color definitions (mostly zeros)
  */
-byte angband_color_table[MAX_COLORS][4] =
+uint8_t angband_color_table[MAX_COLORS][4] =
 {
 	{0x00, 0x00, 0x00, 0x00}, /* 0  COLOUR_DARK */
 	{0x00, 0xff, 0xff, 0xff}, /* 1  COLOUR_WHITE */
@@ -207,7 +207,7 @@ int color_text_to_attr(const char *name)
 /**
  * Extract a textual representation of an attribute
  */
-const char *attr_to_text(byte a)
+const char *attr_to_text(uint8_t a)
 {
 	if (a < BASIC_COLORS)
 		return (color_table[a].name);
@@ -227,7 +227,7 @@ const char *attr_to_text(byte a)
  * ensure that e.g. the lighter version of yellow becomes white in a 16 color
  * term, but light yellow in a full colour term.
  */
-byte get_color(byte a, int attr, int n)
+uint8_t get_color(uint8_t a, int attr, int n)
 {
 	/* Accept any graphical attr (high bit set) */
 	if (a & (0x80))
@@ -270,24 +270,24 @@ byte get_color(byte a, int attr, int n)
  * usually is closest to 1.7.  The converted value for each of the five
  * different "quarter" values is given below:
  *
- *  Given     Gamma 1.0       Gamma 1.5       Gamma 1.7     Hex 1.7
- *  -----       ----            ----            ----          ---
- *   0/4        0.00            0.00            0.00          #00
- *   1/4        0.25            0.27            0.28          #47
- *   2/4        0.50            0.55            0.56          #8f
- *   3/4        0.75            0.82            0.84          #d7
- *   4/4        1.00            1.00            1.00          #ff
+ *   Given  | Gamma 1.0 | Gamma 1.5 | Gamma 1.7 | Hex 1.7
+ *  :-----: | :-------: | :-------: | :-------: | :-----:
+ *    0/4   |    0.00   |    0.00   |    0.00   |   0x00
+ *    1/4   |    0.25   |    0.27   |    0.28   |   0x47
+ *    2/4   |    0.50   |    0.55   |    0.56   |   0x8f
+ *    3/4   |    0.75   |    0.82   |    0.84   |   0xd7
+ *    4/4   |    1.00   |    1.00   |    1.00   |   0xff
  */
 
 /**
  * Table of gamma values
  */
-byte gamma_table[256];
+uint8_t gamma_table[256];
 
 /**
  * Table of ln(x / 256) * 256 for x going from 0 -> 255
  */
-static const s16b gamma_helper[256] =
+static const int16_t gamma_helper[256] =
 {
 	0, -1420, -1242, -1138, -1065, -1007, -961, -921, -887, -857, -830,
 	-806, -783, -762, -744, -726, -710, -694, -679, -666, -652, -640,
@@ -375,7 +375,7 @@ void build_gamma_table(int gamma)
 		 * Store the value in the table so that the
 		 * floating point pow function isn't needed.
 		 */
-		gamma_table[i] = (byte)(((long)(value / 256) * i) / 256);
+		gamma_table[i] = (uint8_t)(((long)(value / 256) * i) / 256);
 	}
 }
 

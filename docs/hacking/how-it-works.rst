@@ -43,7 +43,7 @@ The Player
 
 The player is a global object containing information about, well, the player.
 All the information in the player is level-independent. This structure contains
-stats, any current effects, hunger status, sex/race/class, the player's
+stats, any current effects, hunger status, race/class, the player's
 inventory, and a grab-bag of other information. Although there is a global
 player object, many functions instead take a player object explicitly to make
 them easier to test.
@@ -62,7 +62,7 @@ The Z Layer
 ===========
 
 The lowest-level code in Angband is the "Z" layer, which provides
-platform-indepdent abstractions and generic data structures. Currently, the Z
+platform-independent abstractions and generic data structures. Currently, the Z
 layer provides:
 
 =================   ========================================
@@ -78,7 +78,6 @@ layer provides:
 ``z-quark``         String interning
 ``z-queue``         Queues
 ``z-rand``          Randomness
-``z-set``           Sets
 ``z-textblock``     Wrapped text
 ``z-type``          Basic types
 ``z-util``          Random utility macros
@@ -98,12 +97,25 @@ the state of the game changed.
 The command queue
 -----------------
 
-TBD
+The command queue is a first-in, first-out queue that holds and processes commands
+from the player. It is implemented in ``cmd-core.c``. The UI frontends add commands
+to this queue, which are then read and processed by the main game loop in
+`game-world.c - process_player()`_. This decouples the game engine from the user
+interface, making it easier to support different frontends, :ref:`keymaps <keymaps>`,
+:ref:`repeat actions <command-counts>`, and automate certain behaviors (e.g., run
+or rest to full). The command queue stops processing when the player is interrupted
+by monsters or other significant events via the ``disturb()`` function, ensuring the
+player always has a chance to respond to danger.
 
 Events
 ------
 
-TBD
+Events notify the UI and message systems about changes in game state. The event
+system, in ``game-event.c`` and ``game-event.h``, lets the UI and other parts of the
+program register handlers for different event types and react when those events occur.
+This keeps the display and messages in sync with the game, and helps separate game
+logic from the UI. Some direct UI and sound calls are still used alongside the event
+system. The intent is to expand the event system in the future.
 
 Files
 =====
@@ -122,7 +134,16 @@ arrays (see `The Static Data`_).
 
 Pref Files
 ----------
-TBD
+
+Pref files (preference files) are simple text files used to customize the user
+interface and gameplay experience. Pref files are loaded at startup from both
+system and user locations, with user files overriding defaults. The loading of
+individual pref files is handled in ``ui-prefs.c``. The specific order in
+which global and character-specific files are applied is determined by the
+sequence of ``process_pref_file()`` calls in various parts of the code, such as
+``ui-init.c`` and ``ui-display.c``. For details on what can be customized, file
+locations on different platforms, and how to edit or create pref files, see
+:ref:`User Pref Files <user-pref-files>`.
 
 Savefiles
 ----------
@@ -130,7 +151,7 @@ Savefiles
 Currently, a savefile is a series of concatenated blocks. Each block has a name
 describing what type it is and a version tag. The version tag allows for old
 savefiles to be loaded, although the load/save code will only write new
-savefiles. Numbers in savefiles are stored in little-endian byte orderand
+savefiles. Numbers in savefiles are stored in little-endian byte order and
 strings are stored null-terminated.
 
 Control Flow
@@ -151,20 +172,14 @@ begins.
 ``main.c`` and ``main-*.c``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 main.c's ``main()`` is the entry point for Angband execution except on Windows,
-where main-win.c's ``WinMain()`` is used, and on Nintendo DS, where a special ``main()``
-in main-nds.c is used. The ``main()`` function is responsible for dropping
-permissions if Angband is running setuid, parsing command line arguments, then
-finding a frontend to use and initializing it. Once ``main()`` finds a frontend, it
-sets up signal handlers, sets up the display, then calls ``play_game()``.
-
-dungeon.c - ``play_game``
-~~~~~~~~~~~~~~~~~~~~~~~~~
-This function is responsible for driving the remaining
-initialization. It first calls `init.c - init_angband`_, which loads all
-the `gamedata files`_ and initializes other static data used by the
-game. It then configures subwindows, loads a saved game if there is a valid save
-(see `savefiles`_), sets up the RNG, loads pref files (see `prefs.c - process_pref_file`_),
-and enters the game main loop (see `dungeon.c - the game main loop`_).
+where main-win.c's ``WinMain()`` is used, on Nintendo DS, where a special
+``main()`` in main-nds.c is used, and on OS X where main-cocoa.m's ``main()``
+is used. The ``main()`` function is responsible for dropping permissions if
+Angband is running setuid, parsing command line arguments, then finding a
+frontend to use and initializing it. Once ``main()`` finds a frontend, it sets
+up signal handlers, sets up the display, and calls `init.c - init_angband`_,
+which loads all the `gamedata files`_ and initializes other static data used
+by the game.
 
 init.c - ``init_angband``
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -172,40 +187,39 @@ The init_angband() function in init.c is responsible for loading and setting up
 static data needed by the game engine. Inside init.c, there is a list of 'init
 modules' that have startup-time static data they need to initialize, these are
 registered in an array of module pointers in init.c, and init_angband() calls
-their initialization hooks before doing any other work. The init_angband()
-function then loads the top-level pref file (see `pref files`_), initializes the
-command queue (see `the command queue`_), then waits for the UI to enqueue either QUIT,
-NEWGAME, or LOADFILE. This function returns true if the player wants to roll a
-new character, and false if they want to load an existing character.
+their initialization hooks before doing any other work.  Finally it sets up the
+RNG.
 
-prefs.c - ``process_pref_file``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The process_pref_file() function in prefs.c is responsible for loading user pref
-files, which can live at multiple paths. User preference files override default
-preference files. See `pref files`_ for more details.
+ui-init.c - ``textui_init``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The textui_init() function then loads the top-level pref file (see
+`pref files`_), initializes the command queue (see `the command queue`_),
+and configures subwindows.
+
+ui-prefs.c - ``process_pref_file``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The process_pref_file() function in ui-prefs.c is responsible for loading user
+pref files, which can live at multiple paths. User preference files override
+default preference files. See `pref files`_ for more details.
+
+ui-game.c - ``play_game``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+This function calls start_game() to load a saved game if there is a valid save
+(see `savefiles`_) or birth a new character if not.  It then asks for a command
+from the player, and then runs the game main loop (see
+`game-world.c - the game main loop`_), over and over until the character dies
+or the player quits
 
 Gameplay
 --------
-Once the simulation is set up, the game main loop in `dungeon.c - play_game`_ is responsible for stepping the simulation.
+Once the simulation is set up, the game main loop in `ui-game.c - play_game`_
+is responsible for stepping the simulation.
 
-dungeon.c - the game main loop
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The main loop of the game is inside play_game(), commented as ``/* Process */``,
-in typical understated Angband style. This loop runs once per time that either
-the level is regenerated, the player dies, or the player quits the game. Each
-iteration through, the this loop runs the level main loop to completion for an
-individual level.
-
-dungeon.c - the level main loop
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The main loop for the level is implemented in dungeon() in dungeon.c. The
-dungeon() function is called when the player enters a level, and returns only
-when the player exits the level, either by changing levels, dying, or quitting.
-This function is responsible for tracking the player's max level/depth,
-autosaving at level entry, and running the main simulation loop. Each iteration
-of the main simulation loop is one "turn" in Angband parlance, or one step of
-the simulator. During each turn:
+game-world.c - the game main loop
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The main loop of the game, run_game_loop() is repeatedly called inside
+play_game(). Each iteration of the main loop is one "turn" in Angband parlance,
+or one step of the simulator. During each turn:
 
 * All monsters with more energy than the player act
 * The player acts
@@ -214,18 +228,18 @@ the simulator. During each turn:
 * The world acts
 * End-of-turn housekeeping is done
 
-mon-melee2.c - process_monsters()
-*********************************
+mon-move.c - process_monsters()
+*******************************
 
 In Angband, creatures act in order of "energy", which roughly determines how
 many actions they can take per step through the simulation. The
-process_monsters() function in mon-melee2.c is responsible for walking through
+process_monsters() function in mon-move.c is responsible for walking through
 the list of all monsters in the current chunk (see `the chunk`_) and having each
 monster act by calling process_monster(), which implements the highest level AI
 for monsters.
 
-dungeon.c - process_player()
-****************************
+game-world.c - process_player()
+*******************************
 
 The process_player() function allows the player to act repeatedly until they do
 something that uses energy. Commands like looking around or inscribing items do
@@ -255,8 +269,8 @@ keeping the UI in sync with the simulated character's state:
 These functions are called during every game loop, after the player and all
 monsters have acted.
 
-dungeon.c - process_world()
-***************************
+game-world.c - process_world()
+******************************
 
 The process_world() function only runs every 10 turns. It is responsible for the
 day/night transition in town, restocking the stores, generating new creatures
@@ -267,23 +281,88 @@ that happen 'at random' from the player's point of view.
 Dungeon Generation
 ------------------
 
-TBD
+prepare_next_level() in generate.c controls the process of generating or loading
+a level.  To signal that run_game_loop() in game-world.c should call
+prepare_next_level(), game logic calls dungeon_change_level() in player-util.c
+to set the necessary data in the player structure.  When a level change happens
+by traversing a staircase, some other data in the player structure is set to
+indicate what should be done to connect stairs.  That doesn't happen in
+dungeon_change_level() and is instead set directly, currently in do_cmd_go_up()
+and do_cmd_go_down() in cmd-cave.c.
+
+With the default for non-persistent levels, loading only happens when
+returning to the town or when returning from a single combat arena.  The code
+and global data for handling stored levels is in gen-chunk.c.
+
+When a new level is needed, prepare_next_level() calls cave_generate(), also in
+generate.c.  That initializes a global bit of state, a dun_data structure called
+dun declared in generate.h, for passing a lot of the details needed when
+generating a level.  It then selects a level profile via choose_profile() in
+generate.c.  The level profile controls the layout of the level.  The available
+level profiles are those listed in list-dun-profiles.h and several aspects of
+each profile are configured at runtime from the contents of
+lib/gamedata/dungeon_profile.txt.  With a profile selected, cave_generate()
+uses the profile's builder function pointer to attempt to layout the new level.
+Those function pointers are initialized when list-dun-profiles.h is included
+in generate.c.  The level layout functions all have names with the name of
+the profile followed by *_gen*, classic_gen() for classic levels as an
+example.  Those functions are defined in gen-cave.c.
+
+Three of the level layout functions, classic_gen(), modified_gen(), and
+moria_gen() follow the same basic procedure.  They divide the level into a
+grid of rectangular blocks where, in general, each block can only contain
+one room though a room could occupy many blocks.  They then try to randomly
+place rooms in those blocks until some criteria is met.  Room selection is
+configurable from lib/gamedata/dungeon_profile.txt and uses the predefined
+room types listed in list-rooms.h.  When building a room, those level layout
+functions use the convenience function, room_build() from gen-room.c.  That, in
+turn, calls the appropriate function to build the type of room chosen.  The
+names of the room building functions have *build_* followed by the name of the
+room type, build_simple() for instance.  Those functions are defined in
+gen-room.c.  Once the rooms are built, there's an initial pass to connect them
+with corridors.  That happens in gen-cave.c's do_traditional_tunneling().
+A second pass, to try and ensure connectedness though vault areas can disrupt
+that, is then done with ensure_connectedness().  At that point, most other
+features (mineral veins, staircases, objects, and monsters) are added.  Some
+features will have already been added through some of the types of rooms.
+
+The other layout functions are more of a grab bag.  They are all in gen-cave.c.
+Many of them have portions that are caverns or labyrinths.  Those are generated
+using cavern_chunk() or labyrinth_chunk(), respectively, in gen-cave.c.
 
 Monster AI
 ----------
 
-TBD
+Monster AI determines how monsters act each turn. The logic is primarily
+implemented in ``mon-move.c``, ``mon-attack.c``, and ``cave-map.c``.
+`mon-move.c - process_monsters()`_ is called in the main game loop.
 
+On its turn, a monster will:
+
+1. Regenerate HP and recover from timed effects
+2. Attempt to multiply (if possible)
+3. Attempt to cast a spell or use a ranged attack
+4. Try to move towards the player
+
+Pathfinding uses a "flow" system implemented in ``cave-map.c``. Each grid
+stores a ``noise`` value (distance from the player) and a ``scent`` value
+(recentness of information). Monsters follow the lowest noise value towards
+the player, using scent to break ties. One set of flow information is used for
+all monsters. It is efficient but means that monsters that can't open or bash
+down doors, or otherwise deal with obstacles, will find it impossible to flow
+around them and find a different way to the player.
 
 Stats
 -----
 
 The stats generation code aims to make it easy to analyze object generation,
 monster generation, and other Angband processes suitable for Monte Carlo
-simulation. The supplied perl script (run-stats) repeatedly invokes the 
-angband executable with the stats pseudo-visual module. Each call initializes
-a player, walks her down the dungeon, and, for each dungeon level between one
-and ninety-nine, kills all the monsters on the generated map and dumps 
-information about the monsters and objects therein. The perl script then
-collects this information and outputs statistics about it as desired.
-
+simulation.  The stats pseudo-visual module will repeatedly create a character,
+walk her down the dungeon, and, for each dungeon level, kill the monsters
+there and dump information about the monsters and objects.  The end result
+is a SQLite3 database, written to the stats subdirectory of Angband's user
+directory.  A similar procedure is used by the ``S`` debugging command.  It
+will generate a text file summarizing the monsters and objects generated.
+That output may be more accessible, since one doesn't have to deal with the
+structure of the database, but the database stores finer-grained classifications
+of the objects and monsters.

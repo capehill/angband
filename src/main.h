@@ -40,13 +40,13 @@ extern errr init_sdl(int argc, char **argv);
 extern errr init_sdl2(int argc, char **argv);
 extern errr init_test(int argc, char **argv);
 extern errr init_stats(int argc, char **argv);
+extern errr init_spoil(int argc, char **argv);
 
 
 extern const char help_lfb[];
 extern const char help_xpj[];
 extern const char help_x11[];
 extern const char help_vcs[];
-extern const char help_gtk[];
 extern const char help_gcu[];
 extern const char help_cap[];
 extern const char help_vme[];
@@ -60,9 +60,7 @@ extern const char help_sdl[];
 extern const char help_sdl2[];
 extern const char help_test[];
 extern const char help_stats[];
-
-//phantom server play
-extern bool arg_force_name;
+extern const char help_spoil[];
 
 
 struct module

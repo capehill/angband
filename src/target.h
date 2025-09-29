@@ -47,14 +47,17 @@ bool target_okay(void);
 bool target_set_monster(struct monster *mon);
 void target_set_location(int y, int x);
 bool target_is_set(void);
+void target_fix(void);
+void target_release(void);
 int cmp_distance(const void *a, const void *b);
-s16b target_pick(int y1, int x1, int dy, int dx, struct point_set *targets);
+int16_t target_pick(int y1, int x1, int dy, int dx, struct point_set *targets);
 bool target_accept(int y, int x);
 void coords_desc(char *buf, int size, int y, int x);
 void target_get(struct loc *grid);
 struct monster *target_get_monster(void);
 bool target_sighted(void);
-struct point_set *target_get_monsters(int mode, monster_predicate pred);
+struct point_set *target_get_monsters(int mode, monster_predicate pred,
+	bool restrict_to_panel);
 bool target_set_closest(int mode, monster_predicate pred);
 
 #endif /* !TARGET_H */

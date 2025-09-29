@@ -53,11 +53,12 @@
  *    be used to indicate field-of-view, such as through the 
  *    OPT(player, view_bright_light) option.
  *  - g->lighting is set to indicate the lighting level for the grid:
- *    LIGHTING_DARK for unlit grids, LIGHTING_LIT for inherently light
- *    grids (lit rooms, etc), LIGHTING_TORCH for grids lit by the player's
- *    light source, and LIGHTING_LOS for grids in the player's line of sight.
- *    Note that lighting is always LIGHTING_LIT for known "interesting" grids
- *    like walls.
+ *    LIGHTING_LIT by default, LIGHTING_DARK for unlit but seen grids within the
+ *    detection radius of a player with the UNLIGHT ability and a light source
+ *    with an intensity of one or less, LIGHTING_TORCH for seen and lit grids
+ *    within the radius of the player's light source when the view_yellow_light
+ *    option is on, and LIGHTING_LOS for seen and lit grids that don't qualify
+ *    for LIGHTING_TORCH.
  *  - g->is_player is true if the player is on the given grid.
  *  - g->hallucinate is true if the player is hallucinating something "strange"
  *    for this grid - this should pick a random monster to show if the m_idx
@@ -72,10 +73,11 @@
  * doors out of the player's view still change from closed to open and so on.
  *
  * TODO:
- * Hallucination is currently disabled (it was a display-level hack before,
- * and we need it to be a knowledge-level hack).  The idea is that objects
- * may turn into different objects, monsters into different monsters, and
- * terrain may be objects, monsters, or stay the same.
+ * Hallucination is a display-level hack (mostly in ui-map.c's
+ * grid_data_as_text(); some here) and we need it to be a knowledge-level
+ * hack.  The idea is that objects may turn into different objects, monsters
+ * into different monsters, and terrain may be objects, monsters, or stay the
+ * same.
  */
 void map_info(struct loc grid, struct grid_data *g)
 {
@@ -93,25 +95,29 @@ void map_info(struct loc grid, struct grid_data *g)
 	g->unseen_money = false;
 
 	/* Use real feature (remove later) */
-	g->f_idx = square(cave, grid).feat;
+	g->f_idx = square(cave, grid)->feat;
 	if (f_info[g->f_idx].mimic)
-		g->f_idx = lookup_feat(f_info[g->f_idx].mimic);
+		g->f_idx = (uint32_t) (f_info[g->f_idx].mimic - f_info);
 
 	g->in_view = (square_isseen(cave, grid)) ? true : false;
-	g->is_player = (square(cave, grid).mon < 0) ? true : false;
-	g->m_idx = (g->is_player) ? 0 : square(cave, grid).mon;
+	g->is_player = (square(cave, grid)->mon < 0) ? true : false;
+	g->m_idx = (g->is_player) ? 0 : square(cave, grid)->mon;
 	g->hallucinate = player->timed[TMD_IMAGE] ? true : false;
 
 	if (g->in_view) {
-		g->lighting = LIGHTING_LOS;
+		bool lit = square_islit(cave, grid);
 
-		/* Darkness or torchlight */
-		if (!square_isglow(cave, grid)) {
-			if (player_has(player, PF_UNLIGHT) && !square_islit(cave, grid)) {
-				g->lighting = LIGHTING_DARK;
-			} else if (OPT(player, view_yellow_light)) {
-				g->lighting = LIGHTING_TORCH;
+		if (sqinfo_has(square(cave, grid)->info, SQUARE_CLOSE_PLAYER)) {
+			if (player_has(player, PF_UNLIGHT) &&
+					player->state.cur_light <= 1) {
+				g->lighting = (lit) ?
+					LIGHTING_LOS : LIGHTING_DARK;
+			} else if (lit) {
+				g->lighting = (OPT(player, view_yellow_light)) ?
+					LIGHTING_TORCH : LIGHTING_LOS;
 			}
+		} else if (lit) {
+			g->lighting = LIGHTING_LOS;
 		}
 
 		/* Remember seen feature */
@@ -123,13 +129,13 @@ void map_info(struct loc grid, struct grid_data *g)
 	}
 
 	/* Use known feature */
-	g->f_idx = square(player->cave, grid).feat;
+	g->f_idx = square(player->cave, grid)->feat;
 	if (f_info[g->f_idx].mimic)
-		g->f_idx = lookup_feat(f_info[g->f_idx].mimic);
+		g->f_idx = (uint32_t) (f_info[g->f_idx].mimic - f_info);
 
-    /* There is a trap in this square */
-    if (square_trap(cave, grid) && square_isknown(cave, grid)) {
-		struct trap *trap = square(cave, grid).trap;
+	/* There is a known trap in this square */
+	if (square_trap(player->cave, grid) && square_isknown(cave, grid)) {
+		struct trap *trap = square(player->cave, grid)->trap;
 
 		/* Scan the square trap list */
 		while (trap) {
@@ -145,7 +151,7 @@ void map_info(struct loc grid, struct grid_data *g)
 			}
 			trap = trap->next;
 		}
-    }
+	}
 
 	/* Objects */
 	for (obj = square_object(player->cave, grid); obj; obj = obj->next) {
@@ -153,7 +159,7 @@ void map_info(struct loc grid, struct grid_data *g)
 			g->unseen_money = true;
 		} else if (obj->kind == unknown_item_kind) {
 			g->unseen_object = true;
-		} else if (ignore_known_item_ok(obj)) {
+		} else if (ignore_known_item_ok(player, obj)) {
 			/* Item stays hidden */
 		} else if (!g->first_kind) {
 			g->first_kind = obj->kind;
@@ -181,7 +187,7 @@ void map_info(struct loc grid, struct grid_data *g)
 			g->hallucinate = false;
 	}
 
-	assert((int) g->f_idx <= FEAT_PASS_RUBBLE);
+	assert((int) g->f_idx < FEAT_MAX);
 	if (!g->hallucinate)
 		assert((int)g->m_idx < cave->mon_max);
 	/* All other g fields are 'flags', mostly booleans. */
@@ -224,14 +230,15 @@ void square_note_spot(struct chunk *c, struct loc grid)
 	if (!square_isseen(c, grid) && !square_isplayer(c, grid)) return;
 
 	/* Make the player know precisely what is on this grid */
-	square_know_pile(c, grid);
+	square_know_pile(c, grid, NULL);
 
-	/* Notice traps */
+	/* Notice traps, memorize those we can see */
 	if (square_issecrettrap(c, grid)) {
 		square_reveal_trap(c, grid, false, true);
 	}
+	square_memorize_traps(c, grid);
 
-	if (square_isknown(c, grid))
+	if (!square_ismemorybad(c, grid))
 		return;
 
 	/* Memorize this grid */
@@ -274,7 +281,7 @@ static void cave_light(struct point_set *ps)
 	/* Apply flag changes */
 	for (i = 0; i < ps->n; i++)	{
 		/* Perma-Light */
-		sqinfo_on(square(cave, ps->pts[i]).info, SQUARE_GLOW);
+		sqinfo_on(square(cave, ps->pts[i])->info, SQUARE_GLOW);
 	}
 
 	/* Process the grids */
@@ -283,7 +290,7 @@ static void cave_light(struct point_set *ps)
 		square_light_spot(cave, ps->pts[i]);
 
 		/* Process affected monsters */
-		if (square(cave, ps->pts[i]).mon > 0) {
+		if (square(cave, ps->pts[i])->mon > 0) {
 			int chance = 25;
 
 			struct monster *mon = square_monster(cave, ps->pts[i]);
@@ -321,7 +328,7 @@ static void cave_unlight(struct point_set *ps)
 
 		/* Darken the grid... */
 		if (!square_isbright(cave, ps->pts[i])) {
-			sqinfo_off(square(cave, ps->pts[i]).info, SQUARE_GLOW);
+			sqinfo_off(square(cave, ps->pts[i])->info, SQUARE_GLOW);
 		}
 
 		/* ...but dark-loving characters remember them */
@@ -329,7 +336,7 @@ static void cave_unlight(struct point_set *ps)
 			square_memorize(cave, grid);
 		}
 
-		/* Hack -- Forget "boring" grids */
+		/* Forget "boring" grids */
 		if (square_isfloor(cave, grid))
 			square_forget(cave, grid);
 	}
@@ -425,7 +432,7 @@ void wiz_light(struct chunk *c, struct player *p, bool full)
 					struct loc a_grid = loc_sum(grid, ddgrid_ddd[i]);
 
 					/* Perma-light the grid */
-					sqinfo_on(square(c, a_grid).info, SQUARE_GLOW);
+					sqinfo_on(square(c, a_grid)->info, SQUARE_GLOW);
 
 					/* Memorize normal features */
 					if (!square_isfloor(c, a_grid) || 
@@ -438,14 +445,19 @@ void wiz_light(struct chunk *c, struct player *p, bool full)
 
 			/* Memorize objects */
 			if (full) {
-				square_know_pile(c, grid);
+				square_know_pile(c, grid, NULL);
 			} else {
-				square_sense_pile(c, grid);
+				square_sense_pile(c, grid, NULL);
 			}
 
-			/* Forget unprocessed, unknown grids in the mapping area */
-			if (!square_ismark(c, grid) && square_isnotknown(c, grid))
+			/*
+			 * Forget grids that are both unprocessed and
+			 * misremembered in the mapping area.
+			 */
+			if (!square_ismark(c, grid)
+					&& square_ismemorybad(c, grid)) {
 				square_forget(c, grid);
+			}
 		}
 	}
 
@@ -491,7 +503,7 @@ void wiz_dark(struct chunk *c, struct player *p, bool full)
 					struct loc a_grid = loc_sum(grid, ddgrid_ddd[i]);
 
 					/* Perma-darken the grid */
-					sqinfo_off(square(cave, a_grid).info, SQUARE_GLOW);
+					sqinfo_off(square(c, a_grid)->info, SQUARE_GLOW);
 
 					/* Memorize normal features */
 					if (!square_isfloor(c, a_grid) || 
@@ -504,14 +516,19 @@ void wiz_dark(struct chunk *c, struct player *p, bool full)
 
 			/* Memorize objects */
 			if (full) {
-				square_know_pile(c, grid);
+				square_know_pile(c, grid, NULL);
 			} else {
-				square_sense_pile(c, grid);
+				square_sense_pile(c, grid, NULL);
 			}
 
-			/* Forget unprocessed, unknown grids in the mapping area */
-			if (!square_ismark(c, grid) && square_isnotknown(c, grid))
+			/*
+			 * Forget grids that are both unprocessed and
+			 * misremembered in the mapping area.
+			 */
+			if (!square_ismark(c, grid)
+					&& square_ismemorybad(c, grid)) {
 				square_forget(c, grid);
+			}
 		}
 	}
 
@@ -559,15 +576,15 @@ void cave_illuminate(struct chunk *c, bool daytime)
 					light = true;
 			}
 
-			if (!light) continue;
-
 			/* Only interesting grids at night */
 			if (daytime || !square_isfloor(c, grid)) {
-				sqinfo_on(square(c, grid).info, SQUARE_GLOW);
-				square_memorize(c, grid);
+				sqinfo_on(square(c, grid)->info, SQUARE_GLOW);
+				if(light) square_memorize(c, grid);
 			} else if (!square_isbright(c, grid)) {
-				sqinfo_off(square(c, grid).info, SQUARE_GLOW);
-				square_forget(c, grid);
+				sqinfo_off(square(c, grid)->info, SQUARE_GLOW);
+				/* Like cave_unlight(), forget "boring" grids */
+				if (square_isfloor(c, grid))
+					square_forget(c, grid);
 			}
 		}
 	}
@@ -581,7 +598,7 @@ void cave_illuminate(struct chunk *c, bool daytime)
 				continue;
 			for (i = 0; i < 8; i++) {
 				struct loc a_grid = loc_sum(grid, ddgrid_ddd[i]);
-				sqinfo_on(square(c, a_grid).info, SQUARE_GLOW);
+				sqinfo_on(square(c, a_grid)->info, SQUARE_GLOW);
 				square_memorize(c, a_grid);
 			}
 		}
@@ -593,6 +610,21 @@ void cave_illuminate(struct chunk *c, bool daytime)
 
 	/* Redraw map, monster list */
 	player->upkeep->redraw |= (PR_MAP | PR_MONLIST | PR_ITEMLIST);
+}
+
+/**
+ * Expose one grid on the surface to the sun.
+ *
+ * Update the SQUARE_GLOW flag for one grid as cave_illuminate() would do based
+ * on the new terrain in the grid.
+ */
+void expose_to_sun(struct chunk *c, struct loc grid, bool daytime)
+{
+	if (daytime || !square_isfloor(c, grid)) {
+		sqinfo_on(square(c, grid)->info, SQUARE_GLOW);
+	} else if (!square_isbright(c, grid)) {
+		sqinfo_off(square(c, grid)->info, SQUARE_GLOW);
+	}
 }
 
 /**
@@ -620,7 +652,7 @@ void cave_known(struct player *p)
 
 			/* Internal walls not known */
 			if (count < 8) {
-				p->cave->squares[y][x].feat = square(cave, grid).feat;
+				p->cave->squares[y][x].feat = square(cave, grid)->feat;
 			}
 		}
 	}

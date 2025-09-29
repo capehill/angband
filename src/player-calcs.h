@@ -73,6 +73,7 @@
 #define PR_MONLIST		0x00400000L /* Display monster list */
 #define PR_ITEMLIST		0x00800000L /* Display item list */
 #define PR_FEELING		0x01000000L /* Display level feeling */
+#define PR_LIGHT		0x02000000L /* Display light level */
 
 /**
  * Display Basic Info
@@ -104,11 +105,12 @@ extern const int adj_str_hold[STAT_RANGE];
 
 bool earlier_object(struct object *orig, struct object *new, bool store);
 int equipped_item_slot(struct player_body body, struct object *obj);
-void calc_inventory(struct player_upkeep *upkeep, struct object *gear,
-					struct player_body body);
+void calc_inventory(struct player *p);
 void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 				  bool update);
 void calc_digging_chances(struct player_state *state, int chances[DIGGING_MAX]);
+int calc_unlocking_chance(const struct player *p, int lock_power,
+		bool lock_unseen);
 int calc_blows(struct player *p, const struct object *obj,
 			   struct player_state *state, int extra_blows);
 

@@ -13,14 +13,16 @@ OPT ?= -O2
 # for consistency with older versions, use a lower case bundle ID
 BUNDLE_IDENTIFIER = org.rephial.angband
 
-ARCHS = x86_64
+ARCHS = x86_64 arm64
 ARCHFLAGS = $(addprefix -arch ,$(ARCHS))
-WARNINGS = -W -Wall -Wno-unused-parameter -Wno-missing-field-initializers \
-	-Wunused-macros
+OSXVERSFLAGS = -mmacosx-version-min=10.9
+WARNINGS = -W -Wall -Wextra -Wno-unused-parameter \
+	-Wno-missing-field-initializers -Wwrite-strings -Wmissing-prototypes \
+	-Wnested-externs -Wshadow -Wunused-macros
 JUST_C = -std=c99
-OBJ_CFLAGS = -std=c99 -x objective-c -mmacosx-version-min=10.9
-CFLAGS = -g -I. $(WARNINGS) $(OPT) -DMACH_O_CARBON -DHAVE_MKSTEMP \
-	-fno-stack-protector $(ARCHFLAGS)
+OBJ_CFLAGS = -std=c99 -x objective-c -fobjc-arc
+CFLAGS = -g -I. $(WARNINGS) $(OPT) -DMACH_O_CARBON -DSOUND -DALLOW_BORG -DHAVE_MKSTEMP \
+	-fno-stack-protector $(OSXVERSFLAGS) $(ARCHFLAGS)
 LIBS = -framework Cocoa
 # Fix for bug #1663: Set the deployment target via environment variable
 # for the final link command. See http://grauonline.de/wordpress/?p=71
@@ -44,14 +46,22 @@ include Makefile.inc
 APPNAME = $(NAME).app
 EXE = $(PROGNAME)
 
+# For CFBundleShortVersionString and CFBundleVersion in Info.plist, Apple wants
+# up to three integers separated by periods.  Versions given by version.sh
+# can have extra stuff beyond that so use VERSION as set by Makefile.inc
+# for the bundle identifiers.  Use the result of version.sh for the build ID
+# compiled into the rest of the code and in the package file name.
+BUNDLE_VERSION := ${VERSION}
 VERSION := $(shell ../scripts/version.sh)
 ifeq (${VERSION},)
-	BUNDLE_VERSION := ${VERSION}
+	VERSION := unknown
+else
 	CFLAGS += -DBUILD_ID=${VERSION}
 endif
 
-
-OBJS = $(BASEOBJS)
+# Include snd-cocoa.o in $(EXE).o rather than OSX_OBJS to avoid linking errors
+# with the unit test cases.
+OBJS = $(BASEOBJS) cocoa/snd-cocoa.o
 OSX_OBJS = main-cocoa.o
 
 
@@ -61,32 +71,27 @@ OSX_OBJS = main-cocoa.o
 #
 
 
-$(EXE).o: $(OBJS)
-	@for A in $(ARCHS); do \
-		printf "%10s %-20s\n" LD $@.$$A; \
-		$(LD) -r -arch $$A -o $@.$$A $(OBJS); \
-		LIPO_ARGS="$$LIPO_ARGS -arch $$A $@.$$A"; \
-	done; \
-	lipo $$LIPO_ARGS -create -output $@
+$(PROGNAME).a: $(OBJS)
+	@libtool -static -o $@ $(OBJS)
 
-izzywizzy: $(OBJS) izzywizzy.o
-
-$(EXE): $(EXE).o $(OSX_OBJS)
-	$(DEPLOYMENT_TARGET) $(CC) $(CFLAGS) $(LDFLAGS) -o $(EXE) $(EXE).o $(OSX_OBJS) $(LIBS) 
+$(EXE): $(PROGNAME).a $(OSX_OBJS)
+	$(DEPLOYMENT_TARGET) $(CC) $(CFLAGS) $(LDFLAGS) -o $(EXE) $(OSX_OBJS) $(PROGNAME).a $(LIBS)
 
 #
-# Clean up old junk
+# Clean up old junk; $(EXE).o and $(addprefix $(EXE).o,$(ARCHS)) are relics
+# and are only there to clean up intermediates left by previous versions of
+# this Makefile
 #
 
 clean:
-	-rm -f $(OBJS) $(EXE) $(addprefix $(EXE).o.,$(ARCHS)) $(EXE).o $(OSX_OBJS)
+	-$(RM) $(OBJS) $(OSX_OBJS) $(PROGNAME).a $(EXE) $(addprefix $(EXE).o.,$(ARCHS)) $(EXE).o
 
 
 #
 # Basic build rules and dependencies
 #
 
-main-cocoa.o : main-cocoa.m
+%.o : %.m
 	@printf "%10s %-20s (objective-c)\n" CC $<
 	@$(CC) $(CFLAGS) $(OBJ_CFLAGS) -c -o $@ $<
 %.o : %.c
@@ -107,18 +112,14 @@ APPCONT = $(APPBNDL)/Contents
 APPBIN = $(APPCONT)/MacOS
 APPRES = $(APPCONT)/Resources
 
-# Auxiliary files. Please note that it still uses resouce fork based
-# resources for menus, dialogues and sounds, so that it isn't safe to use
-# utilities that doesn't understand them (virtually all Un*x commands) to
-# copy or archive the application.
+# Auxiliary files.
 #
-# The graphics tiles have been moved out of the resource fork, but, again,
-# it isn't generally safe just to convert GIF or BMP files to PNG, because
-# the Mac OS takes dpi values stored in various images quite seriously.
-# Almost all tilesets for *band requires adjustment, with the sole exception
-# of 8x8.png for Vanilla.  Make sure setting dpi to 72, *not* preserving
-# the actual size of image.  When you have them ready, put them in
-# the lib/xtra/graf directory and rebuild.
+# For graphics tiles, it isn't generally safe just to convert GIF or BMP files
+# to PNG, because the Mac OS takes dpi values stored in various images quite
+# seriously.  Almost all tilesets for *band requires adjustment, with the sole
+# exception of 8x8.png for Vanilla.  Make sure setting dpi to 72, *not*
+# preserving the actual size of image.  When you have them ready, put them in
+# the subdirectories of lib/tiles and rebuild.
 PLIST = cocoa/$(NAME)-Cocoa.xml
 
 ICONFILES = cocoa/$(NAME)_Icons.icns cocoa/Save.icns cocoa/Edit.icns cocoa/Data.icns
@@ -127,7 +128,6 @@ LIBFILES = \
   ../lib/gamedata/*.txt \
   ../lib/screens/*.txt \
   ../lib/help/*.txt \
-  ../lib/help/*.hlp \
   ../lib/customize/*.prf \
 
 install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
@@ -136,7 +136,7 @@ install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
 	@mkdir -p $(APPCONT)
 	@mkdir -p $(APPBIN)
 	@mkdir -p $(APPRES)
-	@mkdir -p $(APPRES)/English.lproj/MainMenu.nib 
+	@mkdir -p $(APPRES)/en.lproj
 	@mkdir -p $(APPRES)/lib/gamedata
 	@mkdir -p $(APPRES)/lib/screens
 	@mkdir -p $(APPRES)/lib/help
@@ -149,20 +149,26 @@ install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
 	@cp ../lib/gamedata/*.txt $(APPRES)/lib/gamedata
 	@cp ../lib/screens/*.txt $(APPRES)/lib/screens
 	@cp ../lib/help/*.txt $(APPRES)/lib/help
-	@cp ../lib/help/*.hlp $(APPRES)/lib/help
 	@cp ../lib/customize/*.prf $(APPRES)/lib/customize
 
 	# 'optionally' install sound and graphics tiles, if present
-	-cp -R ../lib/tiles/ $(APPRES)/lib/tiles
-	-rm $(APPRES)/lib/tiles/Makefile $(APPRES)/lib/tiles/*/Makefile
+	@if test -d ../lib/tiles && test -r ../lib/tiles/list.txt ; then \
+		cp ../lib/tiles/list.txt $(APPRES)/lib/tiles ; \
+		for dir in `find ../lib/tiles -type d -depth 1 -print`; do \
+			subdir=$(APPRES)/lib/tiles/`basename "$$dir"` ; \
+			mkdir -p "$$subdir" && cp "$$dir"/*.{png,prf} "$$subdir" ; \
+		done ; \
+	fi
 	-cp ../lib/sounds/*.mp3 $(APPRES)/lib/sounds
-	-cp ../lib/sounds/sound.cfg $(APPRES)/lib/sounds
 
 	install -m 755 $(EXE) $(APPBIN)
 	install -m 644 $(ICONFILES) $(APPRES)
-	cp cocoa/English.lproj/MainMenu.nib/*ib $(APPRES)/English.lproj/MainMenu.nib
+	# Handle case of installing over an old version where MainMenu.nib
+	# was a directory.
+	-test -d $(APPRES)/en.lproj/MainMenu.nib && rm -r $(APPRES)/en.lproj/MainMenu.nib
+	cp cocoa/en.lproj/MainMenu.nib $(APPRES)/en.lproj/MainMenu.nib
 	cp cocoa/CommandMenu.plist $(APPRES)/CommandMenu.plist
-	sed -e 's/\$$VERSION\$$/$(VERSION)/' \
+	sed -e 's/\$$VERSION\$$/$(BUNDLE_VERSION)/' \
 		-e 's/\$$COPYRIGHT\$$/$(COPYRIGHT)/' \
 		-e 's/\$$NAME\$$/$(NAME)/' \
 		-e 's/\$$EXECUTABLE\$$/$(EXE)/' \
@@ -181,12 +187,12 @@ vars:
 # build a version that has separate prefs (different bundle ID) and directories (setting SAFE_DIRECTORY preprocessor flag)
 safe-install:
 	$(MAKE) -f Makefile.osx install CFLAGS="-DSAFE_DIRECTORY $(CFLAGS)"
-	sed -e 's/\$$VERSION\$$/$(VERSION)/' \
+	sed -e 's/\$$VERSION\$$/$(BUNDLE_VERSION)/' \
 		-e 's/\$$COPYRIGHT\$$/$(COPYRIGHT)/' \
 		-e 's/\$$NAME\$$/$(NAME)/' \
 		-e 's/\$$EXECUTABLE\$$/$(EXE)/' \
 		-e 's/\$$BUNDLE_VERSION\$$/$(BUNDLE_VERSION)/' \
-		-e 's/\$$BUNDLE_IDENTIFIER\$$/$(BUNDLE_IDENTIFIER).$(VERSION)/' \
+		-e 's/\$$BUNDLE_IDENTIFIER\$$/$(BUNDLE_IDENTIFIER).$(BUNDLE_VERSION)/' \
 		$(PLIST) > $(APPCONT)/Info.plist
 
 
@@ -197,7 +203,7 @@ PACKAGE_NAME = $(NAME)-$(VERSION)
 dist: install
 	@rm -rf disttemp*
 	mkdir -p disttemp/Docs
-	cp -r ../docs/* disttemp/Docs
+	(cd ../docs/_build/html && tar -cf - .) | (cd disttemp/Docs && tar -xf -)
 	cp -R -p "$(APPBNDL)" disttemp
 	SetFile -a B disttemp/$(APPNAME)
 
@@ -208,10 +214,17 @@ dist: install
 
 	rm -rf disttemp*
 
-tests:
-	$(MAKE) -C tests all CFLAGS='-I.. -DDEFAULT_CONFIG_PATH=\"../../lib\" -DDEFAULT_LIB_PATH=\"../../lib\" -DDEFAULT_DATA_PATH=\"../../lib\" $(CFLAGS)' LDFLAGS="$(LIBS)"
+check: tests
+tests: $(PROGNAME).a
+	env CC="$(CC)" CFLAGS="$(CFLAGS) -I.. -DTEST_OVERRIDE_PATHS -Wno-write-strings" \
+		LDFLAGS="$(LDFLAGS)" LIBS="$(LIBS)" \
+		TEST_WORKING_DIRECTORY="../.." \
+		$(MAKE) -C tests all
+
+test-depgen:
+	$(MAKE) -C tests depgen
 
 test-clean:
 	$(MAKE) -C tests clean
 
-.PHONY : tests test-clean
+.PHONY : check tests test-clean

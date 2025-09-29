@@ -44,6 +44,7 @@ typedef enum game_event_type
 	EVENT_STATUS,		/* Status */
 	EVENT_DETECTIONSTATUS,  /* Trap detection status */
 	EVENT_FEELING,		/* Object level feeling */
+	EVENT_LIGHT,		/* Light level */
 	EVENT_STATE,		/* The two 'R's: Resting and Repeating */
 
 	EVENT_PLAYERMOVED,
@@ -90,6 +91,15 @@ typedef enum game_event_type
 	EVENT_ENTER_DEATH,
 	EVENT_LEAVE_DEATH,
 
+	/* Events for introspection into dungeon generation */
+	EVENT_GEN_LEVEL_START, /* has string in event data for profile name */
+	EVENT_GEN_LEVEL_END, /* has flag in event data indicating success */
+	EVENT_GEN_ROOM_START, /* has string in event data for room type */
+	EVENT_GEN_ROOM_CHOOSE_SIZE, /* has size in event data */
+	EVENT_GEN_ROOM_CHOOSE_SUBTYPE, /* has string in event data with name */
+	EVENT_GEN_ROOM_END, /* has flag in event data indicating success */
+	EVENT_GEN_TUNNEL_FINISHED, /* has tunnel in event data with results */
+
 	EVENT_END  /* Can be sent at the end of a series of events */
 } game_event_type;
 
@@ -121,9 +131,10 @@ typedef union
 
   	struct
 	{
-		int *stats;
+		const int *points;
+		const int *inc_points;
 		int remaining;
-	} birthstats;
+	} birthpoints;
 
 	struct
 	{
@@ -156,6 +167,35 @@ typedef union
 		int x;
 	} missile;
 
+	struct
+	{
+		int h, w;
+	} size;
+
+	struct
+	{
+		/*
+		 * "nstep" is the total number of tunneling steps made,
+		 * "npierce" is the total number of wall piercings for rooms,
+		 * and "ndug" is the number of tiles excavated (excluding wall
+		 * piercings).
+		 */
+		int nstep, npierce, ndug;
+		/*
+		 * "dstart" is the city block distance, in grids, (i.e.
+		 * ABS(start.x - end.x) + ABS(start.y - end.y)) between the
+		 * startng point and the goal for the tunnel.  "dend" is the
+		 * city block distance between the final point in the tunnel
+		 * and the goal:  "dend" equal to zero indicates that the
+		 * tunnel reached its goal.
+		 */
+		int dstart, dend;
+		/*
+		 * "early" is true if the tunnel was terminated by the random
+		 * early termination criteria.
+		 */
+		bool early;
+	} tunnel;
 } game_event_data;
 
 
@@ -174,7 +214,8 @@ void event_remove_all_handlers(void);
 void event_add_handler_set(game_event_type *type, size_t n_types, game_event_handler *fn, void *user);
 void event_remove_handler_set(game_event_type *type, size_t n_types, game_event_handler *fn, void *user);
 
-void event_signal_birthpoints(int stats[6], int remaining);
+void event_signal_birthpoints(const int *points, const int *inc_points,
+	int remaining);
 
 void event_signal_point(game_event_type, int x, int y);
 void event_signal_string(game_event_type, const char *s);
@@ -203,5 +244,8 @@ void event_signal_missile(game_event_type type,
 						  bool seen,
 						  int y,
 						  int x);
+void event_signal_size(game_event_type type, int h, int w);
+void event_signal_tunnel(game_event_type type, int nstep, int npierce, int ndug,
+	int dstart, int dend, bool early);
 
 #endif /* INCLUDED_GAME_EVENT_H */

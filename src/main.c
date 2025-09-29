@@ -19,6 +19,7 @@
 #include "angband.h"
 #include "init.h"
 #include "savefile.h"
+#include "ui-birth.h"
 #include "ui-command.h"
 #include "ui-display.h"
 #include "ui-game.h"
@@ -34,17 +35,28 @@
 /**
  * locale junk
  */
-#include "locale.h"
-#include "langinfo.h"
+#include <locale.h>
+
+#if !defined(WINDOWS)
+#include <langinfo.h>
+#endif
 
 /**
  * Some machines have a "main()" function in their "main-xxx.c" file,
  * all the others use this file for their "main()" function.
  */
 
-#if defined(WIN32_CONSOLE_MODE) || !defined(WINDOWS) || defined(USE_SDL)
+#if defined(WIN32_CONSOLE_MODE) || !defined(WINDOWS) || defined(USE_SDL) || defined(USE_SDL2)
 
 #include "main.h"
+
+/*
+ * On some platforms, SDL2 uses a macro to replace main() with another name
+ * to hook into the platform-specific initialization.  Account for that here.
+ */
+#ifdef USE_SDL2
+#include "SDL_main.h"
+#endif
 
 /**
  * List of the available modules in the order they are tried.
@@ -74,6 +86,14 @@ static const struct module modules[] =
 #ifdef USE_STATS
 	{ "stats", help_stats, init_stats },
 #endif /* USE_STATS */
+
+#ifdef USE_SPOIL
+	{ "spoil", help_spoil, init_spoil },
+#endif
+
+#ifdef USE_IBM
+	{ "ibm", help_ibm, init_ibm },
+#endif /* USE_IBM */
 };
 
 /**
@@ -101,13 +121,8 @@ static void quit_hook(const char *s)
 /**
  * Initialize and verify the file paths, and the score file.
  *
- * Use the ANGBAND_PATH environment var if possible, else use
- * DEFAULT_PATH, and in either case, branch off appropriately.
- *
- * First, we'll look for the ANGBAND_PATH environment variable,
- * and then look for the files in there.  If that doesn't work,
- * we'll try the DEFAULT_PATH constants.  So be sure that one of
- * these two things works...
+ * Use the configured DEFAULT_*_PATH constants.  Be sure to
+ * set those properly when building...
  *
  * We must ensure that the path ends with "PATH_SEP" if needed,
  * since the "init_file_paths()" function will simply append the
@@ -133,7 +148,7 @@ static void init_stuff(void)
 	libpath[511] = '\0';
 	datapath[511] = '\0';
 
-	/* Hack -- Add a path separator (only if needed) */
+	/* Add a path separator (only if needed) */
 	if (!suffix(configpath, PATH_SEP)) my_strcat(configpath, PATH_SEP,
 												 sizeof(configpath));
 	if (!suffix(libpath, PATH_SEP)) my_strcat(libpath, PATH_SEP,
@@ -146,16 +161,36 @@ static void init_stuff(void)
 }
 
 
+#ifdef SOUND
+/* State shared by generic_reinit() and main(). */
+static const char *soundstr = NULL;
+static int saved_argc = 0;
+static char **saved_argv = NULL;
+#endif
+
+
+/**
+ * Perform (as ui-game.c's reinit_hook) platform-specific actions necessary
+ * when restarting without exiting.  Also called directly at startup.
+ */
+static void generic_reinit(void)
+{
+#ifdef SOUND
+	/* Initialise sound */
+	init_sound(soundstr, saved_argc, saved_argv);
+#endif
+}
+
+
 static const struct {
 	const char *name;
 	char **path;
 	bool setgid_ok;
 } change_path_values[] = {
-	{ "scores", &ANGBAND_DIR_SCORES, true },
-	{ "gamedata", &ANGBAND_DIR_GAMEDATA, false },
-	{ "screens", &ANGBAND_DIR_SCREENS, false },
+	{ "scores", &ANGBAND_DIR_SCORES, false },
+	{ "gamedata", &ANGBAND_DIR_GAMEDATA, true },
+	{ "screens", &ANGBAND_DIR_SCREENS, true },
 	{ "help", &ANGBAND_DIR_HELP, true },
-	{ "info", &ANGBAND_DIR_INFO, true },
 	{ "pref", &ANGBAND_DIR_CUSTOMIZE, true },
 	{ "fonts", &ANGBAND_DIR_FONTS, true },
 	{ "tiles", &ANGBAND_DIR_TILES, true },
@@ -163,14 +198,16 @@ static const struct {
 	{ "icons", &ANGBAND_DIR_ICONS, true },
 	{ "user", &ANGBAND_DIR_USER, true },
 	{ "save", &ANGBAND_DIR_SAVE, false },
+	{ "panic", &ANGBAND_DIR_PANIC, false },
+	{ "archive", &ANGBAND_DIR_ARCHIVE, true },
 };
 
 /**
- * Handle a "-d<dir>=<path>" option.
+ * Handle a "-d`dir`=`path`" option.
  *
- * Sets any of angband's special directories to <path>.
+ * Sets any of angband's special directories to `path`.
  *
- * The "<path>" can be any legal path for the given system, and should
+ * The `path` can be any legal path for the given system, and should
  * not end in any special path separator (i.e. "/tmp" or "~/.ang-info").
  */
 static void change_path(const char *info)
@@ -182,7 +219,7 @@ static void change_path(const char *info)
 	char dirpath[512];
 
 	if (!info || !info[0])
-		quit_fmt("Try '-d<dir>=<path>'.", info);
+		quit_fmt("Try '-d<dir>=<path>'.");
 
 	info_copy = string_make(info);
 	path = strtok(info_copy, "=");
@@ -207,7 +244,7 @@ static void change_path(const char *info)
 		}
 	}
 
-	quit_fmt("Unrecognised -d paramater %s", path);
+	quit_fmt("Unrecognised -d parameter %s", path);
 }
 
 
@@ -241,58 +278,34 @@ static void user_name(char *buf, size_t len, int id)
  */
 static void list_saves(void)
 {
-	char fname[256];
-	ang_dir *d = my_dopen(ANGBAND_DIR_SAVE);
+	savefile_getter g = NULL;
 
-#ifdef SETGID
-	char uid[10];
-	strnfmt(uid, sizeof(uid), "%d.", player_uid);
-#endif
+	if (!got_savefile(&g)) {
+		bool nodir = !got_savefile_dir(g);
 
-	if (!d) quit_fmt("Can't open savefile directory");
+		cleanup_savefile_getter(g);
+		if (nodir) {
+			quit_fmt("Cannot open savefile directory");
+		}
+		printf("There are no savefiles you can use.\n");
+		return;
+	}
 
 	printf("Savefiles you can use are:\n");
+	do {
+		const struct savefile_details *details =
+			get_savefile_details(g);
 
-	while (my_dread(d, fname, sizeof fname)) {
-		char path[1024];
-		const char *desc;
-
-#ifdef SETGID
-		/* Check that the savefile name begins with the user'd ID */
-		if (strncmp(fname, uid, strlen(uid)))
-			continue;
-#endif
-
-		path_build(path, sizeof path, ANGBAND_DIR_SAVE, fname);
-		desc = savefile_get_description(path);
-
-		if (desc)
-			printf(" %-15s  %s\n", fname, desc);
-		else
-			printf(" %-15s\n", fname);
-	}
-
-	my_dclose(d);
-
+		if (details->desc) {
+			printf(" %-15s  %s\n", details->fnam + details->foff,
+				details->desc);
+		} else {
+			printf(" %-15s\n", details->fnam + details->foff);
+		}
+	} while (got_savefile(&g));
 	printf("\nUse angband -u<name> to use savefile <name>.\n");
-}
 
-
-
-static bool new_game;
-
-
-static void debug_opt(const char *arg) {
-	if (streq(arg, "mem-poison-alloc"))
-		mem_flags |= MEM_POISON_ALLOC;
-	else if (streq(arg, "mem-poison-free"))
-		mem_flags |= MEM_POISON_FREE;
-	else {
-		puts("Debug flags:");
-		puts("  mem-poison-alloc: Poison all memory allocations");
-		puts("   mem-poison-free: Poison all freed memory");
-		exit(0);
-	}
+	cleanup_savefile_getter(g);
 }
 
 /**
@@ -305,13 +318,10 @@ static void debug_opt(const char *arg) {
 int main(int argc, char *argv[])
 {
 	int i;
-
+	bool new_game = false, select_game = false;
 	bool done = false;
 
 	const char *mstr = NULL;
-#ifdef SOUND
-	const char *soundstr = NULL;
-#endif
 	bool args = true;
 
 	/* Save the "program name" XXX XXX XXX */
@@ -353,6 +363,10 @@ int main(int argc, char *argv[])
 		/* Analyze option */
 		switch (*arg++)
 		{
+			case 'c':
+				select_game = true;
+				break;
+
 			case 'l':
 				list_saves();
 				exit(0);
@@ -412,10 +426,6 @@ int main(int argc, char *argv[])
 				change_path(arg);
 				continue;
 
-			case 'x':
-				debug_opt(arg);
-				continue;
-
 			case '-':
 				argv[i] = argv[0];
 				argc = argc - i;
@@ -426,11 +436,11 @@ int main(int argc, char *argv[])
 			default:
 			usage:
 				puts("Usage: angband [options] [-- subopts]");
+				puts("  -c             Select savefile with a menu; overrides -n");
 				puts("  -n             Start a new character (WARNING: overwrites default savefile without -u)");
 				puts("  -l             Lists all savefiles you can play");
 				puts("  -w             Resurrect dead character (marks savefile)");
 				puts("  -g             Request graphics mode");
-				puts("  -x<opt>        Debug options; see -xhelp");
 				puts("  -u<who>        Use your <who> savefile");
 				puts("  -d<dir>=<path> Override a specific directory with <path>. <path> can be:");
 				for (i = 0; i < (int)N_ELEMENTS(change_path_values); i++) {
@@ -457,7 +467,7 @@ int main(int argc, char *argv[])
 		if (*arg) goto usage;
 	}
 
-	/* Hack -- Forget standard args */
+	/* Forget standard args */
 	if (args) {
 		argc = 1;
 		argv[1] = NULL;
@@ -469,27 +479,13 @@ int main(int argc, char *argv[])
 	/* If we were told which mode to use, then use it */
 	if (mstr)
 		ANGBAND_SYS = mstr;
-
+#if !defined(WINDOWS) && !defined(DJGPP)
 	if (setlocale(LC_CTYPE, "")) {
 		/* Require UTF-8 */
-		if (strcmp(nl_langinfo(CODESET), "UTF-8") != 0)
+		if (!streq(nl_langinfo(CODESET), "UTF-8"))
 			quit("Angband requires UTF-8 support");
 	}
-
-	/* Try the modules in the order specified by modules[] */
-	for (i = 0; i < (int)N_ELEMENTS(modules); i++) {
-		/* User requested a specific module? */
-		if (!mstr || (streq(mstr, modules[i].name))) {
-			ANGBAND_SYS = modules[i].name;
-			if (0 == modules[i].init(argc, argv)) {
-				done = true;
-				break;
-			}
-		}
-	}
-
-	/* Make sure we have a display! */
-	if (!done) quit("Unable to prepare any 'display module'!");
+#endif
 
 #ifdef UNIX
 
@@ -506,16 +502,37 @@ int main(int argc, char *argv[])
 
 #endif /* UNIX */
 
+	/* Try the modules in the order specified by modules[] */
+	for (i = 0; i < (int)N_ELEMENTS(modules); i++) {
+		/* User requested a specific module? */
+		if (!mstr || (streq(mstr, modules[i].name))) {
+			ANGBAND_SYS = modules[i].name;
+			if (0 == modules[i].init(argc, argv)) {
+				done = true;
+				break;
+			}
+		}
+	}
+
+	/* Make sure we have a display! */
+	if (!done) quit("Unable to prepare any 'display module'!");
+
 	/* Catch nasty signals */
 	signals_init();
 
 	/* Set up the command hook */
 	cmd_get_hook = textui_get_cmd;
 
+	/*
+	 * Set action that needs to be done if restarting without exiting.
+	 * Also need to do it now.
+	 */
 #ifdef SOUND
-	/* Initialise sound */
-	init_sound(soundstr, argc, argv);
+	saved_argc = argc;
+	saved_argv = argv;
 #endif
+	reinit_hook = generic_reinit;
+	generic_reinit();
 
 	/* Set up the display handlers and things. */
 	init_display();
@@ -526,11 +543,15 @@ int main(int argc, char *argv[])
 	pause_line(Term);
 
 	/* Play the game */
-	play_game(new_game);
+	play_game((select_game) ?
+		GAME_SELECT : ((new_game) ? GAME_NEW : GAME_LOAD));
 
 	/* Free resources */
 	textui_cleanup();
 	cleanup_angband();
+#ifdef SOUND
+	close_sound();
+#endif
 
 	/* Quit */
 	quit(NULL);

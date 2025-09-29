@@ -21,8 +21,8 @@
 #include "z-util.h"
 
 struct expression_operation_s {
-	byte operator;
-	s16b operand;
+	uint8_t operator;
+	int16_t operand;
 };
 
 struct expression_s {
@@ -86,21 +86,31 @@ typedef enum expression_input_e {
  */
 static expression_operator_t expression_operator_from_token(const char *token)
 {
+	expression_operator_t result;
+
 	switch (token[0]) {
 		case '+':
-			return OPERATOR_ADD;
+			result = OPERATOR_ADD;
+			break;
 		case '-':
-			return OPERATOR_SUB;
+			result = OPERATOR_SUB;
+			break;
 		case '*':
-			return OPERATOR_MUL;
+			result = OPERATOR_MUL;
+			break;
 		case '/':
-			return OPERATOR_DIV;
+			result = OPERATOR_DIV;
+			break;
 		case 'n':
 		case 'N':
-			return OPERATOR_NEG;
+			result = OPERATOR_NEG;
+			break;
+		default:
+			return OPERATOR_NONE;
 	}
 
-	return OPERATOR_NONE;
+	/* Reject if there's additional junk in the token after the operator. */
+	return (token[1]) ? OPERATOR_NONE : result;
 }
 
 /**
@@ -213,10 +223,10 @@ void expression_set_base_value(expression_t *expression,
  * Evaluate the given expression. If the base value function is NULL,
  * expression is evaluated from zero.
  */
-s32b expression_evaluate(expression_t const * const expression)
+int32_t expression_evaluate(expression_t const * const expression)
 {
 	size_t i;
-	s32b value = 0;
+	int32_t value = 0;
 
 	if (expression->base_value != NULL)
 		value = expression->base_value();
@@ -252,8 +262,6 @@ s32b expression_evaluate(expression_t const * const expression)
 static void expression_add_operation(expression_t *expression,
 									 const expression_operation_t operation)
 {
-	size_t count = 0;
-
 	if (expression->operation_count >= expression->operations_size) {
 		expression->operations_size += EXPRESSION_ALLOC_SIZE;
 		expression->operations = mem_realloc(expression->operations, expression->operations_size * sizeof(expression_operation_t));
@@ -261,7 +269,6 @@ static void expression_add_operation(expression_t *expression,
 
 	expression->operations[expression->operation_count] = operation;
 	expression->operation_count++;
-	count++;
 }
 
 /**
@@ -277,12 +284,12 @@ static void expression_add_operation(expression_t *expression,
  * \param string is the string to be parsed.
  * \return The number of operations added to the expression or an error (expression_err_e).
  */
-s16b expression_add_operations_string(expression_t *expression,
+int16_t expression_add_operations_string(expression_t *expression,
 									  const char *string)
 {
 	char *parse_string;
 	expression_operation_t operations[EXPRESSION_MAX_OPERATIONS];
-	size_t count = 0, i = 0;
+	int16_t count = 0, i = 0, nmax = EXPRESSION_MAX_OPERATIONS;
 	char *token = NULL;
 	expression_operator_t parsed_operator = OPERATOR_NONE;
 	expression_operator_t current_operator = OPERATOR_NONE;
@@ -328,7 +335,7 @@ s16b expression_add_operations_string(expression_t *expression,
 
 	while (token != NULL) {
 		char *end = NULL;
-		s16b value = strtol(token, &end, 0);
+		long value = strtol(token, &end, 0);
 
 		if (end == token) {
 			parsed_operator = expression_operator_from_token(token);
@@ -358,6 +365,10 @@ s16b expression_add_operations_string(expression_t *expression,
 			current_operator = parsed_operator;
 		}
 		else if (state == EXPRESSION_STATE_OPERAND) {
+			if (value < -32768 || value > 32767) {
+				string_free(parse_string);
+				return EXPRESSION_ERR_OPERAND_OUT_OF_BOUNDS;
+			}
 			/* Try to catch divide by zero. */
 			if (current_operator == OPERATOR_DIV && value == 0) {
 				string_free(parse_string);
@@ -366,12 +377,12 @@ s16b expression_add_operations_string(expression_t *expression,
 
 			/* Flush the operator and operand pair. */
 			operations[count].operator = current_operator;
-			operations[count].operand = value;
+			operations[count].operand = (int16_t)value;
 			count++;
 		}
 
 		/* Limit the number of expressions, saving what we have. */
-		if (count >= N_ELEMENTS(operations))
+		if (count >= nmax)
 			break;
 
 		token = strtok(NULL, EXPRESSION_DELIMITER);

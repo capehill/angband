@@ -61,6 +61,31 @@ static spell_tag_t spell_tag_lookup(const char *tag)
 }
 
 /**
+ * Lookup a race-specific message for a spell.
+ *
+ * \param r is the race.
+ * \param s_idx is the spell index.
+ * \param msg_type is the type of message.
+ * \return the text of the message if there's a race-specific one or NULL if
+ * there is not.
+ */
+static const char *find_alternate_spell_message(const struct monster_race *r,
+		int s_idx, enum monster_altmsg_type msg_type)
+{
+	const struct monster_altmsg *am = r->spell_msgs;
+
+	while (1) {
+		if (!am) {
+			return NULL;
+		}
+		if (am->index == s_idx && am->msg_type == msg_type) {
+			 return am->message;
+		}
+		am = am->next;
+	}
+}
+
+/**
  * Print a monster spell message.
  *
  * We fill in the monster name and/or pronoun where necessary in
@@ -70,6 +95,7 @@ static void spell_message(struct monster *mon,
 						  const struct monster_spell *spell,
 						  bool seen, bool hits)
 {
+	const char punct[] = ".!?;:,'";
 	char buf[1024] = "\0";
 	const char *next;
 	const char *s;
@@ -78,6 +104,7 @@ static void spell_message(struct monster *mon,
 	size_t end = 0;
 	struct monster_spell_level *level = spell->level;
 	struct monster *t_mon = NULL;
+	bool is_leading;
 
 	/* Get the right level of message */
 	while (level->next && mon->race->spell_power >= level->next->power) {
@@ -94,18 +121,58 @@ static void spell_message(struct monster *mon,
 		if (t_mon) {
 			return;
 		} else {
-			in_cursor = level->blind_message;
+			in_cursor = find_alternate_spell_message(mon->race,
+				spell->index, MON_ALTMSG_UNSEEN);
+			if (in_cursor == NULL) {
+				in_cursor = level->blind_message;
+				if (in_cursor == NULL) {
+					msg("No message-invis for monster "
+						"spell %d cast by %s.  "
+						"Please report this bug.",
+						(int)spell->index,
+						mon->race->name);
+					return;
+				}
+			} else if (in_cursor[0] == '\0') {
+				return;
+			}
 		}
 	} else if (!hits) {
-		in_cursor = level->miss_message;
+		in_cursor = find_alternate_spell_message(mon->race,
+			spell->index, MON_ALTMSG_MISS);
+		if (in_cursor == NULL) {
+			in_cursor = level->miss_message;
+			if (in_cursor == NULL) {
+				msg("No message-miss for monster spell %d "
+					"cast by %s.  Please report this bug.",
+					(int)spell->index, mon->race->name);
+				return;
+			}
+		} else if (in_cursor[0] == '\0') {
+			return;
+		}
 	} else {
-		in_cursor = level->message;
+		in_cursor = find_alternate_spell_message(mon->race,
+			spell->index, MON_ALTMSG_SEEN);
+		if (in_cursor == NULL) {
+			in_cursor = level->message;
+			if (in_cursor == NULL) {
+				msg("No message-vis for monster spell %d "
+					"cast by %s.  Please report this bug.",
+					(int)spell->index, mon->race->name);
+				return;
+			}
+		} else if (in_cursor[0] == '\0') {
+			return;
+		}
 	}
 
 	next = strchr(in_cursor, '{');
+	is_leading = (next == in_cursor);
 	while (next) {
 		/* Copy the text leading up to this { */
-		strnfcat(buf, 1024, &end, "%.*s", next - in_cursor, in_cursor);
+		strnfcat(buf, 1024, &end, "%.*s", (int) (next - in_cursor),
+			in_cursor);
 
 		s = next + 1;
 		while (*s && isalpha((unsigned char) *s)) s++;
@@ -119,9 +186,20 @@ static void spell_message(struct monster *mon,
 			switch (spell_tag_lookup(tag)) {
 				case SPELL_TAG_NAME: {
 					char m_name[80];
-					monster_desc(m_name, sizeof(m_name), mon, MDESC_STANDARD);
+					int mdesc_mode = (MDESC_IND_HID |
+						MDESC_PRO_HID);
 
-					strnfcat(buf, sizeof(buf), &end, m_name);
+					if (is_leading) {
+						mdesc_mode |= MDESC_CAPITAL;
+					}
+					if (!strchr(punct, *in_cursor)) {
+						mdesc_mode |= MDESC_COMMA;
+					}
+					monster_desc(m_name, sizeof(m_name),
+						mon, mdesc_mode);
+
+					strnfcat(buf, sizeof(buf), &end, "%s",
+						m_name);
 					break;
 				}
 
@@ -131,17 +209,24 @@ static void spell_message(struct monster *mon,
 					/* Get the monster possessive ("his"/"her"/"its") */
 					monster_desc(m_poss, sizeof(m_poss), mon, MDESC_PRO_VIS | MDESC_POSS);
 
-					strnfcat(buf, sizeof(buf), &end, m_poss);
+					strnfcat(buf, sizeof(buf), &end, "%s",
+						m_poss);
 					break;
 				}
 
 				case SPELL_TAG_TARGET: {
 					char m_name[80];
-					struct monster *t_mon;
 					if (mon->target.midx > 0) {
-						t_mon = cave_monster(cave, mon->target.midx);
-						monster_desc(m_name, sizeof(m_name), t_mon, MDESC_TARG);
-						strnfcat(buf, sizeof(buf), &end, m_name);
+						int mdesc_mode = MDESC_TARG;
+
+						if (!strchr(punct, *in_cursor)) {
+							mdesc_mode |= MDESC_COMMA;
+						}
+						monster_desc(m_name,
+							sizeof(m_name), t_mon,
+							mdesc_mode);
+						strnfcat(buf, sizeof(buf), &end,
+							"%s", m_name);
 					} else {
 						strnfcat(buf, sizeof(buf), &end, "you");
 					}
@@ -153,7 +238,8 @@ static void spell_message(struct monster *mon,
 					int type = mon->race->blow[0].effect->lash_type;
 					char *type_name = projections[type].lash_desc;
 
-					strnfcat(buf, sizeof(buf), &end, type_name);
+					strnfcat(buf, sizeof(buf), &end, "%s",
+						type_name);
 					break;
 				}
 
@@ -164,7 +250,8 @@ static void spell_message(struct monster *mon,
 
 					if (type_name) {
 						strnfcat(buf, sizeof(buf), &end, " of ");
-						strnfcat(buf, sizeof(buf), &end, type_name);
+						strnfcat(buf, sizeof(buf), &end,
+							"%s", type_name);
 					}
 					break;
 				}
@@ -179,8 +266,9 @@ static void spell_message(struct monster *mon,
 		}
 
 		next = strchr(in_cursor, '{');
+		is_leading = false;
 	}
-	strnfcat(buf, 1024, &end, in_cursor);
+	strnfcat(buf, 1024, &end, "%s", in_cursor);
 
 	msgt(spell->msgt, "%s", buf);
 }
@@ -216,6 +304,38 @@ static void spell_check_for_fail_rune(const struct monster_spell *spell)
 }
 
 /**
+ * Calculate the base to-hit value for a monster spell based on race only
+ * See also: chance_of_monster_hit_base
+ *
+ * \param race The monster race
+ * \param spell The spell
+ */
+static int chance_of_spell_hit_base(const struct monster_race *race,
+	const struct monster_spell *spell)
+{
+	return MAX(race->level, 1) * 3 + spell->hit;
+}
+
+/**
+ * Calculate the to-hit value of a monster spell for a specific monster
+ *
+ * \param mon The monster
+ * \param spell The spell
+ */
+static int chance_of_spell_hit(const struct monster *mon,
+	const struct monster_spell *spell)
+{
+	int to_hit = chance_of_spell_hit_base(mon->race, spell);
+
+	/* Apply confusion hit reduction for each level of confusion */
+	for (int i = 0; i < monster_effect_level(mon, MON_TMD_CONF); i++) {
+		to_hit = to_hit * (100 - CONF_HIT_REDUCTION) / 100;
+	}
+
+	return to_hit;
+}
+
+/**
  * Process a monster spell 
  *
  * \param index is the monster spell flag (RSF_FOO)
@@ -228,7 +348,7 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
 
 	bool ident = false;
 	bool hits;
-	int target_mon = mon->target.midx;
+	int target_midx = mon->target.midx;
 
 	/* See if it hits */
 	if (spell->hit == 100) {
@@ -236,24 +356,16 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
 	} else if (spell->hit == 0) {
 		hits = false;
 	} else {
-		int rlev = MAX(mon->race->level, 1);
-		int conf_level = monster_effect_level(mon, MON_TMD_CONF);
-		int accuracy = 100;
-		while (conf_level) {
-			accuracy *= (100 - CONF_HIT_REDUCTION);
-			accuracy /= 100;
-			conf_level--;
-		}
-		if (target_mon > 0) {
-			hits = check_hit_monster(cave_monster(cave, target_mon),
-									 spell->hit, rlev, accuracy);
+		if (target_midx > 0) {
+			hits = test_hit(chance_of_spell_hit(mon, spell),
+				cave_monster(cave, target_midx)->race->ac);
 		} else {
-			hits = check_hit(player, spell->hit, rlev, accuracy);
+			hits = check_hit(player, chance_of_spell_hit(mon, spell));
 		}
 	}
 
 	/* Tell the player what's going on */
-	disturb(player, 1);
+	disturb(player);
 	spell_message(mon, spell, seen, hits);
 
 	if (hits) {
@@ -265,12 +377,12 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
 		}
 
 		/* Try a saving throw if available */
-		if (level->save_message && (target_mon <= 0) &&
+		if (level->save_message && (target_midx <= 0) &&
 				randint0(100) < player->state.skills[SKILL_SAVE]) {
 			msg("%s", level->save_message);
 			spell_check_for_fail_rune(spell);
 		} else {
-			effect_do(spell->effect, source_monster(mon->midx), NULL, &ident, true, 0, 0, 0);
+			effect_do(spell->effect, source_monster(mon->midx), NULL, &ident, true, 0, 0, 0, NULL);
 		}
 	}
 }
@@ -283,7 +395,7 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
  * Types of monster spells used for spell selection.
  */
 static const struct mon_spell_info {
-	u16b index;				/* Numerical index (RSF_FOO) */
+	uint16_t index;				/* Numerical index (RSF_FOO) */
 	int type;				/* Type bitflag */
 } mon_spell_types[] = {
     #define RSF(a, b)	{ RSF_##a, b },
@@ -352,8 +464,8 @@ void ignore_spells(bitflag *f, int types)
  * \param spells is the set of spells we're pruning
  * \param flags is the set of object flags we're testing
  * \param pflags is the set of player flags we're testing
- * \param el is what we know about the monster's elemental resists
- * \param race is the monster type we're operating on
+ * \param el is what we know about the player's elemental resists
+ * \param mon is the monster whose spells we are considering
  */
 void unset_spells(bitflag *spells, bitflag *flags, bitflag *pflags,
 				  struct element_info *el, const struct monster *mon)
@@ -383,10 +495,56 @@ void unset_spells(bitflag *spells, bitflag *flags, bitflag *pflags,
 			/* Now others with resisted effects */
 			while (effect) {
 				/* Timed effects */
-				if ((smart || !one_in_(3)) &&
-						effect->index == EF_TIMED_INC &&
-						of_has(flags, timed_effects[effect->subtype].fail))
-					break;
+				if ((smart || !one_in_(3))
+						&& effect->index == EF_TIMED_INC) {
+					const struct timed_failure *f;
+					bool resisted = false;
+
+					assert(effect->subtype >= 0
+						&& effect->subtype < TMD_MAX);
+					for (f = timed_effects[effect->subtype].fail;
+							f && !resisted;
+							f = f->next) {
+						switch (f->code) {
+						case TMD_FAIL_FLAG_OBJECT:
+							if (of_has(flags, f->idx)) {
+								resisted = true;
+							}
+							break;
+
+						case TMD_FAIL_FLAG_RESIST:
+							if (el[f->idx].res_level > 0) {
+								resisted = true;
+							}
+							break;
+
+						case TMD_FAIL_FLAG_VULN:
+							if (el[f->idx].res_level < 0) {
+								resisted = true;
+							}
+							break;
+
+						case TMD_FAIL_FLAG_PLAYER:
+							if (pf_has(pflags, f->idx)) {
+								resisted = true;
+							}
+							break;
+
+						/*
+						 * The monster doesn't track
+						 * the timed effects present
+						 * on the player so do
+						 * nothing with resistances
+						 * due to those.
+						 */
+						case TMD_FAIL_FLAG_TIMED_EFFECT:
+							break;
+						}
+					}
+					if (resisted) {
+						break;
+					}
+				}
 
 				/* Mana drain */
 				if ((smart || one_in_(2)) &&

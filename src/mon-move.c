@@ -32,17 +32,20 @@
 #include "mon-group.h"
 #include "mon-lore.h"
 #include "mon-make.h"
+#include "mon-move.h"
 #include "mon-predicate.h"
 #include "mon-spell.h"
 #include "mon-util.h"
 #include "mon-timed.h"
 #include "obj-desc.h"
 #include "obj-ignore.h"
+#include "obj-knowledge.h"
 #include "obj-pile.h"
 #include "obj-slays.h"
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "player-calcs.h"
+#include "player-timed.h"
 #include "player-util.h"
 #include "project.h"
 #include "trap.h"
@@ -58,52 +61,64 @@
  *
  * this decides whether PASS_WALL & KILL_WALL monsters use the monster flow code
  */
-static bool monster_near_permwall(const struct monster *mon, struct chunk *c)
+static bool monster_near_permwall(const struct monster *mon)
 {
-	int y, x;
-	int my = mon->grid.y;
-	int mx = mon->grid.x;
+	struct loc gp[512];
+	int path_grids, j;
 
 	/* If player is in LOS, there's no need to go around walls */
-    if (projectable(c, mon->grid, player->grid, PROJECT_NONE))
-		return false;
+    if (projectable(cave, mon->grid, player->grid, PROJECT_SHORT)) return false;
 
     /* PASS_WALL & KILL_WALL monsters occasionally flow for a turn anyway */
     if (randint0(99) < 5) return true;
 
-	/* Search the nearby grids, which are always in bounds */
-	for (y = (my - 2); y <= (my + 2); y++) {
-		for (x = (mx - 2); x <= (mx + 2); x++) {
-			struct loc grid = loc(x, y);
-           if (!square_in_bounds_fully(c, grid)) continue;
-            if (square_isperm(c, grid)) return true;
-		}
+	/* Find the shortest path */
+	path_grids = project_path(cave, gp, z_info->max_sight, mon->grid,
+		player->grid, PROJECT_ROCK);
+
+	/* See if we can "see" the player without hitting permanent wall */
+	for (j = 0; j < path_grids; j++) {
+		if (square_isperm(cave, gp[j])) return true;
+		if (square_isplayer(cave, gp[j])) return false;
 	}
+
 	return false;
+}
+
+/**
+ * Check if the monster can see the player
+ */
+static bool monster_can_see_player(struct monster *mon)
+{
+	if (!square_isview(cave, mon->grid)) return false;
+	if (player->timed[TMD_COVERTRACKS] && (mon->cdis > z_info->max_sight / 4)) {
+		return false;
+	}
+	return true;
 }
 
 /**
  * Check if the monster can hear anything
  */
-static bool monster_can_hear(struct chunk *c, struct monster *mon)
+static bool monster_can_hear(struct monster *mon)
 {
 	int base_hearing = mon->race->hearing
 		- player->state.skills[SKILL_STEALTH] / 3;
-	if (c->noise.grids[mon->grid.y][mon->grid.x] == 0) {
+	if (cave->noise.grids[mon->grid.y][mon->grid.x] == 0) {
 		return false;
 	}
-	return base_hearing > c->noise.grids[mon->grid.y][mon->grid.x];
+	return base_hearing > cave->noise.grids[mon->grid.y][mon->grid.x];
 }
 
 /**
  * Check if the monster can smell anything
  */
-static bool monster_can_smell(struct chunk *c, struct monster *mon)
+static bool monster_can_smell(struct monster *mon)
 {
-	if (c->scent.grids[mon->grid.y][mon->grid.x] == 0) {
+	if (cave->scent.grids[mon->grid.y][mon->grid.x] == 0) {
 		return false;
 	}
-	return mon->race->smell > c->scent.grids[mon->grid.y][mon->grid.x];
+	return mon->race->smell > cave->scent.grids[mon->grid.y][mon->grid.x];
 }
 
 /**
@@ -112,8 +127,10 @@ static bool monster_can_smell(struct chunk *c, struct monster *mon)
 static int compare_monsters(const struct monster *mon1,
 							const struct monster *mon2)
 {
-	u32b mexp1 = mon1->race->mexp;
-	u32b mexp2 = mon2->race->mexp;
+	uint32_t mexp1 = (mon1->original_race) ?
+		mon1->original_race->mexp : mon1->race->mexp;
+	uint32_t mexp2 = (mon2->original_race) ?
+		mon2->original_race->mexp : mon2->race->mexp;
 
 	/* Compare */
 	if (mexp1 < mexp2) return (-1);
@@ -126,13 +143,17 @@ static int compare_monsters(const struct monster *mon1,
 /**
  * Check if the monster can kill any monster on the relevant grid
  */
-static bool monster_can_kill(struct chunk *c, struct monster *mon,
-							 struct loc grid)
+static bool monster_can_kill(struct monster *mon, struct loc grid)
 {
-	struct monster *mon1 = square_monster(c, grid);
+	struct monster *mon1 = square_monster(cave, grid);
 
 	/* No monster */
 	if (!mon1) return true;
+
+	/* No trampling uniques */
+	if (monster_is_unique(mon1)) {
+		return false;
+	}
 
 	if (rf_has(mon->race->flags, RF_KILL_BODY) &&
 		compare_monsters(mon, mon1) > 0) {
@@ -145,10 +166,9 @@ static bool monster_can_kill(struct chunk *c, struct monster *mon,
 /**
  * Check if the monster can move any monster on the relevant grid
  */
-static bool monster_can_move(struct chunk *c, struct monster *mon,
-							 struct loc grid)
+static bool monster_can_move(struct monster *mon, struct loc grid)
 {
-	struct monster *mon1 = square_monster(c, grid);
+	struct monster *mon1 = square_monster(cave, grid);
 
 	/* No monster */
 	if (!mon1) return true;
@@ -164,12 +184,11 @@ static bool monster_can_move(struct chunk *c, struct monster *mon,
 /**
  * Check if the monster can occupy a grid safely
  */
-static bool monster_hates_grid(struct chunk *c, struct monster *mon,
-							   struct loc grid)
+static bool monster_hates_grid(struct monster *mon, struct loc grid)
 {
 	/* Only some creatures can handle damaging terrain */
-	if (square_isdamaging(c, grid) &&
-		!rf_has(mon->race->flags, square_feat(c, grid)->resist_flag)) {
+	if (square_isdamaging(cave, grid) &&
+		!rf_has(mon->race->flags, square_feat(cave, grid)->resist_flag)) {
 		return true;
 	}
 	return false;
@@ -191,10 +210,10 @@ static bool monster_hates_grid(struct chunk *c, struct monster *mon,
  */
 static void get_move_find_range(struct monster *mon)
 {
-	u16b p_lev, m_lev;
-	u16b p_chp, p_mhp;
-	u16b m_chp, m_mhp;
-	u32b p_val, m_val;
+	uint16_t p_lev, m_lev;
+	uint16_t p_chp, p_mhp;
+	uint16_t m_chp, m_mhp;
+	uint32_t p_val, m_val;
 
 	/* Monsters will run up to z_info->flee_range grids out of sight */
 	int flee_range = z_info->max_sight + z_info->flee_range;
@@ -208,6 +227,9 @@ static void get_move_find_range(struct monster *mon)
 	} else {
 		/* Minimum distance - stay at least this far if possible */
 		mon->min_range = 1;
+
+		/* Taunted monsters just want to get in your face */
+		if (player->timed[TMD_TAUNT]) return;
 
 		/* Examine player power (level) */
 		p_lev = player->lev;
@@ -266,14 +288,14 @@ static void get_move_find_range(struct monster *mon)
 		mon->best_range += 3;
 	}
 
-	if (mon->race->freq_spell > 24) {
-		/* Breathers like point blank range */
+	/* Breathers like point blank range */
+	if (mon->race->freq_innate > 24) {
 		if (monster_breathes(mon) && (mon->hp > mon->maxhp / 2)) {
-			mon->best_range = MAX(6, mon->best_range);
-		} else {
-			/* Other spell casters will sit back and cast */
-			mon->best_range += 3;
+			mon->best_range = MAX(1, mon->best_range);
 		}
+	} else if (mon->race->freq_spell > 24) {
+		/* Other spell casters will sit back and cast */
+		mon->best_range += 3;
 	}
 }
 
@@ -283,16 +305,24 @@ static void get_move_find_range(struct monster *mon)
  * The idea is to stay close to the group leader, but attack the player if the
  * chance arises
  */
-static bool get_move_bodyguard(struct chunk *c, struct monster *mon)
+static bool get_move_bodyguard(struct monster *mon)
 {
 	int i;
-	struct monster *leader = monster_group_leader(c, mon);
-	int dist = distance(mon->grid, leader->grid);
+	struct monster *leader = monster_group_leader(cave, mon);
+	int dist;
 	struct loc best;
 	bool found = false;
 
+	if (!leader) return false;
+
+	/* Get distance */
+	dist = distance(mon->grid, leader->grid);
+
 	/* If currently adjacent to the leader, we can afford a move */
 	if (dist <= 1) return false;
+
+	/* If the leader's too out of sight and far away, save yourself */
+	if (!los(cave, mon->grid, leader->grid) && (dist > 10)) return false;
 
 	/* Check nearby adjacent grids and assess */
 	for (i = 0; i < 8; i++) {
@@ -302,17 +332,17 @@ static bool get_move_bodyguard(struct chunk *c, struct monster *mon)
 		int char_dist = distance(grid, player->grid);
 
 		/* Bounds check */
-		if (!square_in_bounds(c, grid)) {
+		if (!square_in_bounds(cave, grid)) {
 			continue;
 		}
 
 		/* There's a monster blocking that we can't deal with */
-		if (!monster_can_kill(c, mon, grid) && !monster_can_move(c, mon, grid)){
+		if (!monster_can_kill(mon, grid) && !monster_can_move(mon, grid)){
 			continue;
 		}
 
 		/* There's damaging terrain */
-		if (monster_hates_grid(c, mon, grid)) {
+		if (monster_hates_grid(mon, grid)) {
 			continue;
 		}
 
@@ -341,8 +371,8 @@ static bool get_move_bodyguard(struct chunk *c, struct monster *mon)
  * Choose the best direction to advance toward the player, using sound or scent.
  *
  * Ghosts and rock-eaters generally just head straight for the player. Other
- * monsters try sight, then current sound as saved in c->noise.grids[y][x],
- * then current scent as saved in c->scent.grids[y][x].
+ * monsters try sight, then current sound as saved in cave->noise.grids[y][x],
+ * then current scent as saved in cave->scent.grids[y][x].
  *
  * This function assumes the monster is moving to an adjacent grid, and so the
  * noise can be louder by at most 1.  The monster target grid set by sound or
@@ -357,15 +387,16 @@ static bool get_move_bodyguard(struct chunk *c, struct monster *mon)
  * is still near enough to "annoy" them without being close enough to chase
  * directly.
  */
-static bool get_move_advance(struct chunk *c, struct monster *mon, bool *track)
+static bool get_move_advance(struct monster *mon, bool *track)
 {
 	int i;
-	struct loc decoy = cave_find_decoy(c);
-	struct loc target = loc_is_zero(decoy) ? player->grid : decoy;
+	struct loc target = monster_is_decoyed(mon) ? cave_find_decoy(cave) :
+		player->grid;
 
 	int base_hearing = mon->race->hearing
 		- player->state.skills[SKILL_STEALTH] / 3;
-	int current_noise = base_hearing - c->noise.grids[mon->grid.y][mon->grid.x];
+	int current_noise = base_hearing
+		- cave->noise.grids[mon->grid.y][mon->grid.x];
 	int best_scent = 0;
 
 	struct loc best_grid;
@@ -375,73 +406,77 @@ static bool get_move_advance(struct chunk *c, struct monster *mon, bool *track)
 
 	/* Bodyguards are special */
 	if (mon->group_info[PRIMARY_GROUP].role == MON_GROUP_BODYGUARD) {
-		if (get_move_bodyguard(c, mon)) {
+		if (get_move_bodyguard(mon)) {
 			return true;
 		}
 	}
 
 	/* If the monster can pass through nearby walls, do that */
-	if (monster_passes_walls(mon) && !monster_near_permwall(mon, c)) {
+	if (monster_passes_walls(mon) && !monster_near_permwall(mon)) {
 		mon->target.grid = target;
 		return true;
 	}
 
 	/* If the player can see monster, set target and run towards them */
-	if (square_isview(c, mon->grid)) {
+	if (monster_can_see_player(mon)) {
 		mon->target.grid = target;
 		return true;
 	}
 
-	/* Check nearby sound, giving preference to the cardinal directions */
-	for (i = 0; i < 8; i++) {
-		/* Get the location */
-		struct loc grid = loc_sum(mon->grid, ddgrid_ddd[i]);
-		int heard_noise = base_hearing - c->noise.grids[grid.y][grid.x];
+	/* Try to use sound */
+	if (monster_can_hear(mon)) {
+		/* Check nearby sound, giving preference to the cardinal directions */
+		for (i = 0; i < 8; i++) {
+			/* Get the location */
+			struct loc grid = loc_sum(mon->grid, ddgrid_ddd[i]);
+			int heard_noise = base_hearing - cave->noise.grids[grid.y][grid.x];
 
-		/* Bounds check */
-		if (!square_in_bounds(c, grid)) {
-			continue;
-		}
+			/* Bounds check */
+			if (!square_in_bounds(cave, grid)) {
+				continue;
+			}
 
-		/* Must be some noise */
-		if (c->noise.grids[grid.y][grid.x] == 0) {
-			continue;
-		}
+			/* Must be some noise */
+			if (cave->noise.grids[grid.y][grid.x] == 0) {
+				continue;
+			}
 
-		/* There's a monster blocking that we can't deal with */
-		if (!monster_can_kill(c, mon, grid) && !monster_can_move(c, mon, grid)){
-			continue;
-		}
+			/* There's a monster blocking that we can't deal with */
+			if (!monster_can_kill(mon, grid) && !monster_can_move(mon, grid)) {
+				continue;
+			}
 
-		/* There's damaging terrain */
-		if (monster_hates_grid(c, mon, grid)) {
-			continue;
-		}
+			/* There's damaging terrain */
+			if (monster_hates_grid(mon, grid)) {
+				continue;
+			}
 
-		/* If it's better than the current noise, choose this direction */
-		if (heard_noise > current_noise) {
-			best_grid = grid;
-			found = true;
-			break;
-		} else if (heard_noise == current_noise) {
-			/* Possible move if we can't actually get closer */
-			backup_grid = grid;
-			found_backup = true;
-			continue;
+			/* If it's better than the current noise, choose this direction */
+			if (heard_noise > current_noise) {
+				best_grid = grid;
+				found = true;
+				break;
+			} else if (heard_noise == current_noise) {
+				/* Possible move if we can't actually get closer */
+				backup_grid = grid;
+				found_backup = true;
+				continue;
+			}
 		}
 	}
 
-	/* If no good sound, use scent */
-	if (!found) {
+	/* If both vision and sound are no good, use scent */
+	if (monster_can_smell(mon) && !found) {
 		for (i = 0; i < 8; i++) {
 			/* Get the location */
 			struct loc grid = loc_sum(mon->grid, ddgrid_ddd[i]);
 			int smelled_scent;
 
 			/* If no good sound yet, use scent */
-			smelled_scent = mon->race->smell - c->scent.grids[grid.y][grid.x];
+			smelled_scent = mon->race->smell
+				- cave->scent.grids[grid.y][grid.x];
 			if ((smelled_scent > best_scent) &&
-				(c->scent.grids[grid.y][grid.x] != 0)) {
+				(cave->scent.grids[grid.y][grid.x] != 0)) {
 				best_scent = smelled_scent;
 				best_grid = grid;
 				found = true;
@@ -466,6 +501,35 @@ static bool get_move_advance(struct chunk *c, struct monster *mon, bool *track)
 }
 
 /**
+ * Choose a random passable grid adjacent to the monster since is has no better
+ * strategy.
+ */
+static struct loc get_move_random(struct monster *mon)
+{
+	int attempts[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+	int nleft = 8;
+
+	while (nleft > 0) {
+		int itry = randint0(nleft);
+		struct loc trygrid;
+
+		trygrid = loc_sum(mon->grid, ddgrid_ddd[attempts[itry]]);
+		if (square_is_monster_walkable(cave, trygrid) &&
+				!monster_hates_grid(mon, trygrid)) {
+			return ddgrid_ddd[attempts[itry]];
+		} else {
+			int tmp = attempts[itry];
+
+			--nleft;
+			attempts[itry] = attempts[nleft];
+			attempts[nleft] = tmp;
+		}
+	}
+
+	return loc(0, 0);
+}
+
+/**
  * Choose a "safe" location near a monster for it to run toward.
  *
  * A location is "safe" if it can be reached quickly and the player
@@ -477,7 +541,7 @@ static bool get_move_advance(struct chunk *c, struct monster *mon, bool *track)
  *
  * Return true if a safe location is available.
  */
-static bool get_move_find_safety(struct chunk *c, struct monster *mon)
+static bool get_move_find_safety(struct monster *mon)
 {
 	int i, dy, dx, d, dis, gdis = 0;
 
@@ -499,23 +563,21 @@ static bool get_move_find_safety(struct chunk *c, struct monster *mon)
 			struct loc grid = loc_sum(mon->grid, loc(dx, dy));
 
 			/* Skip illegal locations */
-			if (!square_in_bounds_fully(c, grid)) continue;
+			if (!square_in_bounds_fully(cave, grid)) continue;
 
 			/* Skip locations in a wall */
-			if (!square_ispassable(c, grid)) continue;
+			if (!square_ispassable(cave, grid)) continue;
 
 			/* Ignore too-distant grids */
-			if (c->noise.grids[grid.y][grid.x] >
-				c->noise.grids[mon->grid.y][mon->grid.x] + 2 * d)
+			if (cave->noise.grids[grid.y][grid.x] >
+				cave->noise.grids[mon->grid.y][mon->grid.x] + 2 * d)
 				continue;
 
 			/* Ignore damaging terrain if they can't handle it */
-			if (square_isdamaging(c, grid) &&
-				!rf_has(mon->race->flags, square_feat(c, grid)->resist_flag))
-				continue;
+			if (monster_hates_grid(mon, grid)) continue;
 
 			/* Check for absence of shot (more or less) */
-			if (!square_isview(c, grid)) {
+			if (!square_isview(cave, grid)) {
 				/* Calculate distance from player */
 				dis = distance(grid, player->grid);
 
@@ -547,7 +609,7 @@ static bool get_move_find_safety(struct chunk *c, struct monster *mon)
  *
  * Return true if a good location is available.
  */
-static bool get_move_find_hiding(struct chunk *c, struct monster *mon)
+static bool get_move_find_hiding(struct monster *mon)
 {
 	int i, dy, dx, d, dis, gdis = 999, min;
 
@@ -571,14 +633,14 @@ static bool get_move_find_hiding(struct chunk *c, struct monster *mon)
 			struct loc grid = loc_sum(mon->grid, loc(dx, dy));
 
 			/* Skip illegal locations */
-			if (!square_in_bounds_fully(c, grid)) continue;
+			if (!square_in_bounds_fully(cave, grid)) continue;
 
 			/* Skip occupied locations */
-			if (!square_isempty(c, grid)) continue;
+			if (!square_isempty(cave, grid)) continue;
 
 			/* Check for hidden, available grid */
-			if (!square_isview(c, grid) &&
-				projectable(c, mon->grid, grid, PROJECT_STOP)) {
+			if (!square_isview(cave, grid) &&
+				projectable(cave, mon->grid, grid, PROJECT_STOP)) {
 				/* Calculate distance from player */
 				dis = distance(grid, player->grid);
 
@@ -609,21 +671,21 @@ static bool get_move_find_hiding(struct chunk *c, struct monster *mon)
  * but instead of heading directly for it, the monster should "swerve"
  * around the player so that it has a smaller chance of getting hit.
  */
-static bool get_move_flee(struct chunk *c, struct monster *mon)
+static bool get_move_flee(struct monster *mon)
 {
 	int i;
 	struct loc best = loc(0, 0);
 	int best_score = -1;
 
 	/* Taking damage from terrain makes moving vital */
-	if (monster_taking_terrain_damage(mon)) {
+	if (!monster_taking_terrain_damage(cave, mon)) {
 		/* If the player is not currently near the monster, no reason to flow */
 		if (mon->cdis >= mon->best_range) {
 			return false;
 		}
 
 		/* Monster is too far away to use sound or scent */
-		if (!monster_can_hear(c, mon) && !monster_can_smell(c, mon)) {
+		if (!monster_can_hear(mon) && !monster_can_smell(mon)) {
 			return false;
 		}
 	}
@@ -636,7 +698,7 @@ static bool get_move_flee(struct chunk *c, struct monster *mon)
 		struct loc grid = loc_sum(mon->grid, ddgrid_ddd[i]);
 
 		/* Bounds check */
-		if (!square_in_bounds(c, grid)) continue;
+		if (!square_in_bounds(cave, grid)) continue;
 
 		/* Calculate distance of this grid from our target */
 		dis = distance(grid, mon->target.grid);
@@ -645,7 +707,7 @@ static bool get_move_flee(struct chunk *c, struct monster *mon)
 		 * First half of calculation is inversely proportional to distance
 		 * Second half is inversely proportional to grid's distance from player
 		 */
-		score = 5000 / (dis + 3) - 500 / (c->noise.grids[grid.y][grid.x] + 1);
+		score = 5000 / (dis + 3) - 500 /(cave->noise.grids[grid.y][grid.x] + 1);
 
 		/* No negative scores */
 		if (score < 0) score = 0;
@@ -770,14 +832,14 @@ static int get_move_choose_direction(struct loc offset)
  * The function then returns false if we're already where we want to be, and
  * otherwise sets the chosen direction to step and returns true.
  */
-static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
+static bool get_move(struct monster *mon, int *dir, bool *good)
 {
-	struct loc decoy = cave_find_decoy(c);
-	struct loc target = loc_is_zero(decoy) ? player->grid : decoy;
+	struct loc target = monster_is_decoyed(mon) ? cave_find_decoy(cave) :
+		player->grid;
 	bool group_ai = rf_has(mon->race->flags, RF_GROUP_AI);
 
 	/* Offset to current position to move toward */
-	struct loc grid;
+	struct loc grid = loc(0, 0);
 
 	/* Monsters will run up to z_info->flee_range grids out of sight */
 	int flee_range = z_info->max_sight + z_info->flee_range;
@@ -788,30 +850,36 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 	get_move_find_range(mon);
 
 	/* Assume we're heading towards the player */
-	if (get_move_advance(c, mon, good)) {
+	if (get_move_advance(mon, good)) {
 		/* We have a good move, use it */
 		grid = loc_diff(mon->target.grid, mon->grid);
 		mflag_on(mon->mflag, MFLAG_TRACKING);
 	} else {
 		/* Try to follow someone who knows where they're going */
-		struct monster *tracker = group_monster_tracking(c, mon);
-		if (tracker && los(c, mon->grid, tracker->grid)) { /* Need los? */
+		struct monster *tracker = group_monster_tracking(cave, mon);
+		if (tracker && los(cave, mon->grid, tracker->grid)) { /* Need los? */
 			grid = loc_diff(tracker->grid, mon->grid);
+			/* No longer tracking */
+			mflag_off(mon->mflag, MFLAG_TRACKING);
 		} else {
-			/* Head blindly straight for the "player" if no better idea */
-			grid = loc_diff(target, mon->grid);
+			if (mflag_has(mon->mflag, MFLAG_TRACKING)) {
+				/* Keep heading to the most recent goal. */
+				grid = loc_diff(mon->target.grid, mon->grid);
+			}
+			if (loc_is_zero(grid)) {
+				/* Try a random move and no longer track. */
+				grid = get_move_random(mon);
+				mflag_off(mon->mflag, MFLAG_TRACKING);
+			}
 		}
-
-		/* No longer tracking */
-		mflag_off(mon->mflag, MFLAG_TRACKING);
 	}
 
 	/* Monster is taking damage from terrain */
-	if (monster_taking_terrain_damage(mon)) {
+	if (monster_taking_terrain_damage(cave, mon)) {
 		/* Try to find safe place */
-		if (get_move_find_safety(c, mon)) {
+		if (get_move_find_safety(mon)) {
 			/* Set a course for the safe place */
-			get_move_flee(c, mon);
+			get_move_flee(mon);
 			grid = loc_diff(mon->target.grid, mon->grid);
 			done = true;
 		}
@@ -826,7 +894,7 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 			/* Check grid around the player for room interior (room walls count)
 			 * or other empty space */
 			struct loc test = loc_sum(target, ddgrid_ddd[i]);
-			if (square_ispassable(c, test) || square_isroom(c, test)) {
+			if (square_ispassable(cave, test) || square_isroom(cave, test)) {
 				/* One more open grid */
 				open++;
 			}
@@ -835,7 +903,7 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 		/* Not in an empty space and strong player */
 		if ((open < 5) && (player->chp > player->mhp / 2)) {
 			/* Find hiding place for an ambush */
-			if (get_move_find_hiding(c, mon)) {
+			if (get_move_find_hiding(mon)) {
 				done = true;
 				grid = loc_diff(mon->target.grid, mon->grid);
 
@@ -848,9 +916,9 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 	/* Not hiding and monster is afraid */
 	if (!done && (mon->min_range == flee_range)) {
 		/* Try to find safe place */
-		if (get_move_find_safety(c, mon)) {
+		if (get_move_find_safety(mon)) {
 			/* Set a course for the safe place */
-			get_move_flee(c, mon);
+			get_move_flee(mon);
 			grid = loc_diff(mon->target.grid, mon->grid);
 		} else {
 			/* Just leg it away from the player */
@@ -863,7 +931,7 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 	}
 
 	/* Monster groups try to surround the player if they're in sight */
-	if (!done && group_ai && square_isview(c, mon->grid)) {
+	if (!done && group_ai && square_isview(cave, mon->grid)) {
 		int i;
 		struct loc grid1 = mon->target.grid;
 
@@ -876,7 +944,7 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
 				grid1 = loc_sum(target, ddgrid_ddd[(tmp + i) % 8]);
 
 				/* Ignore filled grids */
-				if (!square_isempty(c, grid1)) continue;
+				if (!square_isempty(cave, grid1)) continue;
 
 				/* Try to fill this hole */
 				break;
@@ -911,29 +979,38 @@ static bool get_move(struct chunk *c, struct monster *mon, int *dir, bool *good)
  *
  * Returns true if the monster successfully reproduced.
  */
-bool multiply_monster(struct chunk *c, const struct monster *mon)
+bool multiply_monster(const struct monster *mon)
 {
 	struct loc grid;
-	int i;
-	bool result = false;
+	bool result;
 	struct monster_group_info info = { 0, 0 };
 
-	/* Try up to 18 times */
-	for (i = 0; i < 18; i++) {
-		int d = 1;
-
-		/* Pick a location */
-		scatter(c, &grid, mon->grid, d, true);
-
-		/* Require an "empty" floor grid */
-		if (!square_isempty(c, grid)) continue;
-
+	/*
+	 * Pick an empty location except for uniques:  they can never
+	 * multiply (need a check here as the ones in place_new_monster()
+	 * are not sufficient for a unique shape of a shapechanged monster
+	 * since it may have zero for cur_num in the race structure for the
+	 * shape).
+	 */
+	if (!monster_is_shape_unique(mon) && scatter_ext(cave, &grid,
+			1, mon->grid, 1, true, square_isempty) > 0) {
 		/* Create a new monster (awake, no groups) */
-		result = place_new_monster(c, grid, mon->race, false, false, info,
-								   ORIGIN_DROP_BREED);
+		result = place_new_monster(cave, grid, mon->race, false, false,
+			info, ORIGIN_DROP_BREED);
+		/*
+		 * Fix so multiplying a revealed camouflaged monster creates
+		 * another revealed camouflaged monster.
+		 */
+		if (result) {
+			struct monster *child = square_monster(cave, grid);
 
-		/* Done */
-		break;
+			if (child && monster_is_camouflaged(child)
+					&& !monster_is_camouflaged(mon)) {
+				become_aware(cave, child);
+			}
+		}
+	} else {
+		result = false;
 	}
 
 	/* Result */
@@ -944,19 +1021,22 @@ bool multiply_monster(struct chunk *c, const struct monster *mon)
  * Attempt to reproduce, if possible.  All monsters are checked here for
  * lore purposes, the unfit fail.
  */
-static bool monster_turn_multiply(struct chunk *c, struct monster *mon)
+static bool monster_turn_multiply(struct monster *mon)
 {
 	int k = 0, y, x;
 
 	struct monster_lore *lore = get_lore(mon->race);
 
 	/* Too many breeders on the level already */
-	if (c->num_repro >= z_info->repro_monster_max) return false;
+	if (cave->num_repro >= z_info->repro_monster_max) return false;
+
+	/* No breeding in single combat */
+	if (player->upkeep->arena_level) return false;  
 
 	/* Count the adjacent monsters */
 	for (y = mon->grid.y - 1; y <= mon->grid.y + 1; y++)
 		for (x = mon->grid.x - 1; x <= mon->grid.x + 1; x++)
-			if (square(c, loc(x, y)).mon > 0) k++;
+			if (square(cave, loc(x, y))->mon > 0) k++;
 
 	/* Multiply slower in crowded areas */
 	if ((k < 4) && (k == 0 || one_in_(k * z_info->repro_monster_rate))) {
@@ -969,7 +1049,7 @@ static bool monster_turn_multiply(struct chunk *c, struct monster *mon)
 			return false;
 
 		/* Try to multiply */
-		if (multiply_monster(c, mon)) {
+		if (multiply_monster(mon)) {
 			/* Make a sound */
 			if (monster_is_visible(mon))
 				sound(MSG_MULTIPLY);
@@ -987,10 +1067,10 @@ static bool monster_turn_multiply(struct chunk *c, struct monster *mon)
  * Always stagger when confused, but also deal with random movement for
  * RAND_25 and RAND_50 monsters.
  */
-static bool monster_turn_should_stagger(struct monster *mon)
+static enum monster_stagger monster_turn_should_stagger(struct monster *mon)
 {
 	struct monster_lore *lore = get_lore(mon->race);
-	int chance = 0;
+	int chance = 0, confused_chance, roll;
 
 	/* Increase chance of being erratic for every level of confusion */
 	int conf_level = monster_effect_level(mon, MON_TMD_CONF);
@@ -1001,6 +1081,7 @@ static bool monster_turn_should_stagger(struct monster *mon)
 		chance = 100 - accuracy;
 		conf_level--;
 	}
+	confused_chance = chance;
 
 	/* RAND_25 and RAND_50 are cumulative */
 	if (rf_has(mon->race->flags, RF_RAND_25)) {
@@ -1015,7 +1096,38 @@ static bool monster_turn_should_stagger(struct monster *mon)
 			rf_on(lore->flags, RF_RAND_50);
 	}
 
-	return randint0(100) < chance;
+	roll = randint0(100);
+	return (roll < confused_chance) ?
+		 CONFUSED_STAGGER :
+		 ((roll < chance) ? INNATE_STAGGER : NO_STAGGER);
+}
+
+
+/**
+ * Helper function for monster_turn_can_move() to display a message for a
+ * confused move into non-passable terrain.
+ */
+static void monster_display_confused_move_msg(struct monster *mon,
+											  const char *m_name,
+											  struct loc new)
+{
+	if (monster_is_visible(mon) && monster_is_in_view(mon)) {
+		const char *m = square_feat(cave, new)->confused_msg;
+
+		msg("%s %s.", m_name, (m) ? m : "stumbles");
+	}
+}
+
+
+/**
+ * Helper function for monster_turn_can_move() to slightly stun a monster
+ * on occasion due to bumbling into something.
+ */
+static void monster_slightly_stun_by_move(struct monster *mon)
+{
+	if (mon->m_timed[MON_TMD_STUN] < 5 && one_in_(3)) {
+		mon_inc_timed(mon, MON_TMD_STUN, 3, 0);
+	}
 }
 
 
@@ -1025,23 +1137,34 @@ static bool monster_turn_should_stagger(struct monster *mon)
  *
  * Returns true if the monster is able to move through the grid.
  */
-static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
-		const char *m_name, struct loc new, bool *did_something)
+static bool monster_turn_can_move(struct monster *mon, const char *m_name,
+								  struct loc new, bool confused,
+								  bool *did_something)
 {
 	struct monster_lore *lore = get_lore(mon->race);
 
+	/* Always allow an attack upon the player or decoy. */
+	if (square_isplayer(cave, new) || square_isdecoyed(cave, new)) {
+		return true;
+	}
+
 	/* Dangerous terrain in the way */
-	if (monster_hates_grid(c, mon, new)) {
+	if (!confused && monster_hates_grid(mon, new)) {
 		return false;
 	}
 
 	/* Floor is open? */
-	if (square_ispassable(c, new)) {
+	if (square_ispassable(cave, new)) {
 		return true;
 	}
 
 	/* Permanent wall in the way */
-	if (square_iswall(c, new) && square_isperm(c, new)) {
+	if (square_isperm(cave, new)) {
+		if (confused) {
+			*did_something = true;
+			monster_display_confused_move_msg(mon, m_name, new);
+			monster_slightly_stun_by_move(mon);
+		}
 		return false;
 	}
 
@@ -1060,7 +1183,7 @@ static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
 		return true;
 	} else if (rf_has(mon->race->flags, RF_SMASH_WALL)) {
 		/* Remove the wall and much of what's nearby */
-		square_smash_wall(c, new);
+		square_smash_wall(cave, new);
 
 		/* Note changes to viewable region */
 		player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
@@ -1068,23 +1191,27 @@ static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
 		return true;
 	} else if (rf_has(mon->race->flags, RF_KILL_WALL)) {
 		/* Remove the wall */
-		square_destroy_wall(c, new);
+		square_destroy_wall(cave, new);
 
 		/* Note changes to viewable region */
-		if (square_isview(c, new))
+		if (square_isview(cave, new))
 			player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 
 		return true;
-	} else if (square_iscloseddoor(c, new) || square_issecretdoor(c, new)) {
-		bool can_open = rf_has(mon->race->flags, RF_OPEN_DOOR);
-		bool can_bash = rf_has(mon->race->flags, RF_BASH_DOOR);
+	} else if (square_iscloseddoor(cave, new)|| square_issecretdoor(cave, new)){
+		/* Don't allow a confused move to open a door. */
+		bool can_open = rf_has(mon->race->flags, RF_OPEN_DOOR) &&
+			!confused;
+		/* During a confused move, a monster only bashes sometimes. */
+		bool can_bash = rf_has(mon->race->flags, RF_BASH_DOOR) &&
+			(!confused || one_in_(3));
 		bool will_bash = false;
 
 		/* Take a turn */
-		*did_something = true;
+		if (can_open || can_bash) *did_something = true;
 
 		/* Learn about door abilities */
-		if (monster_is_visible(mon)) {
+		if (!confused && monster_is_visible(mon)) {
 			rf_on(lore->flags, RF_OPEN_DOOR);
 			rf_on(lore->flags, RF_BASH_DOOR);
 		}
@@ -1100,13 +1227,18 @@ static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
 			will_bash = true;
 		} else {
 			/* Door is an insurmountable obstacle */
+			if (confused) {
+				*did_something = true;
+				monster_display_confused_move_msg(mon, m_name, new);
+				monster_slightly_stun_by_move(mon);
+			}
 			return false;
 		}
 
 		/* Now outcome depends on type of door */
-		if (square_islockeddoor(c, new)) {
+		if (square_islockeddoor(cave, new)) {
 			/* Locked door -- test monster strength against door strength */
-			int k = square_door_power(c, new);
+			int k = square_door_power(cave, new);
 			if (randint0(mon->hp / 10) > k) {
 				if (will_bash) {
 					msg("%s slams against the door.", m_name);
@@ -1115,25 +1247,46 @@ static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
 				}
 
 				/* Reduce the power of the door by one */
-				square_set_door_lock(c, new, k - 1);
+				square_set_door_lock(cave, new, k - 1);
+			}
+			if (confused) {
+				/* Didn't learn above; apply now since attempted to bash. */
+				if (monster_is_visible(mon)) {
+					rf_on(lore->flags, RF_BASH_DOOR);
+				}
+				/* When confused, can stun itself while bashing. */
+				monster_slightly_stun_by_move(mon);
 			}
 		} else {
 			/* Closed or secret door -- always open or bash */
-			if (square_isview(c, new))
+			if (square_isview(cave, new))
 				player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 
 			if (will_bash) {
-				square_smash_door(c, new);
+				square_smash_door(cave, new);
 
 				msg("You hear a door burst open!");
-				disturb(player, 0);
+				disturb(player);
+
+				if (confused) {
+					/* Didn't learn above; apply since bashed the door. */
+					if (monster_is_visible(mon)) {
+						rf_on(lore->flags, RF_BASH_DOOR);
+					}
+					/* When confused, can stun itself while bashing. */
+					monster_slightly_stun_by_move(mon);
+				}
 
 				/* Fall into doorway */
 				return true;
 			} else {
-				square_open_door(c, new);
+				square_open_door(cave, new);
 			}
 		}
+	} else if (confused) {
+		*did_something = true;
+		monster_display_confused_move_msg(mon, m_name, new);
+		monster_slightly_stun_by_move(mon);
 	}
 
 	return false;
@@ -1142,23 +1295,22 @@ static bool monster_turn_can_move(struct chunk *c, struct monster *mon,
 /**
  * Try to break a glyph.
  */
-static bool monster_turn_attack_glyph(struct chunk *c, struct monster *mon,
-									  struct loc new)
+static bool monster_turn_attack_glyph(struct monster *mon, struct loc new)
 {
-	assert(square_iswarded(c, new));
+	assert(square_iswarded(cave, new));
 
 	/* Break the ward */
 	if (randint1(z_info->glyph_hardness) < mon->race->level) {
-		/* Describe observable breakage */
-		if (square_isseen(c, new)) {
-			msg("The rune of protection is broken!");
+		struct trap_kind *rune = lookup_trap("glyph of warding");
 
-			/* Forget the rune */
-			square_forget(c, new);
+		/* Describe observable breakage */
+		if (square_isseen(cave, new)) {
+			msg("The rune of protection is broken!");
 		}
 
 		/* Break the rune */
-		square_destroy_trap(c, new);
+		assert(rune);
+		square_remove_all_traps_of_type(cave, new, rune->tidx);
 
 		return true;
 	}
@@ -1170,19 +1322,19 @@ static bool monster_turn_attack_glyph(struct chunk *c, struct monster *mon,
 /**
  * Try to push past / kill another monster.  Returns true on success.
  */
-static bool monster_turn_try_push(struct chunk *c, struct monster *mon,
-									 const char *m_name, struct loc new)
+static bool monster_turn_try_push(struct monster *mon, const char *m_name,
+								  struct loc new)
 {
-	struct monster *mon1 = square_monster(c, new);
+	struct monster *mon1 = square_monster(cave, new);
 	struct monster_lore *lore = get_lore(mon->race);
 
 	/* Kill weaker monsters */
-	int kill_ok = monster_can_kill(c, mon, new);
+	int kill_ok = monster_can_kill(mon, new);
 
 	/* Move weaker monsters if they can swap places */
 	/* (not in a wall) */
-	int move_ok = (monster_can_move(c, mon, new) &&
-				   square_ispassable(c, mon->grid));
+	int move_ok = (monster_can_move(mon, new) &&
+				   square_ispassable(cave, mon->grid));
 
 	if (kill_ok || move_ok) {
 		/* Get the names of the monsters involved */
@@ -1195,9 +1347,9 @@ static bool monster_turn_try_push(struct chunk *c, struct monster *mon,
 			rf_on(lore->flags, RF_MOVE_BODY);
 		}
 
-		/* Reveal mimics */
-		if (monster_is_mimicking(mon1))
-			become_aware(mon1);
+		/* Reveal camouflaged monsters */
+		if (monster_is_camouflaged(mon1))
+			become_aware(cave, mon1);
 
 		/* Note if visible */
 		if (monster_is_visible(mon) && monster_is_in_view(mon))
@@ -1206,7 +1358,7 @@ static bool monster_turn_try_push(struct chunk *c, struct monster *mon,
 
 		/* Monster ate another monster */
 		if (kill_ok)
-			delete_monster(new);
+			delete_monster(cave, new);
 
 		monster_swap(mon->grid, new);
 		return true;
@@ -1218,15 +1370,15 @@ static bool monster_turn_try_push(struct chunk *c, struct monster *mon,
 /**
  * Grab all objects from the grid.
  */
-void monster_turn_grab_objects(struct chunk *c, struct monster *mon,
-							   const char *m_name, struct loc new)
+static void monster_turn_grab_objects(struct monster *mon, const char *m_name,
+									  struct loc new)
 {
 	struct monster_lore *lore = get_lore(mon->race);
 	struct object *obj;
 	bool visible = monster_is_visible(mon);
 
 	/* Learn about item pickup behavior */
-	for (obj = square_object(c, new); obj; obj = obj->next) {
+	for (obj = square_object(cave, new); obj; obj = obj->next) {
 		if (!tval_is_money(obj) && visible) {
 			rf_on(lore->flags, RF_TAKE_ITEM);
 			rf_on(lore->flags, RF_KILL_ITEM);
@@ -1241,7 +1393,7 @@ void monster_turn_grab_objects(struct chunk *c, struct monster *mon,
 	}
 
 	/* Take or kill objects on the floor */
-	obj = square_object(c, new);
+	obj = square_object(cave, new);
 	while (obj) {
 		char o_name[80];
 		bool safe = obj->artifact ? true : false;
@@ -1260,7 +1412,8 @@ void monster_turn_grab_objects(struct chunk *c, struct monster *mon,
 		}
 
 		/* Get the object name */
-		object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
+		object_desc(o_name, sizeof(o_name), obj,
+			ODESC_PREFIX | ODESC_FULL, player);
 
 		/* React to objects that hurt the monster */
 		if (react_to_slay(obj, mon))
@@ -1269,32 +1422,53 @@ void monster_turn_grab_objects(struct chunk *c, struct monster *mon,
 		/* Try to pick up, or crush */
 		if (safe) {
 			/* Only give a message for "take_item" */
-			if (rf_has(mon->race->flags, RF_TAKE_ITEM) && visible &&
-				square_isview(c, new) && !ignore_item_ok(obj)) {
+			if (rf_has(mon->race->flags, RF_TAKE_ITEM)
+					&& visible
+					&& square_isview(cave, new)
+					&& !ignore_item_ok(player, obj)) {
 				/* Dump a message */
 				msg("%s tries to pick up %s, but fails.", m_name, o_name);
 			}
 		} else if (rf_has(mon->race->flags, RF_TAKE_ITEM)) {
-			/* Describe observable situations */
-			if (square_isseen(c, new) && !ignore_item_ok(obj))
-				msg("%s picks up %s.", m_name, o_name);
+			/*
+			 * Make a copy so the original can remain as a
+			 * placeholder if the player remembers seeing the
+			 * object.
+			 */
+			struct object *taken = object_new();
 
-			/* Carry the object */
-			square_excise_object(c, new, obj);
-			monster_carry(c, mon, obj);
-			square_note_spot(c, new);
-			square_light_spot(c, new);
+			object_copy(taken, obj);
+			taken->oidx = 0;
+			if (obj->known) {
+				taken->known = object_new();
+				object_copy(taken->known, obj->known);
+				taken->known->oidx = 0;
+				taken->known->grid = loc(0, 0);
+			}
+
+			/* Try to carry the copy */
+			if (monster_carry(cave, mon, taken)) {
+				/* Describe observable situations */
+				if (square_isseen(cave, new) && !ignore_item_ok(player, obj)) {
+					msg("%s picks up %s.", m_name, o_name);
+				}
+
+				/* Delete the object */
+				square_delete_object(cave, new, obj, true, true);
+			} else {
+				if (taken->known) {
+					object_delete(player->cave, NULL, &taken->known);
+				}
+				object_delete(cave, player->cave, &taken);
+			}
 		} else {
 			/* Describe observable situations */
-			if (square_isseen(c, new) && !ignore_item_ok(obj))
+			if (square_isseen(cave, new) && !ignore_item_ok(player, obj)) {
 				msgt(MSG_DESTROY, "%s crushes %s.", m_name, o_name);
+			}
 
 			/* Delete the object */
-			square_excise_object(c, new, obj);
-			delist_object(c, obj);
-			object_delete(&obj);
-			square_note_spot(c, new);
-			square_light_spot(c, new);
+			square_delete_object(cave, new, obj, true, true);
 		}
 
 		/* Next object */
@@ -1325,7 +1499,7 @@ void monster_turn_grab_objects(struct chunk *c, struct monster *mon,
  * Technically, need to check for monster in the way combined
  * with that monster being in a wall (or door?) XXX
  */
-static void monster_turn(struct chunk *c, struct monster *mon)
+static void monster_turn(struct monster *mon)
 {
 	struct monster_lore *lore = get_lore(mon->race);
 
@@ -1333,15 +1507,16 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 
 	int i;
 	int dir = 0;
-	bool stagger = false;
+	enum monster_stagger stagger;
 	bool tracking = false;
 	char m_name[80];
 
 	/* Get the monster name */
-	monster_desc(m_name, sizeof(m_name), mon, MDESC_CAPITAL | MDESC_IND_HID);
+	monster_desc(m_name, sizeof(m_name), mon,
+		MDESC_CAPITAL | MDESC_IND_HID | MDESC_COMMA);
 
 	/* If we're in a web, deal with that */
-	if (square_iswebbed(c, mon->grid)) {
+	if (square_iswebbed(cave, mon->grid)) {
 		/* Learn web behaviour */
 		if (monster_is_visible(mon)) {
 			rf_on(lore->flags, RF_CLEAR_WEB);
@@ -1361,10 +1536,18 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 				/* Insubstantial monsters go right through */
 			} else if (monster_passes_walls(mon)) {
 				/* If you can destroy a wall, you can destroy a web */
-				square_destroy_trap(c, mon->grid);
+				struct trap_kind *web = lookup_trap("web");
+
+				assert(web);
+				square_remove_all_traps_of_type(cave,
+					mon->grid, web->tidx);
 			} else if (rf_has(mon->race->flags, RF_CLEAR_WEB)) {
 				/* Clearing costs a turn (assume there are no other "traps") */
-				square_destroy_trap(c, mon->grid);
+				struct trap_kind *web = lookup_trap("web");
+
+				assert(web);
+				square_remove_all_traps_of_type(cave,
+					mon->grid, web->tidx);
 				return;
 			} else {
 				/* Stuck */
@@ -1374,21 +1557,20 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 	}
 
 	/* Let other group monsters know about the player */
-	monster_group_rouse(c, mon);
+	monster_group_rouse(cave, mon);
 
 	/* Try to multiply - this can use up a turn */
-	if (monster_turn_multiply(c, mon))
+	if (monster_turn_multiply(mon))
 		return;
 
 	/* Attempt a ranged attack */
 	if (make_ranged_attack(mon)) return;
 
 	/* Work out what kind of movement to use - random movement or AI */
-	if (monster_turn_should_stagger(mon)) {
-		stagger = true;
-	} else {
+	stagger = monster_turn_should_stagger(mon);
+	if (stagger == NO_STAGGER) {
 		/* If there's no sensible move, we're done */
-		if (!get_move(c, mon, &dir, &tracking)) return;
+		if (!get_move(mon, &dir, &tracking)) return;
 	}
 
 	/* Try to move first in the chosen direction, or next either side of the
@@ -1397,27 +1579,29 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 	 * can't move in their chosen direction. */
 	for (i = 0; i < 5 && !did_something; i++) {
 		/* Get the direction (or stagger) */
-		int d = (stagger ? ddd[randint0(8)] : side_dirs[dir][i]);
+		int d = (stagger != NO_STAGGER) ? ddd[randint0(8)] : side_dirs[dir][i];
 
 		/* Get the grid to step to or attack */
 		struct loc new = loc_sum(mon->grid, ddgrid[d]);
 
 		/* Tracking monsters have their best direction, don't change */
-		if ((i > 0) && !stagger && !square_isview(c, mon->grid) && tracking) {
+		if ((i > 0) && stagger == NO_STAGGER &&
+			!square_isview(cave, mon->grid) && tracking) {
 			break;
 		}
 
 		/* Check if we can move */
-		if (!monster_turn_can_move(c, mon, m_name, new, &did_something))
+		if (!monster_turn_can_move(mon, m_name, new,
+								   stagger == CONFUSED_STAGGER, &did_something))
 			continue;
 
 		/* Try to break the glyph if there is one.  This can happen multiple
 		 * times per turn because failure does not break the loop */
-		if (square_iswarded(c, new) && !monster_turn_attack_glyph(c, mon, new))
+		if (square_iswarded(cave, new) && !monster_turn_attack_glyph(mon, new))
 			continue;
 
 		/* Break a decoy if there is one */
-		if (square_isdecoyed(c, new)) {
+		if (square_isdecoyed(cave, new)) {
 			/* Learn about if the monster attacks */
 			if (monster_is_visible(mon))
 				rf_on(lore->flags, RF_NEVER_BLOW);
@@ -1427,13 +1611,13 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 				continue;
 
 			/* Wait a minute... */
-			square_destroy_decoy(c, new);
+			square_destroy_decoy(cave, new);
 			did_something = true;
 			break;
 		}
 
 		/* The player is in the way. */
-		if (square_isplayer(c, new)) {
+		if (square_isplayer(cave, new)) {
 			/* Learn about if the monster attacks */
 			if (monster_is_visible(mon))
 				rf_on(lore->flags, RF_NEVER_BLOW);
@@ -1459,8 +1643,8 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 		}
 
 		/* A monster is in the way, try to push past/kill */
-		if (square_monster(c, new)) {
-			did_something = monster_turn_try_push(c, mon, m_name, new);
+		if (square_monster(cave, new)) {
+			did_something = monster_turn_try_push(mon, m_name, new);
 		} else {
 			/* Otherwise we can just move */
 			monster_swap(mon->grid, new);
@@ -1468,10 +1652,8 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 		}
 
 		/* Scan all objects in the grid, if we reached it */
-		if (mon == square_monster(c, new)) {
-			monster_desc(m_name, sizeof(m_name), mon,
-						 MDESC_CAPITAL | MDESC_IND_HID);
-			monster_turn_grab_objects(c, mon, m_name, new);
+		if (mon == square_monster(cave, new)) {
+			monster_turn_grab_objects(mon, m_name, new);
 		}
 	}
 
@@ -1483,16 +1665,19 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 		/* Possible disturb */
 		if (monster_is_visible(mon) && monster_is_in_view(mon) && 
 			OPT(player, disturb_near))
-			disturb(player, 0);		
+			disturb(player);		
 	}
 
-	/* Hack -- get "bold" if out of options */
-	if (!did_something && mon->m_timed[MON_TMD_FEAR])
-		mon_clear_timed(mon, MON_TMD_FEAR, MON_TMD_FLG_NOTIFY);
+	/* Out of options - monster is paralyzed by fear (unless attacked) */
+	if (!did_something && mon->m_timed[MON_TMD_FEAR]) {
+		int amount = mon->m_timed[MON_TMD_FEAR];
+		mon_clear_timed(mon, MON_TMD_FEAR, MON_TMD_FLG_NOMESSAGE);
+		mon_inc_timed(mon, MON_TMD_HOLD, amount, MON_TMD_FLG_NOTIFY);
+	}
 
 	/* If we see an unaware monster do something, become aware of it */
 	if (did_something && monster_is_camouflaged(mon))
-		become_aware(mon);
+		become_aware(cave, mon);
 }
 
 
@@ -1504,7 +1689,7 @@ static void monster_turn(struct chunk *c, struct monster *mon)
 /**
  * Determine whether a monster is active or passive
  */
-static bool monster_check_active(struct chunk *c, struct monster *mon)
+static bool monster_check_active(struct monster *mon)
 {
 	if ((mon->cdis <= mon->race->hearing) && monster_passes_walls(mon)) {
 		/* Character is inside scanning range, monster can go straight there */
@@ -1512,16 +1697,16 @@ static bool monster_check_active(struct chunk *c, struct monster *mon)
 	} else if (mon->hp < mon->maxhp) {
 		/* Monster is hurt */
 		mflag_on(mon->mflag, MFLAG_ACTIVE);
-	} else if (square_isview(c, mon->grid)) {
+	} else if (square_isview(cave, mon->grid)) {
 		/* Monster can "see" the player (checked backwards) */
 		mflag_on(mon->mflag, MFLAG_ACTIVE);
-	} else if (monster_can_hear(c, mon)) {
+	} else if (monster_can_hear(mon)) {
 		/* Monster can hear the player */
 		mflag_on(mon->mflag, MFLAG_ACTIVE);
-	} else if (monster_can_smell(c, mon)) {
+	} else if (monster_can_smell(mon)) {
 		/* Monster can smell the player */
 		mflag_on(mon->mflag, MFLAG_ACTIVE);
-	} else if (monster_taking_terrain_damage(mon)) {
+	} else if (monster_taking_terrain_damage(cave, mon)) {
 		/* Monster is taking damage from the terrain */
 		mflag_on(mon->mflag, MFLAG_ACTIVE);
 	} else {
@@ -1540,12 +1725,11 @@ static bool monster_check_active(struct chunk *c, struct monster *mon)
  * the player.  Currently straight line distance is used; possibly this
  * should take into account dungeon structure.
  */
-static void monster_reduce_sleep(struct chunk *c, struct monster *mon)
+static void monster_reduce_sleep(struct monster *mon)
 {
-	bool woke_up = false;
 	int stealth = player->state.skills[SKILL_STEALTH];
-	int player_noise = 1 << (30 - stealth);
-	int notice = randint0(1024);
+	uint32_t player_noise = ((uint32_t) 1) << (30 - stealth);
+	uint32_t notice = (uint32_t) randint0(1024);
 	struct monster_lore *lore = get_lore(mon->race);
 
 	/* Aggravation */
@@ -1557,17 +1741,17 @@ static void monster_reduce_sleep(struct chunk *c, struct monster *mon)
 
 		/* Get the monster name */
 		monster_desc(m_name, sizeof(m_name), mon,
-					 MDESC_CAPITAL | MDESC_IND_HID);
+			MDESC_CAPITAL | MDESC_IND_HID | MDESC_COMMA);
 
 		/* Notify the player if aware */
-		if (monster_is_obvious(mon))
+		if (monster_is_obvious(mon)) {
 			msg("%s wakes up.", m_name);
-
-		woke_up = true;
-
+			equip_learn_flag(player, OF_AGGRAVATE);
+		}
 	} else if ((notice * notice * notice) <= player_noise) {
 		int sleep_reduction = 1;
-		int local_noise = c->noise.grids[mon->grid.y][mon->grid.x];
+		int local_noise = cave->noise.grids[mon->grid.y][mon->grid.x];
+		bool woke_up = false;
 
 		/* Test - wake up faster in hearing distance of the player 
 		 * Note no dependence on stealth for now */
@@ -1599,11 +1783,11 @@ static void monster_reduce_sleep(struct chunk *c, struct monster *mon)
  *
  * Returns true if the monster is skipping its turn.
  */
-static bool process_monster_timed(struct chunk *c, struct monster *mon)
+static bool process_monster_timed(struct monster *mon)
 {
 	/* If the monster is asleep or just woke up, then it doesn't act */
 	if (mon->m_timed[MON_TMD_SLEEP]) {
-		monster_reduce_sleep(c, mon);
+		monster_reduce_sleep(mon);
 		return true;
 	} else {
 		/* Awake, active monsters may become aware */
@@ -1698,7 +1882,7 @@ static void regen_monster(struct monster *mon, int num)
  * of the processor time in normal situations, greater if the character is
  * resting.
  */
-void process_monsters(struct chunk *c, int minimum_energy)
+void process_monsters(int minimum_energy)
 {
 	int i;
 	int mspeed;
@@ -1711,7 +1895,7 @@ void process_monsters(struct chunk *c, int minimum_energy)
 		regen = true;
 
 	/* Process the monsters (backwards) */
-	for (i = cave_monster_max(c) - 1; i >= 1; i--) {
+	for (i = cave_monster_max(cave) - 1; i >= 1; i--) {
 		struct monster *mon;
 		bool moving;
 
@@ -1719,7 +1903,7 @@ void process_monsters(struct chunk *c, int minimum_energy)
 		if (player->is_dead || player->upkeep->generate_level) break;
 
 		/* Get a 'live' monster */
-		mon = cave_monster(c, i);
+		mon = cave_monster(cave, i);
 		if (!mon->race) continue;
 
 		/* Ignore monsters that have already been handled */
@@ -1762,19 +1946,25 @@ void process_monsters(struct chunk *c, int minimum_energy)
 		if (monster_is_mimicking(mon)) continue;
 
 		/* Check if the monster is active */
-		if (monster_check_active(c, mon)) {
+		if (monster_check_active(mon)) {
 			/* Process timed effects - skip turn if necessary */
-			if (process_monster_timed(c, mon))
+			if (process_monster_timed(mon))
 				continue;
 
 			/* Set this monster to be the current actor */
-			c->mon_current = i;
+			cave->mon_current = i;
 
 			/* The monster takes its turn */
-			monster_turn(c, mon);
+			monster_turn(mon);
+
+			/*
+			 * For symmetry with the player, monster can take
+			 * terrain damage after its turn.
+			 */
+			monster_take_terrain_damage(mon);
 
 			/* Monster is no longer current */
-			c->mon_current = -1;
+			cave->mon_current = -1;
 		}
 	}
 
@@ -1797,9 +1987,6 @@ void reset_monsters(void)
 	for (i = cave_monster_max(cave) - 1; i >= 1; i--) {
 		/* Access the monster */
 		mon = cave_monster(cave, i);
-
-		/* Dungeon hurts monsters */
-		monster_take_terrain_damage(mon);
 
 		/* Monster is ready to go again */
 		mflag_off(mon->mflag, MFLAG_HANDLED);

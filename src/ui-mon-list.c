@@ -22,6 +22,7 @@
 #include "mon-lore.h"
 #include "mon-util.h"
 #include "player-timed.h"
+#include "ui-mon-list.h"
 #include "ui-output.h"
 #include "ui-prefs.h"
 #include "ui-term.h"
@@ -97,11 +98,11 @@ static void monster_list_format_section(const monster_list_t *list, textblock *t
 	for (index = 0; index < total && line_count < lines_to_display; index++) {
 		char asleep[20] = { '\0' };
 		char location[20] = { '\0' };
-		byte line_attr;
+		uint8_t line_attr;
 		size_t full_width;
 		size_t name_width;
-		u16b count_in_section = 0;
-		u16b asleep_in_section = 0;
+		uint16_t count_in_section = 0;
+		uint16_t asleep_in_section = 0;
 
 		line_buffer[0] = '\0';
 
@@ -160,8 +161,7 @@ static void monster_list_format_section(const monster_list_t *list, textblock *t
 			full_width += strlen(line_buffer) - utf8_strlen(line_buffer);
 			line_attr = monster_list_entry_line_color(&list->entries[index]);
 			textblock_append_c(tb, line_attr, "%-*s%s\n",
-							   full_width,
-							   line_buffer, location);
+				(int) full_width, line_buffer, location);
 		}
 
 		line_count++;
@@ -314,7 +314,7 @@ static void monster_list_format_textblock(const monster_list_t *list, textblock 
 /**
  * Get correct monster glyphs.
  */
-void monster_list_get_glyphs(monster_list_t *list)
+static void monster_list_get_glyphs(monster_list_t *list)
 {
 	int i;
 
@@ -327,6 +327,11 @@ void monster_list_get_glyphs(monster_list_t *list)
 		/* If no monster attribute use the standard UI picture. */
 		if (!entry->attr)
 			entry->attr = monster_x_attr[entry->race->ridx];
+		/* If purple_uniques is relevant, apply it. */
+		if (!(entry->attr & 0x80) && OPT(player, purple_uniques)
+				&& rf_has(entry->race->flags, RF_UNIQUE)) {
+			entry->attr = COLOUR_VIOLET;
+		}
 	}
 }
 
@@ -387,47 +392,68 @@ void monster_list_show_interactive(int height, int width)
 	size_t max_width = 0, max_height = 0;
 	int safe_height, safe_width;
 	region r;
+	int sort_exp = 0;
+	struct keypress ch;
 
 	if (height < 1 || width < 1)
 		return;
 
-	tb = textblock_new();
-	list = monster_list_new();
+	// Repeat
+	do {
 
-	monster_list_collect(list);
-	monster_list_get_glyphs(list);
-	monster_list_sort(list, monster_list_standard_compare);
+		tb = textblock_new();
+		list = monster_list_new();
 
-	/* Figure out optimal display rect. Large numbers are passed as the height
-	 * and width limit so that we can calculate the maximum number of rows and
-	 * columns to display the list nicely. We then adjust those values as
-	 * needed to fit in the main term. Height is adjusted to account for the
-	 * texblock prompt. The list is positioned on the right side of the term
-	 * underneath the status line.
-	 */
-	monster_list_format_textblock(list, NULL, 1000, 1000, &max_height,
-								  &max_width);
-	safe_height = MIN(height - 2, (int)max_height + 2);
-	safe_width = MIN(width - 13, (int)max_width);
-	r.col = -safe_width;
-	r.row = 1;
-	r.width = safe_width;
-	r.page_rows = safe_height;
+		monster_list_collect(list);
+		monster_list_get_glyphs(list);
 
-	/*
-	 * Actually draw the list. We pass in max_height to the format function so
-	 * that all lines will be appended to the textblock. The textblock itself
-	 * will handle fitting it into the region. However, we have to pass
-	 * safe_width so that the format function will pad the lines properly so
-	 * that the location string is aligned to the right edge of the list.
-	 */
-	monster_list_format_textblock(list, tb, (int)max_height, safe_width, NULL,
-								  NULL);
-	region_erase_bordered(&r);
-	textui_textblock_show(tb, r, NULL);
+		monster_list_sort(list, sort_exp ? monster_list_compare_exp : monster_list_standard_compare);
 
-	textblock_free(tb);
-	monster_list_free(list);
+		/* Figure out optimal display rect. Large numbers are passed as the height
+		 * and width limit so that we can calculate the maximum number of rows and
+		 * columns to display the list nicely. We then adjust those values as
+		 * needed to fit in the main term. Height is adjusted to account for the
+		 * texblock prompt. The list is positioned on the right side of the term
+		 * underneath the status line.
+		 */
+		monster_list_format_textblock(list, NULL, 1000, 1000, &max_height,
+									  &max_width);
+		safe_height = MIN(height - 3, (int) max_height + 3);
+		safe_width = MIN(width - 40, (int) max_width);
+		r.col = -safe_width;
+		r.row = 1;
+		r.width = safe_width;
+		r.page_rows = safe_height;
+
+		/*
+		 * Actually draw the list. We pass in max_height to the format function so
+		 * that all lines will be appended to the textblock. The textblock itself
+		 * will handle fitting it into the region. However, we have to pass
+		 * safe_width so that the format function will pad the lines properly so
+		 * that the location string is aligned to the right edge of the list.
+		 */
+		monster_list_format_textblock(list, tb, (int) max_height, safe_width, NULL,
+									  NULL);
+		region_erase_bordered(&r);
+
+		char buf[300];
+
+		if (sort_exp) {
+			my_strcpy(buf, "Press 'x' to turn OFF 'sort by exp'", sizeof(buf));
+		}
+		else {
+			my_strcpy(buf, "Press 'x' to turn ON 'sort by exp'", sizeof(buf));
+		}
+
+		ch = textui_textblock_show(tb, r, buf);
+
+		// Toggle sort
+		sort_exp = !sort_exp;
+
+		textblock_free(tb);
+		monster_list_free(list);
+	}
+	while (ch.code == 'x');
 }
 
 /**

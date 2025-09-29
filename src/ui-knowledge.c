@@ -20,9 +20,13 @@
 #include "angband.h"
 #include "cave.h"
 #include "cmds.h"
+#include "effects.h"
+#include "effects-info.h"
 #include "game-input.h"
+#include "game-world.h"
 #include "grafmode.h"
 #include "init.h"
+#include "mon-init.h"
 #include "mon-lore.h"
 #include "mon-util.h"
 #include "monster.h"
@@ -37,11 +41,15 @@
 #include "object.h"
 #include "player-calcs.h"
 #include "player-history.h"
+#include "player-util.h"
+#include "project.h"
 #include "store.h"
 #include "target.h"
 #include "trap.h"
 #include "ui-context.h"
+#include "ui-equip-cmp.h"
 #include "ui-history.h"
+#include "ui-knowledge.h"
 #include "ui-menu.h"
 #include "ui-mon-list.h"
 #include "ui-mon-lore.h"
@@ -54,6 +62,7 @@
 #include "ui-store.h"
 #include "ui-target.h"
 #include "wizard.h"
+#include "z-util.h"
 
 /**
  * The first part of this file contains the knowledge menus.  Generic display
@@ -102,7 +111,7 @@ typedef struct {
 	wchar_t *(*xchar)(int oid);
 
 	/* Get color attr for OID (by address) */
-	byte *(*xattr)(int oid);
+	uint8_t *(*xattr)(int oid);
 
 	/* Returns optional extra prompt */
 	const char *(*xtra_prompt)(int oid);
@@ -124,6 +133,19 @@ typedef struct join {
 		int gid;
 } join_t;
 
+static struct parser *init_ui_knowledge_parser(void);
+static errr run_ui_knowledge_parser(struct parser *p);
+static errr finish_ui_knowledge_parser(struct parser *p);
+static void cleanup_ui_knowledge_parsed_data(void);
+
+struct file_parser ui_knowledge_parser = {
+	"ui_knowledge",
+	init_ui_knowledge_parser,
+	run_ui_knowledge_parser,
+	finish_ui_knowledge_parser,
+	cleanup_ui_knowledge_parsed_data
+};
+
 /**
  * A default group-by
  */
@@ -132,8 +154,8 @@ static join_t *default_join;
 /**
  * Clipboard variables for copy & paste in visual mode
  */
-static byte attr_idx = 0;
-static byte char_idx = 0;
+static uint8_t attr_idx = 0;
+static wchar_t char_idx = 0;
 
 /**
  * ------------------------------------------------------------------------
@@ -155,22 +177,18 @@ static int default_group_id(int oid)
  */
 static int feat_order(int feat)
 {
-	struct feature *f = &f_info[feat];
-
-	switch (f->d_char)
-	{
-		case L'.': 				return 0;
-		case L'\'': case L'+': 	return 1;
-		case L'<': case L'>':	return 2;
-		case L'#':				return 3;
-		case L'*': case L'%' :	return 4;
-		case L';': case L':' :	return 5;
-		case L' ':				return 7;
-		default:
-		{
-			return 6;
-		}
-	}
+	if (tf_has(f_info[feat].flags, TF_SHOP)) return 6;
+	if (tf_has(f_info[feat].flags, TF_STAIR)) return 2;
+	if (tf_has(f_info[feat].flags, TF_DOOR_ANY)) return 1;
+	/* These also have WALL set so check them first before checking WALL. */
+	if (tf_has(f_info[feat].flags, TF_MAGMA)
+		|| tf_has(f_info[feat].flags, TF_QUARTZ)) return 4;
+	/* These also have ROCK set so check them first before checking ROCK. */
+	if (tf_has(f_info[feat].flags, TF_WALL)) return 3;
+	if (tf_has(f_info[feat].flags, TF_ROCK)) return 5;
+	/* Many above have PASSABLE so do this last. */
+	if (tf_has(f_info[feat].flags, TF_PASSABLE)) return 0;
+	return 7;
 }
 
 
@@ -212,7 +230,7 @@ static int logical_height(int height)
  * Display tiles.
  */
 static void display_tiles(int col, int row, int height, int width,
-						  byte attr_top, byte char_left)
+		uint8_t attr_top, wchar_t char_left)
 {
 	int i, j;
 
@@ -227,8 +245,8 @@ static void display_tiles(int col, int row, int height, int width,
 	for (i = 0; i < height; i++) {
 		/* Display columns until done */
 		for (j = 0; j < width; j++) {
-			byte a;
-			unsigned char c;
+			uint8_t a;
+			wchar_t c;
 			int x = col + actual_width(j);
 			int y = row + actual_height(i);
 			int ia, ic;
@@ -236,8 +254,8 @@ static void display_tiles(int col, int row, int height, int width,
 			ia = attr_top + i;
 			ic = char_left + j;
 
-			a = (byte)ia;
-			c = (unsigned char)ic;
+			a = (uint8_t)ia;
+			c = (wchar_t)ic;
 
 			/* Display symbol */
 			big_pad(x, y, a, c);
@@ -249,8 +267,8 @@ static void display_tiles(int col, int row, int height, int width,
 /**
  * Place the cursor at the correct position for tile picking
  */
-static void place_tile_cursor(int col, int row, byte a, byte c, byte attr_top,
-							  byte char_left)
+static void place_tile_cursor(int col, int row, uint8_t a, wchar_t c,
+		uint8_t attr_top, wchar_t char_left)
 {
 	int i = a - attr_top;
 	int j = c - char_left;
@@ -287,13 +305,12 @@ static void remove_tiles(int col, int row, bool *picker_ptr, int width,
  *  Do tile picker command -- Change tiles
  */
 static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
-								int height, int width, byte *attr_top_ptr,
-								byte *char_left_ptr, byte *cur_attr_ptr,
-								byte *cur_char_ptr, int col, int row,
-								int *delay)
+		int height, int width, uint8_t *attr_top_ptr,
+		wchar_t *char_left_ptr, uint8_t *cur_attr_ptr,
+		wchar_t *cur_char_ptr, int col, int row, int *delay)
 {
-	static byte attr_old = 0;
-	static char char_old = 0;
+	static uint8_t attr_old = 0;
+	static wchar_t char_old = 0;
 
 	/* These are the distance we want to maintain between the
 	 * cursor and borders. */
@@ -307,8 +324,8 @@ static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
 	if (*tile_picker_ptr &&  (ke.type == EVT_MOUSE)) {
 		int eff_width = actual_width(width);
 		int eff_height = actual_height(height);
-		byte a = *cur_attr_ptr;
-		byte c = *cur_char_ptr;
+		uint8_t a = *cur_attr_ptr;
+		wchar_t c = *cur_char_ptr;
 
 		int my = logical_height(ke.mouse.y - row);
 		int mx = logical_width(ke.mouse.x - col);
@@ -393,8 +410,8 @@ static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
 				*tile_picker_ptr = true;
 				bigcurs = true;
 
-				*attr_top_ptr = (byte)MAX(0, (int)*cur_attr_ptr - frame_top);
-				*char_left_ptr = (char)MAX(0, (int)*cur_char_ptr - frame_left);
+				*attr_top_ptr = (uint8_t)MAX(0, (int)*cur_attr_ptr - frame_top);
+				*char_left_ptr = (wchar_t)MAX(0, (int)*cur_char_ptr - frame_left);
 
 				attr_old = *cur_attr_ptr;
 				char_old = *cur_char_ptr;
@@ -424,13 +441,13 @@ static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
 			if (attr_idx) {
 				/* Set the char */
 				*cur_attr_ptr = attr_idx;
-				*attr_top_ptr = (byte)MAX(0, (int)*cur_attr_ptr - frame_top);
+				*attr_top_ptr = (uint8_t)MAX(0, (int)*cur_attr_ptr - frame_top);
 			}
 
 			if (char_idx) {
 				/* Set the char */
 				*cur_char_ptr = char_idx;
-				*char_left_ptr = (char)MAX(0, (int)*cur_char_ptr - frame_left);
+				*char_left_ptr = (wchar_t)MAX(0, (int)*cur_char_ptr - frame_left);
 			}
 
 			return true;
@@ -439,8 +456,8 @@ static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
 		default:
 		{
 			int d = target_dir(ke.key);
-			byte a = *cur_attr_ptr;
-			byte c = *cur_char_ptr;
+			uint8_t a = *cur_attr_ptr;
+			wchar_t c = *cur_char_ptr;
 
 			if (!*tile_picker_ptr)
 				break;
@@ -493,7 +510,7 @@ static bool tile_picker_command(ui_event ke, bool *tile_picker_ptr,
 /**
  * Display glyph and colours
  */
-static void display_glyphs(int col, int row, int height, int width, byte a, 
+static void display_glyphs(int col, int row, int height, int width, uint8_t a,
 			   wchar_t c)
 {
 	int i;
@@ -516,23 +533,21 @@ static void display_glyphs(int col, int row, int height, int width, byte a,
  * Do glyph picker command -- Change glyphs
  */
 static bool glyph_command(ui_event ke, bool *glyph_picker_ptr,
-			  int height, int width, byte *cur_attr_ptr,
+			  int height, int width, uint8_t *cur_attr_ptr,
 			  wchar_t *cur_char_ptr, int col, int row)
 {
-        static byte attr_old = 0;
-	static char char_old = 0;
+	static uint8_t attr_old = 0;
+	static wchar_t char_old = 0;
 	
 	/* Get mouse movement */
 	if (*glyph_picker_ptr && (ke.type == EVT_MOUSE)) {
-	        byte a = *cur_attr_ptr;
-
 		int mx = logical_width(ke.mouse.x - col);
 		
-		if (ke.mouse.y != row + height/2) return false;
+		if (ke.mouse.y != row + height / 2) return false;
 		
 		if ((mx >= 0) && (mx < MAX_COLORS) && (ke.mouse.button == 1)) {
-		        /* Set the visual */
-		        *cur_attr_ptr = a = mx - 14;
+			/* Set the visual */
+			*cur_attr_ptr = mx - 14;
 
 			/* Accept change */
 			remove_tiles(col, row, glyph_picker_ptr, width, height);
@@ -646,7 +661,7 @@ static bool glyph_command(ui_event ke, bool *glyph_picker_ptr,
 	    default:
 	    {
 		    int d = target_dir(ke.key);
-		    byte a = *cur_attr_ptr;
+		    uint8_t a = *cur_attr_ptr;
 		    
 		    if (!*glyph_picker_ptr)
 				break;
@@ -678,7 +693,7 @@ static void display_group_member(struct menu *menu, int oid,
 						bool cursor, int row, int col, int wid)
 {
 	const member_funcs *o_funcs = menu->menu_data;
-	byte attr = curs_attrs[CURS_KNOWN][cursor == oid];
+	uint8_t attr = curs_attrs[CURS_KNOWN][cursor == oid];
 
 	(void)wid;
 
@@ -692,9 +707,11 @@ static void display_group_member(struct menu *menu, int oid,
 	/* Do visual mode */
 	if (o_funcs->is_visual && o_funcs->xattr) {
 		wchar_t c = *o_funcs->xchar(oid);
-		byte a = *o_funcs->xattr(oid);
+		uint8_t a = *o_funcs->xattr(oid);
+		char buf[12];
 
-		c_put_str(attr, format("%d/%d", a, c), row, 60);
+		strnfmt(buf, sizeof(buf), "%d/%ld", a, (long int)c);
+		c_put_str(attr, buf, row, 64 - (int) strlen(buf));
 	}
 }
 
@@ -732,7 +749,7 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 	int g_cur = 0, grp_old = -1; /* group list positions */
 	int o_cur = 0;					/* object list positions */
 	int g_o_count = 0;				 /* object count for group */
-	int oid = -1;  				/* object identifiers */
+	int oid;  				/* object identifiers */
 
 	region title_area = { 0, 0, 0, 4 };
 	region group_region = { 0, 6, MISSING, -2 };
@@ -742,8 +759,8 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 	bool tiles = (current_graphics_mode != NULL);
 	bool tile_picker = false;
 	bool glyph_picker = false;
-	byte attr_top = 0;
-	byte char_left = 0;
+	uint8_t attr_top = 0;
+	wchar_t char_left = 0;
 
 	int delay = 0;
 
@@ -768,16 +785,11 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 	int wid, hgt;
 	int i;
 	int prev_g = -1;
-
-	int omode = OPT(player, rogue_like_commands);
 	ui_event ke;
 
 	/* Get size */
 	Term_get_size(&wid, &hgt);
 	browser_rows = hgt - 8;
-
-	/* Disable the roguelike commands for the duration */
-	OPT(player, rogue_like_commands) = false;
 
 	/* Determine if using tiles or not */
 	if (tiles) tiles = (current_graphics_mode->grafID != 0);
@@ -858,10 +870,10 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 
 			/* Print dividers: horizontal and vertical */
 			for (i = 0; i < 79; i++)
-				Term_putch(i, 5, COLOUR_WHITE, '=');
+				Term_putch(i, 5, COLOUR_WHITE, L'=');
 
 			for (i = 0; i < browser_rows; i++)
-				Term_putch(g_name_len + 1, 6 + i, COLOUR_WHITE, '|');
+				Term_putch(g_name_len + 1, 6 + i, COLOUR_WHITE, L'|');
 
 
 			/* Reset redraw flag */
@@ -933,17 +945,17 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 		if (tile_picker) {
 		        bigcurs = true;
 			display_tiles(g_name_len + 3, 7, browser_rows - 1,
-				      wid - (g_name_len + 3), attr_top, 
+				      wid - (g_name_len + 3), attr_top,
 				      char_left);
 			place_tile_cursor(g_name_len + 3, 7, 
 					  *o_funcs.xattr(oid),
-					  (byte) *o_funcs.xchar(oid), 
+					  *o_funcs.xchar(oid),
 					  attr_top, char_left);
 		}
 
 		if (glyph_picker) {
 		        display_glyphs(g_name_len + 3, 7, browser_rows - 1,
-				       wid - (g_name_len + 3), 
+				       wid - (g_name_len + 3),
 				       *o_funcs.xattr(oid),
 				       *o_funcs.xchar(oid));
 		}
@@ -975,18 +987,19 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 		if (o_funcs.xattr && o_funcs.xchar) {
 			if (tiles) {
 				if (tile_picker_command(ke, &tile_picker, 
-										browser_rows - 1,
-										wid - (g_name_len + 3),
-										&attr_top, &char_left,
-										o_funcs.xattr(oid),
-										(byte *) o_funcs.xchar(oid), 
-										g_name_len + 3, 7, &delay))
+						browser_rows - 1,
+						wid - (g_name_len + 3),
+						&attr_top, &char_left,
+						o_funcs.xattr(oid),
+						o_funcs.xchar(oid),
+						g_name_len + 3, 7, &delay))
 					continue;
 			} else {
 				if (glyph_command(ke, &glyph_picker, 
-								  browser_rows - 1, wid - (g_name_len + 3), 
-								  o_funcs.xattr(oid), o_funcs.xchar(oid), 
-								  g_name_len + 3, 7))
+						browser_rows - 1, wid - (g_name_len + 3),
+						o_funcs.xattr(oid),
+						o_funcs.xchar(oid),
+						g_name_len + 3, 7))
 					continue;
 			}
 		}
@@ -1055,9 +1068,6 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
 		}
 	}
 
-	/* Restore roguelike option */
-	OPT(player, rogue_like_commands) = omode;
-
 	/* Prompt */
 	if (!grp_cnt)
 		prt(format("No %s known.", title), 15, 0);
@@ -1075,62 +1085,18 @@ static void display_knowledge(const char *title, int *obj_list, int o_count,
  * ------------------------------------------------------------------------ */
 
 /**
- * Description of each monster group.
+ * Is a flat array describing each monster group.  Configured by
+ * ui_knowledge.txt.  The last element receives special treatment and is
+ * used to catch any type of monster not caught by the other categories.
+ * That's intended as a debugging tool while modding the game.
  */
-static struct
-{
-	const wchar_t *chars;
-	const char *name;
-} monster_group[] = {
-	{ (const wchar_t *)-1,   "Uniques" },
-	{ L"A",        "Ainur" },
-	{ L"a",        "Ants" },
-	{ L"b",        "Bats" },
-	{ L"B",        "Birds" },
-	{ L"C",        "Canines" },
-	{ L"c",        "Centipedes" },
-	{ L"uU",       "Demons" },
-	{ L"dD",       "Dragons" },
-	{ L"vE",       "Elementals/Vortices" },
-	{ L"e",        "Eyes/Beholders" },
-	{ L"f",        "Felines" },
-	{ L"G",        "Ghosts" },
-	{ L"OP",       "Giants/Ogres" },
-	{ L"g",        "Golems" },
-	{ L"H",        "Harpies/Hybrids" },
-	{ L"h",        "Hominids (Elves, Dwarves)" },
-	{ L"M",        "Hydras" },
-	{ L"i",        "Icky Things" },
-	{ L"FI",       "Insects" },
-	{ L"j",        "Jellies" },
-	{ L"K",        "Killer Beetles" },
-	{ L"k",        "Kobolds" },
-	{ L"L",        "Lichs" },
-	{ L"tp",       "Men" },
-	{ L".$!?=~_",  "Mimics" },
-	{ L"m",        "Molds" },
-	{ L",",        "Mushroom Patches" },
-	{ L"n",        "Nagas" },
-	{ L"o",        "Orcs" },
-	{ L"q",        "Quadrupeds" },
-	{ L"Q",        "Quylthulgs" },
-	{ L"R",        "Reptiles/Amphibians" },
-	{ L"r",        "Rodents" },
-	{ L"S",        "Scorpions/Spiders" },
-	{ L"s",        "Skeletons/Drujs" },
-	{ L"J",        "Snakes" },
-	{ L"l",        "Trees/Ents" },
-	{ L"T",        "Trolls" },
-	{ L"V",        "Vampires" },
-	{ L"W",        "Wights/Wraiths" },
-	{ L"w",        "Worms/Worm Masses" },
-	{ L"X",        "Xorns/Xarens" },
-	{ L"y",        "Yeeks" },
-	{ L"Y",        "Yeti" },
-	{ L"Z",        "Zephyr Hounds" },
-	{ L"z",        "Zombies" },
-	{ NULL,       NULL }
-};
+static struct ui_monster_category *monster_group = NULL;
+
+/**
+ * Is the number of entries, including the last one receiving special
+ * treatment, in monster_group.
+ */
+static int n_monster_group = 0;
 
 /**
  * Display a monster
@@ -1145,8 +1111,8 @@ static void display_monster(int col, int row, bool cursor, int oid)
 	struct monster_lore *lore = &l_list[r_idx];
 
 	/* Choose colors */
-	byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
-	byte a = monster_x_attr[race->ridx];
+	uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
+	uint8_t a = monster_x_attr[race->ridx];
 	wchar_t c = monster_x_char[race->ridx];
 
 	if ((tile_height != 1) && (a & 0x80)) {
@@ -1191,14 +1157,35 @@ static int m_cmp_race(const void *a, const void *b)
 	if (c)
 		return c;
 
-	/* Order results */
-	c = r_a->d_char - r_b->d_char;
-	if (c && gid != 0) {
-		/* UNIQUE group is ordered by level & name only */
-		/* Others by order they appear in the group symbols */
-		return wcschr(monster_group[gid].chars, r_a->d_char)
-			- wcschr(monster_group[gid].chars, r_b->d_char);
+	/*
+	 * If the group specifies monster bases, order those that are included
+	 * by the base by those bases.  Those that aren't in any of the bases
+	 * appear last.
+	 */
+	assert(gid >= 0 && gid < n_monster_group);
+	if (monster_group[gid].n_inc_bases) {
+		int base_a = monster_group[gid].n_inc_bases;
+		int base_b = monster_group[gid].n_inc_bases;
+		int i;
+
+		for (i = 0; i < monster_group[gid].n_inc_bases; ++i) {
+			if (r_a->base == monster_group[gid].inc_bases[i]) {
+				base_a = i;
+			}
+			if (r_b->base == monster_group[gid].inc_bases[i]) {
+				base_b = i;
+			}
+		}
+		c = base_a - base_b;
+		if (c) {
+			return c;
+		}
 	}
+
+	/*
+	 * Within the same base or outside of a specified base, order by level
+	 * and then by name.
+	 */
 	c = r_a->level - r_b->level;
 	if (c)
 		return c;
@@ -1211,7 +1198,7 @@ static wchar_t *m_xchar(int oid)
 	return &monster_x_char[default_join[oid].oid];
 }
 
-static byte *m_xattr(int oid)
+static uint8_t *m_xattr(int oid)
 {
 	return &monster_x_attr[default_join[oid].oid];
 }
@@ -1273,23 +1260,43 @@ static void mon_summary(int gid, const int *item_list, int n, int top,
 
 static int count_known_monsters(void)
 {
-	int m_count = 0;
-	int i;
-	size_t j;
+	int m_count = 0, i;
 
-	for (i = 0; i < z_info->r_max; i++) {
+	for (i = 0; i < z_info->r_max; ++i) {
 		struct monster_race *race = &r_info[i];
+		bool classified = false;
+		int j;
+
 		if (!l_list[i].all_known && !l_list[i].sights) {
 			continue;
 		}
-
 		if (!race->name) continue;
 
-		if (rf_has(race->flags, RF_UNIQUE)) m_count++;
+		for (j = 0; j < n_monster_group - 1; ++j) {
+			bool has_base = false;
 
-		for (j = 1; j < N_ELEMENTS(monster_group) - 1; j++) {
-			const wchar_t *pat = monster_group[j].chars;
-			if (wcschr(pat, race->d_char)) m_count++;
+			if (monster_group[j].n_inc_bases) {
+				int k;
+
+				for (k = 0; k < monster_group[j].n_inc_bases;
+						++k) {
+					if (race->base == monster_group[j].inc_bases[k]) {
+						++m_count;
+						has_base = true;
+						classified = true;
+						break;
+					}
+				}
+			}
+			if (!has_base && rf_is_inter(race->flags,
+					monster_group[j].inc_flags)) {
+				++m_count;
+				classified = true;
+			}
+		}
+
+		if (!classified) {
+			++m_count;
 		}
 	}
 
@@ -1301,53 +1308,66 @@ static int count_known_monsters(void)
  */
 static void do_cmd_knowledge_monsters(const char *name, int row)
 {
-	group_funcs r_funcs = {race_name, m_cmp_race, default_group_id, mon_summary,
-						   N_ELEMENTS(monster_group), false};
+	group_funcs r_funcs = {race_name, m_cmp_race, default_group_id,
+		mon_summary, n_monster_group, false };
 
 	member_funcs m_funcs = {display_monster, mon_lore, m_xchar, m_xattr,
-							recall_prompt, 0, 0};
+		recall_prompt, 0, 0};
 
 	int *monsters;
-	int m_count = 0;
-	int i;
-	size_t j;
-
-	for (i = 0; i < z_info->r_max; i++) {
-		struct monster_race *race = &r_info[i];
-		if (!l_list[i].all_known && !l_list[i].sights) {
-			continue;
-		}
-
-		if (!race->name) continue;
-
-		if (rf_has(race->flags, RF_UNIQUE)) m_count++;
-
-		for (j = 1; j < N_ELEMENTS(monster_group) - 1; j++) {
-			const wchar_t *pat = monster_group[j].chars;
-			if (wcschr(pat, race->d_char)) m_count++;
-		}
-	}
+	int m_count = count_known_monsters(), i, ind;
 
 	default_join = mem_zalloc(m_count * sizeof(join_t));
 	monsters = mem_zalloc(m_count * sizeof(int));
 
-	m_count = 0;
-	for (i = 0; i < z_info->r_max; i++) {
+	ind = 0;
+	for (i = 0; i < z_info->r_max; ++i) {
 		struct monster_race *race = &r_info[i];
+		bool classified = false;
+		int j;
+
 		if (!l_list[i].all_known && !l_list[i].sights) {
 			continue;
 		}
-
 		if (!race->name) continue;
 
-		for (j = 0; j < N_ELEMENTS(monster_group) - 1; j++) {
-			const wchar_t *pat = monster_group[j].chars;
-			if (j == 0 && !rf_has(race->flags, RF_UNIQUE)) continue;
-			if (j > 0 && !wcschr(pat, race->d_char)) continue;
+		for (j = 0; j < n_monster_group - 1; ++j) {
+			bool has_base = false;
 
-			monsters[m_count] = m_count;
-			default_join[m_count].oid = i;
-			default_join[m_count++].gid = j;
+			if (monster_group[j].n_inc_bases) {
+				int k;
+
+				for (k = 0; k < monster_group[j].n_inc_bases;
+						++k) {
+					if (race->base == monster_group[j].inc_bases[k]) {
+						assert(ind < m_count);
+						monsters[ind] = ind;
+						default_join[ind].oid = i;
+						default_join[ind].gid = j;
+						++ind;
+						has_base = true;
+						classified = true;
+						break;
+					}
+				}
+			}
+			if (!has_base && rf_is_inter(race->flags,
+					monster_group[j].inc_flags)) {
+				assert(ind < m_count);
+				monsters[ind] = ind;
+				default_join[ind].oid = i;
+				default_join[ind].gid = j;
+				++ind;
+				classified = true;
+			}
+		}
+
+		if (!classified) {
+			assert(ind < m_count);
+			monsters[ind] = ind;
+			default_join[ind].oid = i;
+			default_join[ind].gid = n_monster_group - 1;
+			++ind;
 		}
 	}
 
@@ -1415,7 +1435,8 @@ static void get_artifact_display_name(char *o_name, size_t namelen, int a_idx)
 	object_wipe(known_obj);
 	object_copy(known_obj, obj);
 	obj->known = known_obj;
-	object_desc(o_name, namelen, obj, ODESC_PREFIX | ODESC_BASE | ODESC_SPOIL);
+	object_desc(o_name, namelen, obj,
+		ODESC_PREFIX | ODESC_BASE | ODESC_SPOIL, NULL);
 	object_wipe(known_obj);
 	object_wipe(obj);
 }
@@ -1425,7 +1446,7 @@ static void get_artifact_display_name(char *o_name, size_t namelen, int a_idx)
  */
 static void display_artifact(int col, int row, bool cursor, int oid)
 {
-	byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
+	uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
 	char o_name[80];
 
 	get_artifact_display_name(o_name, sizeof o_name, oid);
@@ -1468,12 +1489,40 @@ static struct object *find_artifact(struct artifact *artifact)
 	}
 
 	/* Store objects */
-	for (i = 0; i < MAX_STORES; i++) {
+	for (i = 0; i < z_info->store_max; i++) {
 		struct store *s = &stores[i];
 		for (obj = s->stock; obj; obj = obj->next) {
 			if (obj->artifact == artifact) return obj;
 		}
 	}
+
+	/* Stored chunk objects */
+	for (i = 0; i < chunk_list_max; i++) {
+		struct chunk *c = chunk_list[i];
+		int j;
+		if (strstr(c->name, "known")) continue;
+
+		/* Ground objects */
+		for (y = 1; y < c->height; y++) {
+			for (x = 1; x < c->width; x++) {
+				struct loc grid = loc(x, y);
+				for (obj = square_object(c, grid); obj; obj = obj->next) {
+					if (obj->artifact == artifact) return obj;
+				}
+			}
+		}
+
+		/* Monster objects */
+		for (j = cave_monster_max(c) - 1; j >= 1; j--) {
+			struct monster *mon = cave_monster(c, j);
+			obj = mon ? mon->held_obj : NULL;
+
+			while (obj) {
+				if (obj->artifact == artifact) return obj;
+				obj = obj->next;
+			}
+		}
+	}	
 
 	return NULL;
 }
@@ -1512,12 +1561,12 @@ static void desc_art_fake(int a_idx)
 			object_copy(known_obj, obj);
 	}
 
-	/* Hack -- Handle stuff */
+	/*Handle stuff */
 	handle_stuff(player);
 
 	tb = object_info(obj, OINFO_NONE);
 	object_desc(header, sizeof(header), obj,
-			ODESC_PREFIX | ODESC_FULL | ODESC_CAPITAL);
+		ODESC_PREFIX | ODESC_FULL | ODESC_CAPITAL, player);
 	if (fake) {
 		object_wipe(known_obj);
 		object_wipe(obj);
@@ -1569,7 +1618,7 @@ static bool artifact_is_known(int a_idx)
 	if (player->wizard)
 		return true;
 
-	if (!a_info[a_idx].created)
+	if (!is_artifact_created(&a_info[a_idx]))
 		return false;
 
 	/* Check all objects to see if it exists but hasn't been IDed */
@@ -1620,13 +1669,20 @@ static void do_cmd_knowledge_artifacts(const char *name, int row)
 
 	int *artifacts;
 	int a_count = 0;
+	char title[40];
 
 	artifacts = mem_zalloc(z_info->a_max * sizeof(int));
 
 	/* Collect valid artifacts */
 	a_count = collect_known_artifacts(artifacts, z_info->a_max);
 
-	display_knowledge("artifacts", artifacts, a_count, obj_f, art_f, NULL);
+	if (OPT(player, birth_randarts)) {
+		strnfmt(title, sizeof(title), "artifacts (seed %08lx)",
+			(unsigned long)seed_randart);
+	} else {
+		strnfmt(title, sizeof(title), "artifacts");
+	}
+	display_knowledge(title, artifacts, a_count, obj_f, art_f, NULL);
 	mem_free(artifacts);
 }
 
@@ -1646,7 +1702,7 @@ static void display_ego_item(int col, int row, bool cursor, int oid)
 	struct ego_item *ego = &e_info[default_item_id(oid)];
 
 	/* Choose a color */
-	byte attr = curs_attrs[0 != (int)ego->everseen][0 != (int)cursor];
+	uint8_t attr = curs_attrs[0 != (int)ego->everseen][0 != (int)cursor];
 
 	/* Display the name */
 	c_prt(attr, ego->name, row, col);
@@ -1719,6 +1775,7 @@ static void do_cmd_knowledge_ego_items(const char *name, int row)
 			/* Note the tvals which are possible for this ego */
 			for (poss = ego->poss_items; poss; poss = poss->next) {
 				struct object_kind *kind = &k_info[poss->kidx];
+				assert(obj_group_order[kind->tval] >= 0);
 				tval[obj_group_order[kind->tval]]++;
 			}
 
@@ -1726,12 +1783,15 @@ static void do_cmd_knowledge_ego_items(const char *name, int row)
 			for (j = 0; j < TV_MAX; j++) {
 				int gid = obj_group_order[j];
 
+				/* Skip if nothing in this group */
+				if (gid < 0) continue;
+
 				/* Ignore duplicates */
-				if ((j > 0) && (gid == default_join[e_count - 1].gid)
+				if ((e_count > 0) && (gid == default_join[e_count - 1].gid)
 					&& (i == default_join[e_count - 1].oid))
 					continue;
 
-				if (tval[obj_group_order[j]]) {
+				if (tval[gid]) {
 					egoitems[e_count] = e_count;
 					default_join[e_count].oid = i;
 					default_join[e_count++].gid = gid;
@@ -1764,10 +1824,10 @@ static void display_object(int col, int row, bool cursor, int oid)
 
 	/* Choose a color */
 	bool aware = (!kind->flavor || kind->aware);
-	byte attr = curs_attrs[(int)aware][(int)cursor];
+	uint8_t attr = curs_attrs[(int)aware][(int)cursor];
 
 	/* Graphics versions of the object_char and object_attr defines */
-	byte a = object_kind_attr(kind);
+	uint8_t a = object_kind_attr(kind);
 	wchar_t c = object_kind_char(kind);
 
 	/* Don't display special artifacts */
@@ -1823,16 +1883,16 @@ static void desc_obj_fake(int k_idx)
 		object_copy(known_obj, obj);
 	obj->known = known_obj;
 
-	/* Hack -- Handle stuff */
+	/* Handle stuff */
 	handle_stuff(player);
 
 	tb = object_info(obj, OINFO_FAKE);
 	object_desc(header, sizeof(header), obj,
-			ODESC_PREFIX | ODESC_CAPITAL);
+		ODESC_PREFIX | ODESC_CAPITAL, player);
 
 	textui_textblock_show(tb, area, header);
-	object_delete(&known_obj);
-	object_delete(&obj);
+	object_delete(NULL, NULL, &known_obj);
+	object_delete(NULL, NULL, &obj);
 	textblock_free(tb);
 
 	/* Restore the old trackee */
@@ -1895,6 +1955,7 @@ static int obj2gid(int oid)
 static wchar_t *o_xchar(int oid)
 {
 	struct object_kind *kind = objkind_byid(oid);
+	if (!kind) return 0;
 
 	if (!kind->flavor || kind->aware)
 		return &kind_x_char[kind->kidx];
@@ -1902,9 +1963,10 @@ static wchar_t *o_xchar(int oid)
 		return &flavor_x_char[kind->flavor->fidx];
 }
 
-static byte *o_xattr(int oid)
+static uint8_t *o_xattr(int oid)
 {
 	struct object_kind *kind = objkind_byid(oid);
+	if (!kind) return NULL;
 
 	if (!kind->flavor || kind->aware)
 		return &kind_x_attr[kind->kidx];
@@ -1922,6 +1984,8 @@ static const char *o_xtra_prompt(int oid)
 	const char *no_insc = ", 's' to toggle ignore, 'r'ecall, '{'";
 	const char *with_insc = ", 's' to toggle ignore, 'r'ecall, '{', '}'";
 
+	if (!kind) return NULL;
+
 	/* Appropriate prompt */
 	if (kind->aware)
 		return kind->note_aware ? with_insc : no_insc;
@@ -1935,6 +1999,7 @@ static const char *o_xtra_prompt(int oid)
 static void o_xtra_act(struct keypress ch, int oid)
 {
 	struct object_kind *k = objkind_byid(oid);
+	if (!k) return;
 
 	/* Toggle ignore */
 	if (ignore_tval(k->tval) && (ch.code == 's' || ch.code == 'S')) {
@@ -2050,7 +2115,7 @@ static const char *rune_group_text[] =
  */
 static void display_rune(int col, int row, bool cursor, int oid )
 {
-	byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
+	uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
 	const char *inscrip = quark_str(rune_note(oid));
 
 	c_prt(attr, rune_name(oid), row, col);
@@ -2077,9 +2142,9 @@ static void rune_lore(int oid)
 	char *title = string_make(rune_name(oid));
 
 	my_strcap(title);
-	textblock_append_c(tb, COLOUR_L_BLUE, title);
+	textblock_append_c(tb, COLOUR_L_BLUE, "%s", title);
 	textblock_append(tb, "\n");
-	textblock_append(tb, rune_desc(oid));
+	textblock_append(tb, "%s", rune_desc(oid));
 	textblock_append(tb, "\n");
 	textui_textblock_show(tb, SCREEN_REGION, NULL);
 	textblock_free(tb);
@@ -2130,7 +2195,7 @@ static void rune_xtra_act(struct keypress ch, int oid)
 
 			/* Add the autoinscription */
 			rune_set_note(oid, note_text);
-			rune_autoinscribe(oid);
+			rune_autoinscribe(player, oid);
 
 			/* Redraw gear */
 			player->upkeep->redraw |= (PR_INVEN | PR_EQUIP);
@@ -2170,7 +2235,7 @@ static void do_cmd_knowledge_runes(const char *name, int row)
 		runes[count++] = i;
 	}
 
-	my_strcpy(buf, format("runes (%d unknown)", rune_max - count), sizeof(buf));
+	strnfmt(buf, sizeof(buf), "runes (%d unknown)", rune_max - count);
 
 	display_knowledge(buf, runes, count, rune_var_f, rune_f, "Inscribed");
 	mem_free(runes);
@@ -2204,7 +2269,7 @@ static const char *feature_group_text[] =
 static void display_feature(int col, int row, bool cursor, int oid )
 {
 	struct feature *feat = &f_info[oid];
-	byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
+	uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
 
 	c_prt(attr, feat->name, row, col);
 
@@ -2212,13 +2277,13 @@ static void display_feature(int col, int row, bool cursor, int oid )
 		/* Display symbols */
 		col = 65;
 		col += big_pad(col, row, feat_x_attr[LIGHTING_DARK][feat->fidx],
-				feat_x_char[LIGHTING_DARK][feat->fidx]);
+					   feat_x_char[LIGHTING_DARK][feat->fidx]);
 		col += big_pad(col, row, feat_x_attr[LIGHTING_LIT][feat->fidx],
-				feat_x_char[LIGHTING_LIT][feat->fidx]);
+					   feat_x_char[LIGHTING_LIT][feat->fidx]);
 		col += big_pad(col, row, feat_x_attr[LIGHTING_TORCH][feat->fidx],
-				feat_x_char[LIGHTING_TORCH][feat->fidx]);
-		col += big_pad(col, row, feat_x_attr[LIGHTING_LOS][feat->fidx],
-				feat_x_char[LIGHTING_LOS][feat->fidx]);
+					   feat_x_char[LIGHTING_TORCH][feat->fidx]);
+		(void) big_pad(col, row, feat_x_attr[LIGHTING_LOS][feat->fidx],
+					   feat_x_char[LIGHTING_LOS][feat->fidx]);
 	}
 }
 
@@ -2250,7 +2315,7 @@ static const char *fkind_name(int gid)
 static enum grid_light_level f_uik_lighting = LIGHTING_LIT;
 
 /* XXX needs *better* retooling for multi-light terrain */
-static byte *f_xattr(int oid)
+static uint8_t *f_xattr(int oid)
 {
 	return &feat_x_attr[f_uik_lighting][oid];
 }
@@ -2261,29 +2326,29 @@ static wchar_t *f_xchar(int oid)
 static void feat_lore(int oid)
 {
 	struct feature *feat = &f_info[oid];
-	textblock *tb = textblock_new();
-	char *title = string_make(feat->name);
 
 	if (feat->desc) {
+		textblock *tb = textblock_new();
+		char *title = string_make(feat->name);
+
 		my_strcap(title);
-		textblock_append_c(tb, COLOUR_L_BLUE, title);
+		textblock_append_c(tb, COLOUR_L_BLUE, "%s", title);
+		string_free(title);
 		textblock_append(tb, "\n");
-		textblock_append(tb, feat->desc);
+		textblock_append(tb, "%s", feat->desc);
 		textblock_append(tb, "\n");
 		textui_textblock_show(tb, SCREEN_REGION, NULL);
 		textblock_free(tb);
 	}
-
-	string_free(title);
 }
 static const char *feat_prompt(int oid)
 {
 	(void)oid;
 		switch (f_uik_lighting) {
-				case LIGHTING_LIT:  return ", 'l/L' for lighting (lit)";
-                case LIGHTING_TORCH: return ", 'l/L' for lighting (torch)";
-				case LIGHTING_LOS:  return ", 'l/L' for lighting (LOS)";
-				default:	return ", 'l/L' for lighting (dark)";
+				case LIGHTING_LIT:  return ", 't/T' for lighting (lit)";
+                case LIGHTING_TORCH: return ", 't/T' for lighting (torch)";
+				case LIGHTING_LOS:  return ", 't/T' for lighting (LOS)";
+				default:	return ", 't/T' for lighting (dark)";
 		}		
 }
 
@@ -2293,14 +2358,14 @@ static const char *feat_prompt(int oid)
 static void f_xtra_act(struct keypress ch, int oid)
 {
 	/* XXX must be a better way to cycle this */
-	if (ch.code == 'l') {
+	if (ch.code == 't') {
 		switch (f_uik_lighting) {
 				case LIGHTING_LIT:  f_uik_lighting = LIGHTING_TORCH; break;
                 case LIGHTING_TORCH: f_uik_lighting = LIGHTING_LOS; break;
 				case LIGHTING_LOS:  f_uik_lighting = LIGHTING_DARK; break;
 				default:	f_uik_lighting = LIGHTING_LIT; break;
 		}		
-	} else if (ch.code == 'L') {
+	} else if (ch.code == 'T') {
 		switch (f_uik_lighting) {
 				case LIGHTING_DARK:  f_uik_lighting = LIGHTING_LOS; break;
                 case LIGHTING_LOS: f_uik_lighting = LIGHTING_TORCH; break;
@@ -2327,9 +2392,9 @@ static void do_cmd_knowledge_features(const char *name, int row)
 	int f_count = 0;
 	int i;
 
-	features = mem_zalloc(z_info->f_max * sizeof(int));
+	features = mem_zalloc(FEAT_MAX * sizeof(int));
 
-	for (i = 0; i < z_info->f_max; i++) {
+	for (i = 0; i < FEAT_MAX; i++) {
 		/* Ignore non-features and mimics */
 		if (f_info[i].name == 0 || f_info[i].mimic)
 			continue;
@@ -2367,7 +2432,7 @@ static const char *trap_group_text[] =
 static void display_trap(int col, int row, bool cursor, int oid )
 {
 	struct trap_kind *trap = &trap_info[oid];
-	byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
+	uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
 
 	c_prt(attr, trap->desc, row, col);
 
@@ -2380,7 +2445,7 @@ static void display_trap(int col, int row, bool cursor, int oid )
 				trap_x_char[LIGHTING_LIT][trap->tidx]);
 		col += big_pad(col, row, trap_x_attr[LIGHTING_TORCH][trap->tidx],
 				trap_x_char[LIGHTING_TORCH][trap->tidx]);
-		col += big_pad(col, row, trap_x_attr[LIGHTING_LOS][trap->tidx],
+		(void) big_pad(col, row, trap_x_attr[LIGHTING_LOS][trap->tidx],
 				trap_x_char[LIGHTING_LOS][trap->tidx]);
 	}
 }
@@ -2435,7 +2500,7 @@ static const char *tkind_name(int gid)
 static enum grid_light_level t_uik_lighting = LIGHTING_LIT;
 
 /* XXX needs *better* retooling for multi-light terrain */
-static byte *t_xattr(int oid)
+static uint8_t *t_xattr(int oid)
 {
 	return &trap_x_attr[t_uik_lighting][oid];
 }
@@ -2446,26 +2511,26 @@ static wchar_t *t_xchar(int oid)
 static void trap_lore(int oid)
 {
 	struct trap_kind *trap = &trap_info[oid];
-	textblock *tb = textblock_new();
-	char *title = string_make(trap->desc);
 
 	if (trap->text) {
+		textblock *tb = textblock_new();
+		char *title = string_make(trap->desc);
+
 		my_strcap(title);
-		textblock_append_c(tb, COLOUR_L_BLUE, title);
+		textblock_append_c(tb, COLOUR_L_BLUE, "%s", title);
+		string_free(title);
 		textblock_append(tb, "\n");
-		textblock_append(tb, trap->text);
+		textblock_append(tb, "%s", trap->text);
 		textblock_append(tb, "\n");
 		textui_textblock_show(tb, SCREEN_REGION, NULL);
 		textblock_free(tb);
 	}
-
-	string_free(title);
 }
 
 static const char *trap_prompt(int oid)
 {
 	(void)oid;
-	return ", 'l' to cycle lighting";
+	return ", 't' to cycle lighting";
 }
 
 /**
@@ -2474,14 +2539,14 @@ static const char *trap_prompt(int oid)
 static void t_xtra_act(struct keypress ch, int oid)
 {
 	/* XXX must be a better way to cycle this */
-	if (ch.code == 'l') {
+	if (ch.code == 't') {
 		switch (t_uik_lighting) {
 				case LIGHTING_LIT:  t_uik_lighting = LIGHTING_TORCH; break;
                 case LIGHTING_TORCH: t_uik_lighting = LIGHTING_LOS; break;
 				case LIGHTING_LOS:  t_uik_lighting = LIGHTING_DARK; break;
 				default:	t_uik_lighting = LIGHTING_LIT; break;
 		}		
-	} else if (ch.code == 'L') {
+	} else if (ch.code == 'T') {
 		switch (t_uik_lighting) {
 				case LIGHTING_DARK:  t_uik_lighting = LIGHTING_LOS; break;
                 case LIGHTING_LOS: t_uik_lighting = LIGHTING_TORCH; break;
@@ -2524,15 +2589,829 @@ static void do_cmd_knowledge_traps(const char *name, int row)
 
 /**
  * ------------------------------------------------------------------------
+ * SHAPECHANGE
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Counts the number of interesting shapechanges and returns it.
+ */
+static int count_interesting_shapes(void)
+{
+	int count = 0;
+	struct player_shape *s;
+
+	for (s = shapes; s; s = s->next) {
+		if (! streq(s->name, "normal")) {
+			++count;
+		}
+	}
+
+	return count;
+}
+
+
+/**
+ * Is a comparison function for an array of struct player_shape* which is
+ * compatible with sort() and puts the elements in ascending alphabetical
+ * order by name.
+ */
+static int compare_shape_names(const void *left, const void *right)
+{
+	const struct player_shape * const *sleft = left;
+	const struct player_shape * const *sright = right;
+
+	return my_stricmp((*sleft)->name, (*sright)->name);
+}
+
+
+static void shape_lore_helper_append_to_list(const char* item,
+	const char ***list, int* p_nmax, int *p_n)
+{
+	if (*p_n >= *p_nmax) {
+		if (*p_nmax == 0) {
+			*p_nmax = 4;
+		} else {
+			assert(*p_nmax > 0);
+			*p_nmax *= 2;
+		}
+		*list = mem_realloc(*list, *p_nmax * sizeof(**list));
+	}
+	(*list)[*p_n] = string_make(item);
+	++*p_n;
+}
+
+
+static const char *skill_index_to_name(int i)
+{
+	const char *name;
+
+	switch (i) {
+	case SKILL_DISARM_PHYS:
+		name = "physical disarming";
+		break;
+
+	case SKILL_DISARM_MAGIC:
+		name = "magical disarming";
+		break;
+
+	case SKILL_DEVICE:
+		name = "magic devices";
+		break;
+
+	case SKILL_SAVE:
+		name = "saving throws";
+		break;
+
+	case SKILL_SEARCH:
+		name = "searching";
+		break;
+
+	case SKILL_TO_HIT_MELEE:
+		name = "melee to hit";
+		break;
+
+	case SKILL_TO_HIT_BOW:
+		name = "shooting to hit";
+		break;
+
+	case SKILL_TO_HIT_THROW:
+		name = "throwing to hit";
+		break;
+
+	case SKILL_DIGGING:
+		name = "digging";
+		break;
+
+	default:
+		name = "unknown skill";
+		break;
+	}
+
+	return name;
+}
+
+
+static void shape_lore_append_list(textblock *tb,
+	const char * const *list, int n)
+{
+	int i;
+
+	if (n > 0) {
+		textblock_append(tb, " %s", list[0]);
+	}
+	for (i = 1; i < n; ++i) {
+		textblock_append(tb, "%s %s", (i < n - 1) ? "," : " and",
+			list[i]);
+	}
+}
+
+
+static void shape_lore_append_basic_combat(textblock *tb,
+	const struct player_shape *s)
+{
+	char toa_msg[24];
+	char toh_msg[24];
+	char tod_msg[24];
+	const char* msgs[3];
+	int n = 0;
+
+	if (s->to_a != 0) {
+		strnfmt(toa_msg, sizeof(toa_msg), "%+d to AC", s->to_a);
+		msgs[n] = toa_msg;
+		++n;
+	}
+	if (s->to_h != 0) {
+		strnfmt(toh_msg, sizeof(toh_msg), "%+d to hit", s->to_h);
+		msgs[n] = toh_msg;
+		++n;
+	}
+	if (s->to_d != 0) {
+		strnfmt(tod_msg, sizeof(tod_msg), "%+d to damage", s->to_d);
+		msgs[n] = tod_msg;
+		++n;
+	}
+	if (n > 0) {
+		textblock_append(tb, "Adds");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+	}
+}
+
+
+static void shape_lore_append_skills(textblock *tb,
+	const struct player_shape *s)
+{
+	const char **msgs = NULL;
+	int nmax = 0, n = 0;
+	int i;
+
+	for (i = 0; i < SKILL_MAX; ++i) {
+		if (s->skills[i] != 0) {
+			shape_lore_helper_append_to_list(
+				format("%+d to %s", s->skills[i],
+					skill_index_to_name(i)),
+				&msgs, &nmax, &n);
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "Adds");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+		for (i = 0; i < n; ++i) {
+			string_free((char*) msgs[i]);
+		}
+	}
+
+	mem_free(msgs);
+}
+
+
+static void shape_lore_append_non_stat_modifiers(textblock *tb,
+	const struct player_shape *s)
+{
+	const char **msgs = NULL;
+	int nmax = 0, n = 0;
+	int i;
+
+	for (i = STAT_MAX; i < OBJ_MOD_MAX; ++i) {
+		if (s->modifiers[i] != 0) {
+			shape_lore_helper_append_to_list(
+				format("%+d to %s",
+					s->modifiers[i],
+					lookup_obj_property(OBJ_PROPERTY_MOD, i)->name),
+				&msgs, &nmax, &n);
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "Adds");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+		for (i = 0; i < n; ++i) {
+			string_free((char*) msgs[i]);
+		}
+	}
+
+	mem_free(msgs);
+}
+
+
+static void shape_lore_append_stat_modifiers(textblock *tb,
+	const struct player_shape *s)
+{
+	const char **msgs = NULL;
+	int nmax = 0, n = 0;
+	int i;
+
+	for (i = 0; i < STAT_MAX; ++i) {
+		if (s->modifiers[i] != 0) {
+			shape_lore_helper_append_to_list(
+				format("%+d to %s",
+					s->modifiers[i],
+					lookup_obj_property(OBJ_PROPERTY_MOD, i)->name),
+				&msgs, &nmax, &n);
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "Adds");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+		for (i = 0; i < n; ++i) {
+			string_free((char*) msgs[i]);
+		}
+	}
+
+	mem_free(msgs);
+}
+
+
+static void shape_lore_append_resistances(textblock *tb,
+	const struct player_shape *s)
+{
+	const char* vul[ELEM_MAX];
+	const char* res[ELEM_MAX];
+	const char* imm[ELEM_MAX];
+	int nvul = 0, nres = 0, nimm = 0;
+	int i;
+
+	for (i = 0; i < ELEM_MAX; ++i) {
+		if (s->el_info[i].res_level < 0) {
+			vul[nvul] = projections[i].name;
+			++nvul;
+		} else if (s->el_info[i].res_level >= 3) {
+			imm[nimm] = projections[i].name;
+			++nimm;
+		} else if (s->el_info[i].res_level != 0) {
+			res[nres] = projections[i].name;
+			++nres;
+		}
+	}
+
+	if (nvul != 0) {
+		textblock_append(tb, "Makes you vulnerable to");
+		shape_lore_append_list(tb, vul, nvul);
+		textblock_append(tb, ".\n");
+	}
+
+	if (nres != 0) {
+		textblock_append(tb, "Makes you resistant to");
+		shape_lore_append_list(tb, res, nres);
+		textblock_append(tb, ".\n");
+	}
+
+	if (nimm != 0) {
+		textblock_append(tb, "Makes you immune to");
+		shape_lore_append_list(tb, imm, nimm);
+		textblock_append(tb, ".\n");
+	}
+}
+
+
+static void shape_lore_append_protection_flags(textblock *tb,
+	const struct player_shape *s)
+{
+	const char **msgs = NULL;
+	int nmax = 0, n = 0;
+	int i;
+
+	for (i = 1; i < OF_MAX; ++i) {
+		struct obj_property *prop =
+			lookup_obj_property(OBJ_PROPERTY_FLAG, i);
+
+		if (prop->subtype == OFT_PROT &&
+			of_has(s->flags, prop->index)) {
+			shape_lore_helper_append_to_list(
+				prop->desc, &msgs, &nmax, &n);
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "Provides protection from");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+		for (i = 0; i < n; ++i) {
+			string_free((char*) msgs[i]);
+		}
+	}
+
+	mem_free(msgs);
+}
+
+
+static void shape_lore_append_sustains(textblock *tb,
+	const struct player_shape *s)
+{
+	const char **msgs = NULL;
+	int nmax = 0, n = 0;
+	int i;
+
+	for (i = 0; i < STAT_MAX; ++i) {
+		struct obj_property *prop =
+			lookup_obj_property(OBJ_PROPERTY_STAT, i);
+
+		if (of_has(s->flags, sustain_flag(prop->index))) {
+			shape_lore_helper_append_to_list(
+				prop->name, &msgs, &nmax, &n);
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "Sustains");
+		shape_lore_append_list(tb, msgs, n);
+		textblock_append(tb, ".\n");
+		for (i = 0; i < n; ++i) {
+			string_free((char*) msgs[i]);
+		}
+	}
+
+	mem_free(msgs);
+}
+
+
+static void shape_lore_append_misc_flags(textblock *tb,
+	const struct player_shape *s)
+{
+	int n = 0;
+	int i;
+	struct player_ability *ability;
+
+	for (i = 1; i < OF_MAX; ++i) {
+		struct obj_property *prop =
+			lookup_obj_property(OBJ_PROPERTY_FLAG, i);
+
+		if ((prop->subtype == OFT_MISC || prop->subtype == OFT_MELEE ||
+			prop->subtype == OFT_BAD) &&
+			of_has(s->flags, prop->index)) {
+			textblock_append(tb, "%s%s.", (n > 0) ? "  " : "",
+				prop->desc);
+			++n;
+		}
+	}
+
+	for (ability = player_abilities; ability; ability = ability->next) {
+		if (streq(ability->type, "player") &&
+			pf_has(s->pflags, ability->index)) {
+			textblock_append(tb, "%s%s", (n > 0) ? "  " : "",
+				ability->desc);
+			++n;
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "\n");
+	}
+}
+
+
+static void shape_lore_append_change_effects(textblock *tb,
+	const struct player_shape *s)
+{
+	textblock *tbe = effect_describe(s->effect, "Changing into the shape ",
+		0, false);
+
+	if (tbe) {
+		textblock_append_textblock(tb, tbe);
+		textblock_free(tbe);
+		textblock_append(tb, ".\n");
+	}
+}
+
+
+static void shape_lore_append_triggering_spells(textblock *tb,
+	const struct player_shape *s)
+{
+	int n = 0;
+	struct player_class *c;
+
+	for (c = classes; c; c = c->next) {
+		int ibook;
+
+		for (ibook = 0; ibook < c->magic.num_books; ++ibook) {
+			const struct class_book *book = c->magic.books + ibook;
+			const struct object_kind *kind =
+				lookup_kind(book->tval, book->sval);
+			int ispell;
+
+			if (!kind || !kind->name) {
+				continue;
+			}
+			for (ispell = 0; ispell < book->num_spells; ++ispell) {
+				const struct class_spell *spell =
+					book->spells + ispell;
+				const struct effect *effect;
+
+				for (effect = spell->effect;
+					effect;
+					effect = effect->next) {
+					if (effect->index == EF_SHAPECHANGE &&
+						effect->subtype == s->sidx) {
+						if (n == 0) {
+							textblock_append(tb, "\n");
+						}
+						textblock_append(tb,
+							"The %s spell, %s, from %s triggers the shapechange.",
+							c->name,
+							spell->name,
+							kind->name
+						);
+						++n;
+					}
+				}
+			}
+		}
+	}
+
+	if (n > 0) {
+		textblock_append(tb, "\n");
+	}
+}
+
+
+/**
+ * Display information about a shape change.
+ */
+static void shape_lore(const struct player_shape *s)
+{
+	textblock *tb = textblock_new();
+
+	textblock_append(tb, "%s", s->name);
+	textblock_append(tb, "\nLike all shapes, the equipment at the time of "
+		"the shapechange sets the base attributes, including damage "
+		"per blow, number of blows and resistances.  While changed, "
+		"items in your pack or on the floor (except for pickup or "
+		"eating) are inaccessible.  To switch back to your normal "
+		"shape, cast a spell or use an item command other than eat "
+		"(drop, for instance).\n");
+	shape_lore_append_basic_combat(tb, s);
+	shape_lore_append_skills(tb, s);
+	shape_lore_append_non_stat_modifiers(tb, s);
+	shape_lore_append_stat_modifiers(tb, s);
+	shape_lore_append_resistances(tb, s);
+	shape_lore_append_protection_flags(tb, s);
+	shape_lore_append_sustains(tb, s);
+	shape_lore_append_misc_flags(tb, s);
+	shape_lore_append_change_effects(tb, s);
+	shape_lore_append_triggering_spells(tb, s);
+
+	textui_textblock_show(tb, SCREEN_REGION, NULL);
+	textblock_free(tb);
+}
+
+
+static void do_cmd_knowledge_shapechange(const char *name, int row)
+{
+	region header_region = { 0, 0, -1, 5 };
+	region list_region = { 0, 6, -1, -2 };
+	int count = count_interesting_shapes();
+	struct menu* m;
+	struct player_shape **sarray;
+	const char **narray;
+	int h, mark, mark_old;
+	bool displaying, redraw;
+	struct player_shape *s;
+	int i;
+
+	if (!count) {
+		return;
+	}
+
+	m = menu_new(MN_SKIN_SCROLL, menu_find_iter(MN_ITER_STRINGS));
+
+	/* Set up an easily indexable list of the interesting shapes. */
+	sarray = mem_alloc(count * sizeof(*sarray));
+	for (s = shapes, i = 0; s; s = s->next) {
+		if (streq(s->name, "normal")) {
+			continue;
+		}
+		sarray[i] = s;
+		++i;
+	}
+
+	/*
+	 * Sort them alphabetically by name and set up an array with just the
+	 * names.
+	 */
+	sort(sarray, count, sizeof(sarray[0]), compare_shape_names);
+	narray = mem_alloc(count * sizeof(*narray));
+	for (i = 0; i < count; ++i) {
+		narray[i] = sarray[i]->name;
+	}
+
+	menu_setpriv(m, count, narray);
+	menu_layout(m, &list_region);
+	m->flags |= MN_DBL_TAP;
+
+	screen_save();
+	clear_from(0);
+
+	h = 0;
+	mark = 0;
+	mark_old = -1;
+	displaying = true;
+	redraw = true;
+	while (displaying) {
+		bool recall = false;
+		int wnew, hnew;
+		ui_event ke0 = EVENT_EMPTY;
+		ui_event ke;
+
+		Term_get_size(&wnew, &hnew);
+		if (h != hnew) {
+			h = hnew;
+			redraw = true;
+		}
+
+		if (redraw) {
+			region_erase(&header_region);
+			prt("Knowledge - shapes", 2, 0);
+			prt("Name", 4, 0);
+			for (i = 0; i < MIN(80, wnew); i++) {
+				Term_putch(i, 5, COLOUR_WHITE, L'=');
+			}
+			prt("<dir>, 'r' to recall, ESC", h - 2, 0);
+			redraw = false;
+		}
+
+		if (mark_old != mark) {
+			mark_old = mark;
+			m->cursor = mark;
+		}
+
+		menu_refresh(m, false);
+
+		handle_stuff(player);
+
+		ke = inkey_ex();
+		if (ke.type == EVT_MOUSE) {
+			menu_handle_mouse(m, &ke, &ke0);
+		} else if (ke.type == EVT_KBRD) {
+			menu_handle_keypress(m, &ke, &ke0);
+		}
+		if (ke0.type != EVT_NONE) {
+			ke = ke0;
+		}
+
+		switch (ke.type) {
+			case EVT_KBRD:
+				if (ke.key.code == 'r' || ke.key.code == 'R') {
+					recall = true;
+				}
+				break;
+
+			case EVT_ESCAPE:
+				displaying = false;
+				break;
+
+			case EVT_SELECT:
+				if (mark == m->cursor) {
+					recall = true;
+				}
+				break;
+
+			case EVT_MOVE:
+				mark = m->cursor;
+				break;
+
+			default:
+				break;
+		}
+
+		if (recall) {
+			assert(mark >= 0 && mark < count);
+			shape_lore(sarray[mark]);
+		}
+	}
+
+	screen_load();
+
+	mem_free(narray);
+	mem_free(sarray);
+	menu_free(m);
+}
+
+
+/**
+ * ------------------------------------------------------------------------
+ * ui_knowledge.txt parsing
+ * ------------------------------------------------------------------------
+ */
+static enum parser_error parse_monster_category(struct parser *p)
+{
+	struct ui_knowledge_parse_state *s =
+		(struct ui_knowledge_parse_state*) parser_priv(p);
+	struct ui_monster_category *c;
+
+	assert(s);
+	c = mem_zalloc(sizeof(*c));
+	c->next = s->categories;
+	c->name = string_make(parser_getstr(p, "name"));
+	s->categories = c;
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error parse_mcat_include_base(struct parser *p)
+{
+	struct ui_knowledge_parse_state *s =
+		(struct ui_knowledge_parse_state*) parser_priv(p);
+	struct monster_base *b;
+
+	assert(s);
+	if (!s->categories) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+	b = lookup_monster_base(parser_getstr(p, "name"));
+	if (!b) {
+		return PARSE_ERROR_INVALID_MONSTER_BASE;
+	}
+	assert(s->categories->n_inc_bases >= 0
+		&& s->categories->n_inc_bases <= s->categories->max_inc_bases);
+	if (s->categories->n_inc_bases == s->categories->max_inc_bases) {
+		if (s->categories->max_inc_bases > INT_MAX
+				/ (2 * (int) sizeof(struct monster_base*))) {
+			return PARSE_ERROR_TOO_MANY_ENTRIES;
+		}
+		s->categories->max_inc_bases = (s->categories->max_inc_bases)
+			? 2 * s->categories->max_inc_bases : 2;
+		s->categories->inc_bases = mem_realloc(
+			s->categories->inc_bases,
+			s->categories->max_inc_bases
+			* sizeof(struct monster_base*));
+	}
+	s->categories->inc_bases[s->categories->n_inc_bases] = b;
+	++s->categories->n_inc_bases;
+
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error parse_mcat_include_flag(struct parser *p)
+{
+	struct ui_knowledge_parse_state *s =
+		(struct ui_knowledge_parse_state*) parser_priv(p);
+	char *flags, *next_flag;
+
+	assert(s);
+	if (!s->categories) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
+	if (!parser_hasval(p, "flags")) {
+		return PARSE_ERROR_NONE;
+	}
+	flags = string_make(parser_getstr(p, "flags"));
+	next_flag = strtok(flags, " |");
+	while (next_flag) {
+		if (grab_flag(s->categories->inc_flags, RF_SIZE, r_info_flags,
+				next_flag)) {
+			string_free(flags);
+			return PARSE_ERROR_INVALID_FLAG;
+		}
+		next_flag = strtok(NULL, " |");
+	}
+	string_free(flags);
+
+	return PARSE_ERROR_NONE;
+}
+
+static struct parser *init_ui_knowledge_parser(void)
+{
+	struct ui_knowledge_parse_state *s = mem_zalloc(sizeof(*s));
+	struct parser *p = parser_new();
+
+	parser_setpriv(p, s);
+	parser_reg(p, "monster-category str name", parse_monster_category);
+	parser_reg(p, "mcat-include-base str name", parse_mcat_include_base);
+	parser_reg(p, "mcat-include-flag ?str flags", parse_mcat_include_flag);
+
+	return p;
+}
+
+static errr run_ui_knowledge_parser(struct parser *p)
+{
+	return parse_file_quit_not_found(p, "ui_knowledge");
+}
+
+static errr finish_ui_knowledge_parser(struct parser *p)
+{
+	struct ui_knowledge_parse_state *s =
+		(struct ui_knowledge_parse_state*) parser_priv(p);
+	struct ui_monster_category *cursor;
+	size_t count;
+
+	assert(s);
+
+	/* Count the number of categories and allocate a flat array for them. */
+	count = 0;
+	for (cursor = s->categories; cursor; cursor = cursor->next) {
+		++count;
+	}
+	if (count > INT_MAX - 1) {
+		/*
+		 * The sorting and display logic for monster groups assumes
+		 * the number of categories fits in an int.
+		 */
+		cursor = s->categories;
+		while (cursor) {
+			struct ui_monster_category *tgt = cursor;
+
+			cursor = cursor->next;
+			string_free((char*) tgt->name);
+			mem_free(tgt->inc_bases);
+			mem_free(tgt);
+		}
+		mem_free(s);
+		parser_destroy(p);
+		return PARSE_ERROR_TOO_MANY_ENTRIES;
+	}
+	if (monster_group) {
+		cleanup_ui_knowledge_parsed_data();
+	}
+	monster_group = mem_alloc((count + 1) * sizeof(*monster_group));
+	n_monster_group = (int) (count + 1);
+
+	/* Set the element at the end which receives special treatment. */
+	monster_group[count].next = NULL;
+	monster_group[count].name = string_make("***Unclassified***");
+	monster_group[count].inc_bases = NULL;
+	rf_wipe(monster_group[count].inc_flags);
+	monster_group[count].n_inc_bases = 0;
+	monster_group[count].max_inc_bases = 0;
+
+	/*
+	 * Set the others, restoring the order they had in the data file.
+	 * Release the memory for the linked list (but not pointed to data
+	 * as ownership for that is transferred to the flat array).
+	 */
+	cursor = s->categories;
+	while (cursor) {
+		struct ui_monster_category *src = cursor;
+
+		cursor = cursor->next;
+		--count;
+		monster_group[count].next = monster_group + count + 1;
+		monster_group[count].name = src->name;
+		monster_group[count].inc_bases = src->inc_bases;
+		rf_copy(monster_group[count].inc_flags, src->inc_flags);
+		monster_group[count].n_inc_bases = src->n_inc_bases;
+		monster_group[count].max_inc_bases = src->max_inc_bases;
+		mem_free(src);
+	}
+
+	mem_free(s);
+	parser_destroy(p);
+	return 0;
+}
+
+static void cleanup_ui_knowledge_parsed_data(void)
+{
+	int i;
+
+	for (i = 0; i < n_monster_group; ++i) {
+		string_free((char*) monster_group[i].name);
+		mem_free(monster_group[i].inc_bases);
+	}
+	mem_free(monster_group);
+	monster_group = NULL;
+	n_monster_group = 0;
+}
+
+/**
+ * ------------------------------------------------------------------------
  * Main knowledge menus
  * ------------------------------------------------------------------------ */
 
-/* The first row of the knowledge_actions menu which does store knowledge */
-#define STORE_KNOWLEDGE_ROW 7
+/**
+ * Holds information about the main knowledge menu.
+ */
+static struct {
+	menu_action *actions;
+	char **labels;
+	char *storekeys;
+	struct menu m;
+	int count;
+	int irune;
+	int iartifact;
+	int iego;
+	int imonster;
+	int ishape;
+	int istore1;
+} main_knowledge_menu = {
+	.actions = NULL,
+	.labels = NULL,
+	.storekeys = NULL,
+	.count = 0,
+	.irune = 0,
+	.iartifact = 0,
+	.iego = 0,
+	.imonster = 0,
+	.ishape = 0,
+	.istore1 = 0
+};
 
 static void do_cmd_knowledge_store(const char *name, int row)
 {
-	textui_store_knowledge(row - STORE_KNOWLEDGE_ROW);
+	textui_store_knowledge(row - main_knowledge_menu.istore1);
 }
 
 static void do_cmd_knowledge_scores(const char *name, int row)
@@ -2545,58 +3424,194 @@ static void do_cmd_knowledge_history(const char *name, int row)
 	history_display();
 }
 
-
-/**
- * Definition of the "player knowledge" menu.
- */
-static menu_action knowledge_actions[] =
+static void do_cmd_knowledge_equip_cmp(const char* name, int row)
 {
-{ 0, 0, "Display object knowledge",   	   textui_browse_object_knowledge },
-{ 0, 0, "Display rune knowledge",   	   do_cmd_knowledge_runes },
-{ 0, 0, "Display artifact knowledge", 	   do_cmd_knowledge_artifacts },
-{ 0, 0, "Display ego item knowledge", 	   do_cmd_knowledge_ego_items },
-{ 0, 0, "Display monster knowledge",  	   do_cmd_knowledge_monsters  },
-{ 0, 0, "Display feature knowledge",  	   do_cmd_knowledge_features  },
-{ 0, 0, "Display trap knowledge",          do_cmd_knowledge_traps  },
-{ 0, 0, "Display contents of general store", do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of armourer",      do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of weaponsmith",   do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of bookseller",    do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of alchemist",     do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of magic shop",    do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of black market",  do_cmd_knowledge_store     },
-{ 0, 0, "Display contents of home",   	   do_cmd_knowledge_store     },
-{ 0, 0, "Display hall of fame",       	   do_cmd_knowledge_scores    },
-{ 0, 0, "Display character history",  	   do_cmd_knowledge_history   },
-};
+	equip_cmp_display();
+}
 
-static struct menu knowledge_menu;
+static bool handle_store_shortcuts(struct menu *m, const ui_event *ev, int oid)
+{
+	int i = 0;
 
+	assert(ev->type == EVT_KBRD);
+	while (1) {
+		if (! m->cmd_keys[i]) {
+			return false;
+		}
+		if (ev->key.code == (unsigned) m->cmd_keys[i]) {
+			menu_action *acts = menu_priv(m);
+
+			do_cmd_knowledge_store(
+				acts[i + main_knowledge_menu.istore1].name,
+				i + main_knowledge_menu.istore1);
+			return true;
+		}
+		++i;
+	}
+}
 
 /**
- * Keep macro counts happy.
+ * Release the information associated with the main knowledge menu.
  */
-static void cleanup_cmds(void) {
-	mem_free(obj_group_order);
+static void cleanup_main_knowledge_menu(void)
+{
+	mem_free(main_knowledge_menu.actions);
+	main_knowledge_menu.actions = NULL;
+	if (main_knowledge_menu.labels) {
+		int i;
+
+		for (i = 0; i < main_knowledge_menu.count; ++i) {
+			string_free(main_knowledge_menu.labels[i]);
+		}
+		mem_free(main_knowledge_menu.labels);
+		main_knowledge_menu.labels = NULL;
+	}
+	mem_free(main_knowledge_menu.storekeys);
+	main_knowledge_menu.storekeys = NULL;
+	main_knowledge_menu.count = 0;
+	main_knowledge_menu.irune = 0;
+	main_knowledge_menu.iartifact = 0;
+	main_knowledge_menu.iego = 0;
+	main_knowledge_menu.imonster = 0;
+	main_knowledge_menu.ishape = 0;
+	main_knowledge_menu.istore1 = 0;
+}
+
+/**
+ * Reset the information associated with the main knowledge menu.
+ */
+static void reset_main_knowledge_menu(void)
+{
+	struct {
+		const char *label; void (*action)(const char*, int);
+	} pre_store_actions[] = {
+		{ "Display object knowledge", textui_browse_object_knowledge },
+		{ "Display rune knowledge", do_cmd_knowledge_runes },
+		{ "Display artifact knowledge", do_cmd_knowledge_artifacts },
+		{ "Display ego item knowledge", do_cmd_knowledge_ego_items },
+		{ "Display monster knowledge", do_cmd_knowledge_monsters },
+		{ "Display feature knowledge", do_cmd_knowledge_features },
+		{ "Display trap knowledge", do_cmd_knowledge_traps },
+		{ "Display shapechange effects", do_cmd_knowledge_shapechange },
+	};
+	struct {
+		const char *label; void (*action)(const char*, int);
+	} post_store_actions[] = {
+		{ "Display hall of fame", do_cmd_knowledge_scores },
+		{ "Display character history", do_cmd_knowledge_history },
+		{ "Display equippable comparison", do_cmd_knowledge_equip_cmp },
+	};
+	const char *shortcuts[] = {
+		" (1)", " (2)", " (3)",
+		" (4)", " (5)", " (6)",
+		" (7)", " (8)", " (9)"
+	};
+	int i = 0, scount, j;
+
+	cleanup_main_knowledge_menu();
+
+	/*
+	 * These have to be consistent with the arrangement of pre_store_actions
+	 * above.
+	 */
+	main_knowledge_menu.irune = 1;
+	main_knowledge_menu.iartifact = 2;
+	main_knowledge_menu.iego = 3;
+	main_knowledge_menu.imonster = 4;
+	main_knowledge_menu.ishape = 7;
+
+	main_knowledge_menu.count = (int) N_ELEMENTS(pre_store_actions)
+		+ z_info->store_max + (int) N_ELEMENTS(post_store_actions);
+	/*
+	 * Restrict the store entries to keep in the bounds of a 24 row display.
+	 * There's two extra rows used for title and prompt.
+	 */
+	if (main_knowledge_menu.count > 22) {
+		scount = MAX(0, z_info->store_max
+			- (main_knowledge_menu.count - 22));
+		main_knowledge_menu.count = 22;
+	} else {
+		scount = z_info->store_max;
+	}
+	main_knowledge_menu.istore1 = (scount > 0) ?
+		(int) N_ELEMENTS(pre_store_actions) : main_knowledge_menu.count;
+	main_knowledge_menu.actions = mem_zalloc(main_knowledge_menu.count
+		* sizeof(*main_knowledge_menu.actions));
+	main_knowledge_menu.labels = mem_zalloc(main_knowledge_menu.count
+		* sizeof(*main_knowledge_menu.labels));
+
+	for (j = 0; j < (int) N_ELEMENTS(pre_store_actions)
+			&& i < main_knowledge_menu.count; ++j, ++i) {
+		main_knowledge_menu.labels[i] =
+			string_make(pre_store_actions[j].label);
+		main_knowledge_menu.actions[i].name =
+			main_knowledge_menu.labels[i];
+		main_knowledge_menu.actions[i].action =
+			pre_store_actions[j].action;
+	}
+	for (j = 0; j < scount && i < main_knowledge_menu.count; ++j, ++i) {
+		const char *name = f_info[stores[j].feat].name;
+
+		main_knowledge_menu.labels[i] =
+			string_make((name) ?
+				format("Display %s'%s contents%s",
+				name, (suffix(name, "s")) ? "" : "s",
+				(j < 9) ? shortcuts[j] : "") :
+				format("Display store %d's contents%s",
+				j + 1, (j < 9) ? shortcuts[j] : ""));
+		main_knowledge_menu.actions[i].name =
+			main_knowledge_menu.labels[i];
+		main_knowledge_menu.actions[i].action =
+			do_cmd_knowledge_store;
+	}
+	for (j = 0; j < (int) N_ELEMENTS(pre_store_actions)
+			&& i < main_knowledge_menu.count; ++j, ++i) {
+		main_knowledge_menu.labels[i] =
+			string_make(post_store_actions[j].label);
+		main_knowledge_menu.actions[i].name =
+			main_knowledge_menu.labels[i];
+		main_knowledge_menu.actions[i].action =
+			post_store_actions[j].action;
+	}
+
+	menu_init(&main_knowledge_menu.m, MN_SKIN_SCROLL,
+		menu_find_iter(MN_ITER_ACTIONS));
+	menu_setpriv(&main_knowledge_menu.m, main_knowledge_menu.count,
+		main_knowledge_menu.actions);
+	main_knowledge_menu.m.title = "Display current knowledge";
+	main_knowledge_menu.m.selections = all_letters_nohjkl;
+	/*
+	 * These are shortcuts to get the contents of the stores by number;
+	 * can prevent (depending on the number of stores) the normal use of
+	 * 4 and 6 to go to the previous or next menu.
+	 */
+	if (scount > 0) {
+		const char digits[] = "123456789";
+		int kcount = 1 + ((scount > 9) ? 9 : scount);
+
+		main_knowledge_menu.storekeys = mem_alloc(kcount
+			* sizeof(*main_knowledge_menu.storekeys));
+		my_strcpy(main_knowledge_menu.storekeys, digits, kcount);
+		main_knowledge_menu.m.cmd_keys = main_knowledge_menu.storekeys;
+		main_knowledge_menu.m.keys_hook = handle_store_shortcuts;
+	}
 }
 
 void textui_knowledge_init(void)
 {
 	/* Initialize the menus */
-	struct menu *menu = &knowledge_menu;
-	menu_init(menu, MN_SKIN_SCROLL, menu_find_iter(MN_ITER_ACTIONS));
-	menu_setpriv(menu, N_ELEMENTS(knowledge_actions), knowledge_actions);
-
-	menu->title = "Display current knowledge";
-	menu->selections = lower_case;
+	reset_main_knowledge_menu();
 
 	/* initialize other static variables */
+	if (run_parser(&ui_knowledge_parser) != PARSE_ERROR_NONE) {
+		quit_fmt("Encountered error parsing ui_knowledge.txt");
+	}
+
 	if (!obj_group_order) {
 		int i;
 		int gid = -1;
 
 		obj_group_order = mem_zalloc((TV_MAX + 1) * sizeof(int));
-		atexit(cleanup_cmds);
 
 		/* Allow for missing values */
 		for (i = 0; i < TV_MAX; i++)
@@ -2611,50 +3626,73 @@ void textui_knowledge_init(void)
 }
 
 
+void textui_knowledge_cleanup(void)
+{
+	mem_free(obj_group_order);
+	obj_group_order = NULL;
+	cleanup_parser(&ui_knowledge_parser);
+}
+
+
 /**
  * Display the "player knowledge" menu, greying out items that won't display
  * anything.
  */
 void textui_browse_knowledge(void)
 {
-	int i, rune_max = max_runes();
-	region knowledge_region = { 0, 0, -1, 19 };
+	int i, flag, rune_max = max_runes();
+	region knowledge_region = { 0, 0, -1, 2 + main_knowledge_menu.count };
 
 	/* Runes */
-	knowledge_actions[1].flags = MN_ACT_GRAYED;
-	for (i = 0; i < rune_max; i++) {
-		if (player_knows_rune(player, i) || OPT(player, cheat_xtra)) {
-			knowledge_actions[1].flags = 0;
-		    break;
+	if (main_knowledge_menu.irune < main_knowledge_menu.count) {
+		flag = MN_ACT_GRAYED;
+		for (i = 0; i < rune_max; i++) {
+			if (player_knows_rune(player, i)
+					|| OPT(player, cheat_xtra)) {
+				flag = 0;
+				break;
+			}
 		}
+		main_knowledge_menu.actions[main_knowledge_menu.irune].flags =
+			flag;
 	}
 		
 	/* Artifacts */
-	if (collect_known_artifacts(NULL, 0) > 0)
-		knowledge_actions[2].flags = 0;
-	else
-		knowledge_actions[2].flags = MN_ACT_GRAYED;
+	if (main_knowledge_menu.iartifact < main_knowledge_menu.count) {
+		main_knowledge_menu.actions[main_knowledge_menu.iartifact].flags =
+			(collect_known_artifacts(NULL, 0) > 0) ?
+			0 : MN_ACT_GRAYED;
+	}
 
 	/* Ego items */
-	knowledge_actions[3].flags = MN_ACT_GRAYED;
-	for (i = 0; i < z_info->e_max; i++) {
-		if (e_info[i].everseen || OPT(player, cheat_xtra)) {
-			knowledge_actions[3].flags = 0;
-			break;
+	if (main_knowledge_menu.iego < main_knowledge_menu.count) {
+		flag = MN_ACT_GRAYED;
+		for (i = 0; i < z_info->e_max; i++) {
+			if (e_info[i].everseen || OPT(player, cheat_xtra)) {
+				flag = 0;
+				break;
+			}
 		}
+		main_knowledge_menu.actions[main_knowledge_menu.iego].flags = flag;
 	}
 
 	/* Monsters */
-	if (count_known_monsters() > 0)
-		knowledge_actions[4].flags = 0;
-	else
-		knowledge_actions[4].flags = MN_ACT_GRAYED;
+	if (main_knowledge_menu.imonster < main_knowledge_menu.count) {
+		main_knowledge_menu.actions[main_knowledge_menu.imonster].flags =
+			(count_known_monsters() > 0) ? 0 : MN_ACT_GRAYED;
+	}
+
+	/* Shapechanges */
+	if (main_knowledge_menu.ishape < main_knowledge_menu.count) {
+		main_knowledge_menu.actions[main_knowledge_menu.ishape].flags =
+			(count_interesting_shapes() > 0) ? 0 : MN_ACT_GRAYED;
+	}
 
 	screen_save();
-	menu_layout(&knowledge_menu, &knowledge_region);
+	menu_layout(&main_knowledge_menu.m, &knowledge_region);
 
 	clear_from(0);
-	menu_select(&knowledge_menu, 0, false);
+	menu_select(&main_knowledge_menu.m, 0, false);
 
 	screen_load();
 }
@@ -2725,8 +3763,8 @@ void do_cmd_messages(void)
 		for (j = 0; (j < hgt - 4) && (i + j < n); j++) {
 			const char *msg;
 			const char *str = message_str(i + j);
-			byte attr = message_color(i + j);
-			u16b count = message_count(i + j);
+			uint8_t attr = message_color(i + j);
+			uint16_t count = message_count(i + j);
 
 			if (count == 1)
 				msg = str;
@@ -2740,7 +3778,7 @@ void do_cmd_messages(void)
 			Term_putstr(0, hgt - 3 - j, -1, attr, msg);
 
 			/* Highlight "shower" */
-			if (shower[0]) {
+			if (strlen(shower)) {
 				str = msg;
 
 				/* Display matches */
@@ -2761,7 +3799,7 @@ void do_cmd_messages(void)
 				   i, i + j - 1, n, q), 0, 0);
 
 		/* Display prompt (not very informative) */
-		if (shower[0])
+		if (strlen(shower))
 			prt("[Movement keys to navigate, '-' for next, '=' to find]",
 				hgt - 1, 0);
 		else
@@ -2806,21 +3844,25 @@ void do_cmd_messages(void)
 
 				case ARROW_LEFT:
 				case '4':
+				case 'h':
 					q = (q >= wid / 2) ? (q - wid / 2) : 0;
 					break;
 
 				case ARROW_RIGHT:
 				case '6':
+				case 'l':
 					q = q + wid / 2;
 					break;
 
 				case ARROW_UP:
 				case '8':
+				case 'k':
 					if (i + 1 < n) i += 1;
 					break;
 
 				case ARROW_DOWN:
 				case '2':
+				case 'j':
 				case KC_ENTER:
 					i = (i >= 1) ? (i - 1) : 0;
 					break;
@@ -2839,8 +3881,8 @@ void do_cmd_messages(void)
 		}
 
 		/* Find the next item */
-		if (ke.key.code == '-' && shower[0]) {
-			s16b z;
+		if (ke.key.code == '-' && strlen(shower)) {
+			int16_t z;
 
 			/* Scan messages */
 			for (z = i + 1; z < n; z++) {
@@ -2887,8 +3929,9 @@ void do_cmd_inven(void)
 		screen_save();
 
 		/* Get an item to use a context command on (Display the inventory) */
-		if (get_item(&obj, "Select Item:", NULL, CMD_NULL, NULL,
-					 GET_ITEM_PARAMS)) {
+		if (get_item(&obj, "Select Item:",
+				"Error in do_cmd_inven(), please report.",
+				CMD_NULL, NULL, GET_ITEM_PARAMS)) {
 			/* Load screen */
 			screen_load();
 
@@ -2896,7 +3939,9 @@ void do_cmd_inven(void)
 				/* Track the object */
 				track_object(player->upkeep, obj);
 
-				while ((ret = context_menu_object(obj)) == 2);
+				if (!player_is_shapechanged(player)) {
+					while ((ret = context_menu_object(obj)) == 2);
+				}
 			}
 		} else {
 			/* Load screen */
@@ -2930,8 +3975,9 @@ void do_cmd_equip(void)
 		screen_save();
 
 		/* Get an item to use a context command on (Display the equipment) */
-		if (get_item(&obj, "Select Item:", NULL, CMD_NULL, NULL,
-					 GET_ITEM_PARAMS)) {
+		if (get_item(&obj, "Select Item:",
+				"Error in do_cmd_equip(), please report.",
+				CMD_NULL, NULL, GET_ITEM_PARAMS)) {
 			/* Load screen */
 			screen_load();
 
@@ -2939,7 +3985,9 @@ void do_cmd_equip(void)
 				/* Track the object */
 				track_object(player->upkeep, obj);
 
-				while ((ret = context_menu_object(obj)) == 2);
+				if (!player_is_shapechanged(player)) {
+					while ((ret = context_menu_object(obj)) == 2);
+				}
 
 				/* Stay in "equipment" mode */
 				player->upkeep->command_wrk = (USE_EQUIP);
@@ -2976,8 +4024,9 @@ void do_cmd_quiver(void)
 		screen_save();
 
 		/* Get an item to use a context command on (Display the quiver) */
-		if (get_item(&obj, "Select Item:", NULL, CMD_NULL, NULL,
-					 GET_ITEM_PARAMS)) {
+		if (get_item(&obj, "Select Item:",
+				"Error in do_cmd_quiver(), please report.",
+				CMD_NULL, NULL, GET_ITEM_PARAMS)) {
 			/* Load screen */
 			screen_load();
 
@@ -2985,7 +4034,9 @@ void do_cmd_quiver(void)
 				/* Track the object */
 				track_object(player->upkeep, obj);
 
-				while ((ret = context_menu_object(obj)) == 2);
+				if (!player_is_shapechanged(player)) {
+					while  ((ret = context_menu_object(obj)) == 2);
+				}
 
 				/* Stay in "quiver" mode */
 				player->upkeep->command_wrk = (USE_QUIVER);
@@ -3013,18 +4064,25 @@ void do_cmd_look(void)
 }
 
 
-
-/**
- * Number of basic grids per panel, vertically and horizontally
- */
-#define PANEL_SIZE	11
-
 /**
  * Allow the player to examine other sectors on the map
  */
 void do_cmd_locate(void)
 {
+	int panel_hgt, panel_wid;
 	int y1, x1;
+
+	/* Use dimensions that match those in ui-output.c. */
+	if (Term == term_screen) {
+		panel_hgt = SCREEN_HGT;
+		panel_wid = SCREEN_WID;
+	} else {
+		panel_hgt = Term->hgt / tile_height;
+		panel_wid = Term->wid / tile_width;
+	}
+	/* Bound below to avoid division by zero. */
+	panel_hgt = MAX(panel_hgt, 1);
+	panel_wid = MAX(panel_wid, 1);
 
 	/* Start at current panel */
 	y1 = Term->offset_y;
@@ -3042,10 +4100,6 @@ void do_cmd_locate(void)
 		int y2 = Term->offset_y;
 		int x2 = Term->offset_x;
 		
-		/* Adjust for tiles */
-		int panel_hgt = (int)(PANEL_SIZE / tile_height);
-		int panel_wid = (int)(PANEL_SIZE / tile_width);
-
 		/* Describe the location */
 		if ((y2 == y1) && (x2 == x1)) {
 			tmp_val[0] = '\0';
@@ -3058,14 +4112,14 @@ void do_cmd_locate(void)
 		/* Prepare to ask which way to look */
 		strnfmt(out_val, sizeof(out_val),
 		        "Map sector [%d,%d], which is%s your sector.  Direction?",
-		        (y2 / panel_hgt), (x2 / panel_wid), tmp_val);
+		        (2 * y2) / panel_hgt, (2 * x2) / panel_wid, tmp_val);
 
 		/* More detail */
 		if (OPT(player, center_player)) {
 			strnfmt(out_val, sizeof(out_val),
 		        	"Map sector [%d(%02d),%d(%02d)], which is%s your sector.  Direction?",
-					(y2 / panel_hgt), (y2 % panel_hgt),
-					(x2 / panel_wid), (x2 % panel_wid), tmp_val);
+					(2 * y2) / panel_hgt, (2 * y2) % panel_hgt,
+					(2 * x2) / panel_wid, (2 * x2) % panel_wid, tmp_val);
 		}
 
 		/* Get a direction */
@@ -3079,7 +4133,7 @@ void do_cmd_locate(void)
 			dir = target_dir(command);
 
 			/* Error */
-			if (!dir) bell("Illegal direction for locate!");
+			if (!dir) bell();
 		}
 
 		/* No direction */
@@ -3098,8 +4152,8 @@ void do_cmd_locate(void)
 
 static int cmp_mexp(const void *a, const void *b)
 {
-	u16b ia = *(const u16b *)a;
-	u16b ib = *(const u16b *)b;
+	uint16_t ia = *(const uint16_t *)a;
+	uint16_t ib = *(const uint16_t *)b;
 	if (r_info[ia].mexp < r_info[ib].mexp)
 		return -1;
 	if (r_info[ia].mexp > r_info[ib].mexp)
@@ -3109,8 +4163,8 @@ static int cmp_mexp(const void *a, const void *b)
 
 static int cmp_level(const void *a, const void *b)
 {
-	u16b ia = *(const u16b *)a;
-	u16b ib = *(const u16b *)b;
+	uint16_t ia = *(const uint16_t *)a;
+	uint16_t ib = *(const uint16_t *)b;
 	if (r_info[ia].level < r_info[ib].level)
 		return -1;
 	if (r_info[ia].level > r_info[ib].level)
@@ -3120,8 +4174,8 @@ static int cmp_level(const void *a, const void *b)
 
 static int cmp_tkill(const void *a, const void *b)
 {
-	u16b ia = *(const u16b *)a;
-	u16b ib = *(const u16b *)b;
+	uint16_t ia = *(const uint16_t *)a;
+	uint16_t ib = *(const uint16_t *)b;
 	if (l_list[ia].tkills < l_list[ib].tkills)
 		return -1;
 	if (l_list[ia].tkills > l_list[ib].tkills)
@@ -3131,8 +4185,8 @@ static int cmp_tkill(const void *a, const void *b)
 
 static int cmp_pkill(const void *a, const void *b)
 {
-	u16b ia = *(const u16b *)a;
-	u16b ib = *(const u16b *)b;
+	uint16_t ia = *(const uint16_t *)a;
+	uint16_t ib = *(const uint16_t *)b;
 	if (l_list[ia].pkills < l_list[ib].pkills)
 		return -1;
 	if (l_list[ia].pkills > l_list[ib].pkills)
@@ -3180,7 +4234,7 @@ static void lookup_symbol(char sym, char *buf, size_t max)
 	/* Look through features */
 	/* Note: We need a better way of doing this. Currently '#' matches secret
 	 * door, and '^' matches trap door (instead of the more generic "trap"). */
-	for (i = 1; i < z_info->f_max; i++) {
+	for (i = 1; i < FEAT_MAX; i++) {
 		if (char_matches_key(f_info[i].d_char, sym)) {
 			strnfmt(buf, max, "%c - %s.", sym, f_info[i].name);
 			return;
@@ -3221,7 +4275,7 @@ static void lookup_symbol(char sym, char *buf, size_t max)
  */
 void do_cmd_query_symbol(void)
 {
-	int i, n;
+	int idx, num;
 	char buf[128];
 
 	char sym;
@@ -3233,7 +4287,7 @@ void do_cmd_query_symbol(void)
 
 	bool recall = false;
 
-	u16b *who;
+	uint16_t *who;
 
 	/* Get a character, or abort */
 	if (!get_com("Enter character to be identified, or control+[ANU]: ", &sym))
@@ -3257,12 +4311,12 @@ void do_cmd_query_symbol(void)
 	prt(buf, 0, 0);
 
 	/* Allocate the "who" array */
-	who = mem_zalloc(z_info->r_max * sizeof(u16b));
+	who = mem_zalloc(z_info->r_max * sizeof(uint16_t));
 
 	/* Collect matching monsters */
-	for (n = 0, i = 1; i < z_info->r_max - 1; i++) {
-		struct monster_race *race = &r_info[i];
-		struct monster_lore *lore = &l_list[i];
+	for (num = 0, idx = 1; idx < z_info->r_max - 1; idx++) {
+		struct monster_race *race = &r_info[idx];
+		struct monster_lore *lore = &l_list[idx];
 
 		/* Nothing to recall */
 		if (!lore->all_known && !lore->sights)
@@ -3275,14 +4329,13 @@ void do_cmd_query_symbol(void)
 		if (uniq && !rf_has(race->flags, RF_UNIQUE)) continue;
 
 		/* Collect "appropriate" monsters */
-		if (all || char_matches_key(race->d_char, sym)) who[n++] = i;
+		if (all || char_matches_key(race->d_char, sym)) who[num++] = idx;
 	}
 
-	/* Nothing to recall */
-	if (!n) {
-		/* XXX XXX Free the "who" array */
+	/* No monsters to recall */
+	if (!num) {
+		/* Free the "who" array */
 		mem_free(who);
-
 		return;
 	}
 
@@ -3298,35 +4351,32 @@ void do_cmd_query_symbol(void)
 	/* Interpret the response */
 	if (query.code == 'k') {
 		/* Sort by kills (and level) */
-		sort(who, n, sizeof(*who), cmp_pkill);
+		sort(who, num, sizeof(*who), cmp_pkill);
 	} else if (query.code == 'y' || query.code == 'p') {
 		/* Sort by level; accept 'p' as legacy */
-		sort(who, n, sizeof(*who), cmp_level);
+		sort(who, num, sizeof(*who), cmp_level);
 	} else {
 		/* Any unsupported response is "nope, no history please" */
-	
-		/* XXX XXX Free the "who" array */
 		mem_free(who);
-
 		return;
 	}
 
-	/* Start at the end */
-	i = n - 1;
+	/* Start at the end, as the array is sorted lowest to highest */
+	idx = num - 1;
 
 	/* Scan the monster memory */
 	while (1) {
 		textblock *tb;
 
 		/* Extract a race */
-		int r_idx = who[i];
+		int r_idx = who[idx];
 		struct monster_race *race = &r_info[r_idx];
 		struct monster_lore *lore = &l_list[r_idx];
 
-		/* Hack -- Auto-recall */
+		/* Auto-recall */
 		monster_race_track(player->upkeep, race);
 
-		/* Hack -- Handle stuff */
+		/* Do any necessary updates or redraws */
 		handle_stuff(player);
 
 		tb = textblock_new();
@@ -3355,13 +4405,21 @@ void do_cmd_query_symbol(void)
 		/* Stop scanning */
 		if (query.code == ESCAPE) break;
 
-		/* Move to "prev" or "next" monster */
+		/* Move to previous or next monster */
 		if (query.code == '-') {
-			if (++i == n)
-				i = 0;
+			/* Previous is a step forward in the array */
+			idx++;
+			/* Wrap if we're at the end of the array */
+			if (idx == num) {
+				idx = 0;
+			}
 		} else {
-			if (i-- == 0)
-				i = n - 1;
+			/* Next is a step back in the array */
+			idx--;
+			/* Wrap if we're at the start of the array */
+			if (idx < 0) {
+				idx = num - 1;
+			}
 		}
 	}
 

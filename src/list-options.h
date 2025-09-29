@@ -13,6 +13,8 @@ OP(none,                  "",
 SPECIAL, false)
 OP(rogue_like_commands,   "Use the roguelike command keyset",
 INTERFACE, false)
+OP(autoexplore_commands,  "Use autoexplore commands",
+INTERFACE, false)
 OP(use_sound,             "Use sound",
 INTERFACE, false)
 OP(show_damage,           "Show damage player deals to monsters",
@@ -90,11 +92,13 @@ BIRTH, true)
 OP(birth_start_kit,       "Start with a kit of useful gear",
 BIRTH, true)
 OP(birth_ai_learn,        "Monsters learn from their mistakes",
-BIRTH, false)
+BIRTH, true)
 OP(birth_know_runes,      "Know all runes on birth",
 BIRTH, false)
 OP(birth_know_flavors,    "Know all flavors on birth",
 BIRTH, false)
 OP(birth_levels_persist,  "Persistent levels (experimental)",
+BIRTH, false)
+OP(birth_percent_damage,  "To-damage is a percentage of dice (experimental)",
 BIRTH, false)
 

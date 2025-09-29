@@ -123,8 +123,8 @@ void object_list_reset(object_list_t *list)
 		return;
 
 	memset(list->entries, 0, list->entries_size * sizeof(object_list_entry_t));
-	memset(list->total_entries, 0, OBJECT_LIST_SECTION_MAX * sizeof(u16b));
-	memset(list->total_objects, 0, OBJECT_LIST_SECTION_MAX * sizeof(u16b));
+	memset(list->total_entries, 0, OBJECT_LIST_SECTION_MAX * sizeof(uint16_t));
+	memset(list->total_objects, 0, OBJECT_LIST_SECTION_MAX * sizeof(uint16_t));
 	list->distinct_entries = 0;
 	list->creation_turn = 0;
 	list->sorted = false;
@@ -133,14 +133,15 @@ void object_list_reset(object_list_t *list)
 /**
  * Return true if the object should be omitted from the object list.
  */
-static bool object_list_should_ignore_object(const struct object *obj)
+static bool object_list_should_ignore_object(const struct player *p,
+		const struct object *obj)
 {
 	struct object *base_obj = cave->objects[obj->oidx];
 
 	assert(obj->kind);
 	assert(base_obj);
 
-	if (!is_unknown(base_obj) && ignore_known_item_ok(obj))
+	if (!is_unknown(base_obj) && ignore_known_item_ok(p, obj))
 		return true;
 
 	if (tval_is_money(base_obj))
@@ -187,7 +188,7 @@ void object_list_collect(object_list_t *list)
 			loc_eq(grid, pgrid);
 		field = (los) ? OBJECT_LIST_SECTION_LOS : OBJECT_LIST_SECTION_NO_LOS;
 
-		if (object_list_should_ignore_object(obj)) continue;
+		if (object_list_should_ignore_object(player, obj)) continue;
 
 		/* Find or add a list entry. */
 		for (entry_index = 0; entry_index < (int)list->entries_size;
@@ -319,9 +320,9 @@ void object_list_sort(object_list_t *list,
  * \param entry is the object list entry to display.
  * \return a term attribute for the object entry.
  */
-byte object_list_entry_line_attribute(const object_list_entry_t *entry)
+uint8_t object_list_entry_line_attribute(const object_list_entry_t *entry)
 {
-	byte attr;
+	uint8_t attr;
 	struct object *base_obj;
 
 	if (entry == NULL || entry->object == NULL || entry->object->kind == NULL)
@@ -369,7 +370,6 @@ void object_list_format_name(const object_list_entry_t *entry,
 	bool has_singular_prefix;
 	bool los = false;
 	int field;
-	byte old_number;
 	struct loc pgrid = player->grid;
 	struct object *base_obj;
 	struct loc grid;
@@ -413,15 +413,11 @@ void object_list_format_name(const object_list_entry_t *entry,
 	field = los ? OBJECT_LIST_SECTION_LOS : OBJECT_LIST_SECTION_NO_LOS;
 
 	/*
-	 * Because each entry points to a specific object and not something more
-	 * general, the number of similar objects we counted has to be swapped in.
-	 * This isn't an ideal way to do this, but it's the easiest way until
-	 * object_desc is more flexible.
+	 * Pass the accumulated number via object_desc()'s ODESC_ALTNUM
+	 * mechanism:  it's in the high 16 bits of the mode.
 	 */
-	old_number = entry->object->number;
-	entry->object->number = entry->count[field];
-	object_desc(name, sizeof(name), base_obj, ODESC_PREFIX | ODESC_FULL);
-	entry->object->number = old_number;
+	object_desc(name, sizeof(name), base_obj, ODESC_PREFIX | ODESC_FULL |
+		ODESC_ALTNUM | (entry->count[field] << 16), player);
 
 	/* The source string for strtok() needs to be set properly, depending on
 	 * when we use it. */

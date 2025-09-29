@@ -40,6 +40,7 @@
 #include "player-history.h"
 #include "player-timed.h"
 #include "trap.h"
+#include "ui-term.h"
 
 
 /**
@@ -245,7 +246,7 @@ static void wr_monster(const struct monster *mon)
 		obj = obj->next;
 	}
 	wr_item(dummy);
-	object_delete(&dummy);
+	object_delete(NULL, NULL, &dummy);
 
 	/* Write group info */
 	wr_u16b(mon->group_info[PRIMARY_GROUP].index);
@@ -317,7 +318,9 @@ void wr_options(void)
 	/* Special Options */
 	wr_byte(player->opts.delay_factor);
 	wr_byte(player->opts.hitpoint_warn);
-	wr_u16b(player->opts.lazymove_delay);
+	wr_byte(player->opts.lazymove_delay);
+	/* Fix for tests - only write if angband_term exists, ie in a real game */
+	wr_byte(angband_term[0] ? SIDEBAR_MODE : 0);
 
 	/* Normal options */
 	for (i = 0; i < OPT_MAX; i++) {
@@ -335,8 +338,8 @@ void wr_options(void)
 
 void wr_messages(void)
 {
-	s16b i;
-	u16b num;
+	int16_t i;
+	uint16_t num;
 
 	num = messages_num();
 	if (num > 80) num = 80;
@@ -361,9 +364,10 @@ void wr_monster_memory(void)
 		struct monster_lore *lore = &l_list[r_idx];
 
 		/* Names and kill counts */
-		if (!race->name || !lore->pkills) continue;
+		if (!race->name || !(lore->pkills || lore->thefts)) continue;
 		wr_string(race->name);
 		wr_u16b(lore->pkills);
+		wr_u16b(lore->thefts);
 	}
 	wr_string("No more monsters");
 }
@@ -384,7 +388,7 @@ void wr_object_memory(void)
 
 	/* Kind knowledge */
 	for (k_idx = 0; k_idx < z_info->k_max; k_idx++) {
-		byte tmp8u = 0;
+		uint8_t tmp8u = 0;
 		struct object_kind *kind = &k_info[k_idx];
 
 		if (kind->aware) tmp8u |= 0x01;
@@ -479,10 +483,11 @@ void wr_player(void)
 	wr_s16b(player->recall_depth);
 
 	/* More info */
+	wr_byte(player->old_grid.y);
+	wr_byte(player->old_grid.x);
 	wr_s16b(0);	/* oops */
 	wr_s16b(0);	/* oops */
-	wr_s16b(0);	/* oops */
-	wr_byte(0);
+	wr_byte(player->skip_cmd_coercion);
 	wr_byte(player->unignoring);
 	wr_s16b(player->deep_descent);
 
@@ -508,10 +513,13 @@ void wr_player(void)
 
 void wr_ignore(void)
 {
-	size_t i, j, n;
+	size_t i;
+	uint16_t j, k, n;
+	int nrune;
 
 	/* Write number of ignore bytes */
-	wr_byte(ignore_size);
+	assert(ignore_size <= 255);
+	wr_byte((uint8_t)ignore_size);
 	for (i = 0; i < ignore_size; i++)
 		wr_byte(ignore_level[i]);
 
@@ -578,18 +586,20 @@ void wr_ignore(void)
 
 	/* Write the current number of rune auto-inscriptions */
 	j = 0;
-	n = max_runes();
-	for (i = 0; i < n; i++)
-		if (rune_note(i))
+	nrune = max_runes();
+	assert(nrune >= 0 && nrune <= 65535);
+	n = (uint16_t) MAX(0, MIN(65535, nrune));
+	for (k = 0; k < n; k++)
+		if (rune_note(k))
 			j++;
 
 	wr_u16b(j);
 
 	/* Write the rune autoinscriptions array */
-	for (i = 0; i < n; i++) {
-		if (rune_note(i)) {
-			wr_s16b(i);
-			wr_string(quark_str(rune_note(i)));
+	for (k = 0; k < n; k++) {
+		if (rune_note(k)) {
+			wr_s16b(k);
+			wr_string(quark_str(rune_note(k)));
 		}
 	}
 
@@ -664,16 +674,16 @@ void wr_misc(void)
 void wr_artifacts(void)
 {
 	int i;
-	u16b tmp16u;
+	uint16_t tmp16u;
 
-	/* Hack -- Dump the artifacts */
+	/* Dump the artifacts */
 	tmp16u = z_info->a_max;
 	wr_u16b(tmp16u);
 	for (i = 0; i < tmp16u; i++) {
-		struct artifact *art = &a_info[i];
-		wr_byte(art->created);
-		wr_byte(art->seen);
-		wr_byte(art->everseen);
+		const struct artifact_upkeep *au = &aup_info[i];
+		wr_byte(au->created ? 1 : 0);
+		wr_byte(au->seen ? 1 : 0);
+		wr_byte(au->everseen ? 1 : 0);
 		wr_byte(0);
 	}
 }
@@ -735,13 +745,13 @@ void wr_stores(void)
 {
 	int i;
 
-	wr_u16b(MAX_STORES);
-	for (i = 0; i < MAX_STORES; i++) {
+	wr_u16b(z_info->store_max);
+	for (i = 0; i < z_info->store_max; i++) {
 		const struct store *store = &stores[i];
 		struct object *obj;
 
 		/* Save the current owner */
-		wr_byte(store->owner->oidx);
+		wr_byte((store->owner) ? store->owner->oidx : 0);
 
 		/* Save the stock size */
 		wr_byte(store->stock_num);
@@ -766,10 +776,10 @@ static void wr_dungeon_aux(struct chunk *c)
 	int y, x;
 	size_t i;
 
-	byte tmp8u;
+	uint8_t tmp8u;
 
-	byte count;
-	byte prev_char;
+	uint8_t count;
+	uint8_t prev_char;
 
 	/* Dungeon specific info follows */
 	wr_string(c->name ? c->name : "Blank");
@@ -785,12 +795,12 @@ static void wr_dungeon_aux(struct chunk *c)
 		for (y = 0; y < c->height; y++) {
 			for (x = 0; x < c->width; x++) {
 				/* Extract the important c->squares[y][x].info flags */
-				tmp8u = square(c, loc(x, y)).info[i];
+				tmp8u = square(c, loc(x, y))->info[i];
 
 				/* If the run is broken, or too full, flush it */
 				if ((tmp8u != prev_char) || (count == UCHAR_MAX)) {
-					wr_byte((byte)count);
-					wr_byte((byte)prev_char);
+					wr_byte(count);
+					wr_byte(prev_char);
 					prev_char = tmp8u;
 					count = 1;
 				} else /* Continue the run */
@@ -800,8 +810,8 @@ static void wr_dungeon_aux(struct chunk *c)
 
 		/* Flush the data (if any) */
 		if (count) {
-			wr_byte((byte)count);
-			wr_byte((byte)prev_char);
+			wr_byte(count);
+			wr_byte(prev_char);
 		}
 	}
 
@@ -813,12 +823,12 @@ static void wr_dungeon_aux(struct chunk *c)
 	for (y = 0; y < c->height; y++) {
 		for (x = 0; x < c->width; x++) {
 			/* Extract a byte */
-			tmp8u = square(c, loc(x, y)).feat;
+			tmp8u = square(c, loc(x, y))->feat;
 
 			/* If the run is broken, or too full, flush it */
 			if ((tmp8u != prev_char) || (count == UCHAR_MAX)) {
-				wr_byte((byte)count);
-				wr_byte((byte)prev_char);
+				wr_byte(count);
+				wr_byte(prev_char);
 				prev_char = tmp8u;
 				count = 1;
 			} else /* Continue the run */
@@ -828,8 +838,8 @@ static void wr_dungeon_aux(struct chunk *c)
 
 	/* Flush the data (if any) */
 	if (count) {
-		wr_byte((byte)count);
-		wr_byte((byte)prev_char);
+		wr_byte(count);
+		wr_byte(prev_char);
 	}
 
 	/* Write feeling */
@@ -872,7 +882,7 @@ static void wr_objects_aux(struct chunk *c)
 	wr_u16b(c->obj_max);
 	for (y = 0; y < c->height; y++) {
 		for (x = 0; x < c->width; x++) {
-			struct object *obj = square(c, loc(x, y)).obj;
+			struct object *obj = square(c, loc(x, y))->obj;
 			while (obj) {
 				wr_item(obj);
 				obj = obj->next;
@@ -932,7 +942,7 @@ static void wr_traps_aux(struct chunk *c)
 
 	for (y = 0; y < c->height; y++) {
 		for (x = 0; x < c->width; x++) {
-			struct trap *trap = square(c, loc(x, y)).trap;
+			struct trap *trap = square(c, loc(x, y))->trap;
 			while (trap) {
 				wr_trap(trap);
 				trap = trap->next;
@@ -963,7 +973,7 @@ void wr_dungeon(void)
 	wr_dungeon_aux(player->cave);
 
 	/* Compact the monsters */
-	compact_monsters(0);
+	compact_monsters(cave, 0);
 }
 
 
@@ -1027,7 +1037,7 @@ void wr_chunks(void)
 			wr_u16b(c->height);
 			wr_u16b(c->width);
 			wr_u16b(c->feeling_squares);
-			for (i = 0; i < z_info->f_max + 1; i++) {
+			for (i = 0; i < FEAT_MAX + 1; i++) {
 				wr_u16b(c->feat_count[i]);
 			}
 		}
@@ -1040,7 +1050,7 @@ void wr_history(void)
 	size_t i, j;
 
 	struct history_info *history_list;
-	u32b length = history_get_list(player, &history_list);
+	uint32_t length = history_get_list(player, &history_list);
 
 	wr_byte(HIST_SIZE);
 	wr_u32b(length);

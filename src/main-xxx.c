@@ -461,17 +461,13 @@ static errr Term_wipe_xxx(int x, int y, int n)
  * you must first call "Term_wipe_xxx()" to clear the area.
  *
  * In color environments, you should activate the color contained
- * in "color_data[a & BASIC_COLORS]", if needed, before drawing anything.
+ * in "color_data[a & (MAX_COLORS - 1)]", if needed, before drawing anything.
  *
  * You may ignore the "attribute" if you are only supporting a
  * monochrome environment, since this routine is normally never
  * called to display "black" (invisible) text, including the
  * default "spaces", and all other colors should be drawn in
  * the "normal" color in a monochrome environment.
- *
- * Note that if you have changed the "attr_blank" to something
- * which is not black, then this function must be able to draw
- * the resulting "blank" correctly.
  *
  * Note that this function must correctly handle "black" text if
  * the "always_text" flag is set, if this flag is not set, all the
@@ -514,8 +510,8 @@ static errr Term_text_xxx(int x, int y, int n, int a, const char *cp)
  * This function is only used if one of the "higher_pict" and/or
  * "always_pict" flags are set.
  */
-static errr Term_pict_xxx(int x, int y, int n, const byte *ap, const char *cp,
-                          const byte *tap, const char *tcp)
+static errr Term_pict_xxx(int x, int y, int n, const int *ap, const wchar_t *cp,
+		const int *tap, const wchar_t *tcp)
 {
 	term_data *td = (term_data*)(Term->data);
 
@@ -587,10 +583,6 @@ static void term_data_link(int i)
 	/* This may make things slightly more efficient. */
 	/* t->never_frosh = true; */
 
-	/* Erase with "white space" XXX XXX XXX */
-	/* t->attr_blank = COLOUR_WHITE; */
-	/* t->char_blank = ' '; */
-
 	/* Prepare the init/nuke hooks */
 	t->init_hook = Term_init_xxx;
 	t->nuke_hook = Term_nuke_xxx;
@@ -655,8 +647,8 @@ errr init_xxx(int argc, char **argv)
  *
  * These systems usually have some form of "event loop", run forever
  * as the last step of "main()", which handles things like menus and
- * window movement, and calls "play_game(false)" to load a game after
- * initializing "savefile" to a filename, or "play_game(true)" to make
+ * window movement, and calls "play_game(GAME_LOAD)" to load a game after
+ * initializing "savefile" to a filename, or "play_game(GAME_NEW)" to make
  * a new game.  The event loop would also be triggered by "Term_xtra()"
  * (the TERM_XTRA_EVENT action), in which case the event loop would not
  * actually "loop", but would run once and return.

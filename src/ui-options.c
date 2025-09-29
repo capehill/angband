@@ -27,8 +27,8 @@
 #include "obj-util.h"
 #include "object.h"
 #include "player-calcs.h"
+#include "ui-birth.h"
 #include "ui-display.h"
-#include "ui-help.h"
 #include "ui-input.h"
 #include "ui-keymap.h"
 #include "ui-knowledge.h"
@@ -49,8 +49,13 @@ static bool get_pref_path(const char *what, int row, char *buf, size_t max)
 	screen_save();
 
 	/* Prompt */
+	if (row > 0) {
+		prt("", row - 1, 0);
+	}
 	prt(format("%s to a pref file", what), row, 0);
+	prt("", row + 1, 0);
 	prt("File: ", row + 2, 0);
+	prt("", row + 3, 0);
 
 	/* Get the filesystem-safe name and append .prf */
 	player_safe_name(ftmp, sizeof(ftmp), player->full_name, true);
@@ -112,11 +117,25 @@ static void do_cmd_pref_file_hack(long row);
 static void option_toggle_display(struct menu *m, int oid, bool cursor,
 		int row, int col, int width)
 {
-	byte attr = curs_attrs[CURS_KNOWN][cursor != 0];
+	uint8_t attr = curs_attrs[CURS_KNOWN][cursor != 0];
 	bool *options = menu_priv(m);
+	const char *desc = option_desc(oid);
+	size_t u8len = utf8_strlen(desc);
 
-	c_prt(attr, format("%-45s: %s  (%s)", option_desc(oid),
-			options[oid] ? "yes" : "no ", option_name(oid)), row, col);
+	if (u8len < 45) {
+		c_prt(attr, format("%s%*s", desc, (int)(45 - u8len), " "), row,
+			col);
+	} else {
+		char *desc_copy = string_make(desc);
+
+		if (u8len > 45) {
+			utf8_clipto(desc_copy, 45);
+		}
+		c_prt(attr, desc_copy, row, col);
+		string_free(desc_copy);
+	}
+	c_prt(attr, format(": %s  (%s)", options[oid] ? "yes" : "no ",
+		option_name(oid)), row, col + 45);
 }
 
 /**
@@ -126,12 +145,13 @@ static bool option_toggle_handle(struct menu *m, const ui_event *event,
 		int oid)
 {
 	bool next = false;
+	int page = option_type(oid);
 
 	if (event->type == EVT_SELECT) {
-		/* Hack -- birth options can not be toggled after birth */
+		/* Birth options can not be toggled after birth */
 		/* At birth, m->flags == MN_DBL_TAP. */
 		/* After birth, m->flags == MN_NO_TAGS */
-		if (!((option_type(oid) == OP_BIRTH) && (m->flags == MN_NO_TAGS))) {
+		if (!((page == OP_BIRTH) && (m->flags == MN_NO_TAGS))) {
 			option_set(option_name(oid), !player->opts.opt[oid]);
 		}
 	} else if (event->type == EVT_KBRD) {
@@ -143,10 +163,40 @@ static bool option_toggle_handle(struct menu *m, const ui_event *event,
 			next = true;
 		} else if (event->key.code == 't' || event->key.code == 'T') {
 			option_set(option_name(oid), !player->opts.opt[oid]);
-		} else if (event->key.code == '?') {
+		} else if (event->key.code == 's' || event->key.code == 'S') {
+			char dummy;
+
 			screen_save();
-			show_file(format("option.txt#%s", option_name(oid)), NULL, 0, 0);
+			if (options_save_custom(&player->opts, page)) {
+				get_com("Successfully saved.  Press any key to continue.", &dummy);
+			} else {
+				get_com("Save failed.  Press any key to continue.", &dummy);
+			}
 			screen_load();
+		/*
+		 * For birth options, only allow restore from custom defaults
+		 * at birth.
+		 */
+		} else if ((event->key.code == 'r' || event->key.code == 'R') &&
+				(page != OP_BIRTH || m->flags == MN_DBL_TAP)) {
+			screen_save();
+			if (options_restore_custom(&player->opts, page)) {
+				screen_load();
+				menu_refresh(m, false);
+			} else {
+				char dummy;
+
+				get_com("Restore failed.  Press any key to continue.", &dummy);
+				screen_load();
+			}
+		/*
+		 * For birth options, only allow restore to the maintainer's
+		 * defaults at birth.
+		 */
+		} else if ((event->key.code == 'x' || event->key.code == 'X') &&
+				(page != OP_BIRTH || m->flags == MN_DBL_TAP)) {
+			options_restore_maintainer(&player->opts, page);
+			menu_refresh(m, false);
 		} else {
 			return false;
 		}
@@ -161,6 +211,100 @@ static bool option_toggle_handle(struct menu *m, const ui_event *event,
 
 	return true;
 }
+
+/**
+ * Present a context menu for the birth or interface options so what's
+ * accessible via the keyboard can also be done if only using a mouse.
+ *
+ * \param m is the structure describing the menu for the options.
+ * \param in is the event triggering the context menu.  in->type must be
+ * EVT_MOUSE.
+ * \param out is the event to be passed upstream (to internal handling in
+ * menu_select() or, potentially, menu_select()'s caller).
+ * \return true if the event was handled; otherwise, return false.
+ *
+ * Logic here overlaps with what's done in option_toggle_handle().
+ */
+static bool use_option_context_menu(struct menu *m, const ui_event *in,
+		ui_event *out)
+{
+	enum {
+		ACT_CTX_OPT_SAVE,
+		ACT_CTX_OPT_RESTORE,
+		ACT_CTX_OPT_RESET
+	};
+	/*
+	 * As a bit of a hack, get the type of options involved from the first
+	 * option selected by the menu's filter.
+	 */
+	int page = option_type(m->filter_list[0]);
+	char *labels = string_make(lower_case);
+	struct menu *cm = menu_dynamic_new();
+	bool refresh = false;
+	char save_label[40];
+	int selected;
+	char dummy;
+
+	cm->selections = labels;
+	strnfmt(save_label, sizeof(save_label), "Save as default %s options",
+		option_type_name(page));
+	menu_dynamic_add_label(cm, save_label, 's', ACT_CTX_OPT_SAVE, labels);
+	if (m->flags == MN_DBL_TAP) {
+		menu_dynamic_add_label(cm, "Restore from saved defaults", 'r',
+			ACT_CTX_OPT_RESTORE, labels);
+		menu_dynamic_add_label(cm, "Reset to factory defaults", 'x',
+			ACT_CTX_OPT_RESET, labels);
+	}
+
+	screen_save();
+
+	assert(in->type == EVT_MOUSE);
+	menu_dynamic_calc_location(cm, in->mouse.x, in->mouse.y);
+	region_erase_bordered(&cm->boundary);
+
+	selected = menu_dynamic_select(cm);
+
+	menu_dynamic_free(cm);
+	string_free(labels);
+
+	switch (selected) {
+	case ACT_CTX_OPT_SAVE:
+		if (options_save_custom(&player->opts, page)) {
+			get_com("Successfully saved.  Press any key to "
+				"continue.", &dummy);
+		} else {
+			get_com("Save failed.  Press any key to continue.",
+				&dummy);
+		}
+		break;
+
+	case ACT_CTX_OPT_RESTORE:
+		if (options_restore_custom(&player->opts, page)) {
+			refresh = true;
+		} else {
+			get_com("Restore failed.  Press any key to continue.",
+				&dummy);
+		}
+		break;
+
+	case ACT_CTX_OPT_RESET:
+		options_restore_maintainer(&player->opts, page);
+		refresh = true;
+		break;
+
+	default:
+		/* There's nothing to do. */
+		break;
+	}
+
+	screen_load();
+	if (refresh) {
+		menu_refresh(m, false);
+	}
+
+	return true;
+}
+
 
 /**
  * Toggle option menu display and handling functions
@@ -179,33 +323,37 @@ static const menu_iter option_toggle_iter = {
  */
 static void option_toggle_menu(const char *name, int page)
 {
+	static const char selections[] = "abcdefgimopquvwzABCDEFGHIJKLMOPQUVWZ";
 	int i;
 	
 	struct menu *m = menu_new(MN_SKIN_SCROLL, &option_toggle_iter);
 
 	/* for all menus */
-	m->prompt = "Set option (y/n/t), '?' for information";
-	m->cmd_keys = "?YyNnTt";
-	m->selections = "abcdefghijklmopqrsuvwxz";
+	m->prompt = "Set option (y/n/t), select with movement keys or index";
+	m->cmd_keys = "YyNnTt";
+	m->selections = selections;
 	m->flags = MN_DBL_TAP;
 
 	/* We add 10 onto the page amount to indicate we're at birth */
 	if (page == OPT_PAGE_BIRTH) {
-		m->prompt = "You can only modify these options at character birth. '?' for information";
-		m->cmd_keys = "?";
+		m->prompt = "You can only modify these options at character birth.";
+		m->cmd_keys = "";
 		m->flags = MN_NO_TAGS;
-	} else if (page == OPT_PAGE_BIRTH + 10) {
-		page -= 10;
+	} else if (page == OPT_PAGE_BIRTH + 10 || page == OP_INTERFACE) {
+		m->prompt = "Set option (y/n/t), 's' to save, 'r' to restore, 'x' to reset";
+		m->cmd_keys = "YyNnTtSsRrXx";
+		/* Provide a context menu for equivalents to 's', 'r', .... */
+		m->context_hook = use_option_context_menu;
+		if (page == OPT_PAGE_BIRTH + 10) {
+			page -= 10;
+		}
 	}
 
 	/* for this particular menu */
 	m->title = name;
 
 	/* Find the number of valid entries */
-	for (i = 0; i < OPT_PAGE_PER; i++) {
-		if (option_page[page][i] == OPT_none)
-			break;
-	}
+	for (i = 0; option_page[page][i] != OPT_none; ++i) {}
 
 	/* Set the data to the player's options */
 	menu_setpriv(m, OPT_MAX, &player->opts.opt);
@@ -241,7 +389,7 @@ static void do_cmd_options_win(const char *name, int row)
 	int y = 0;
 	int x = 0;
 	ui_event ke;
-	u32b new_flags[ANGBAND_TERM_MAX];
+	uint32_t new_flags[ANGBAND_TERM_MAX];
 
 	/* Set new flags to the old values */
 	for (j = 0; j < ANGBAND_TERM_MAX; j++)
@@ -258,7 +406,7 @@ static void do_cmd_options_win(const char *name, int row)
 
 		/* Display the windows */
 		for (j = 0; j < ANGBAND_TERM_MAX; j++) {
-			byte a = COLOUR_WHITE;
+			uint8_t a = COLOUR_WHITE;
 
 			const char *s = angband_term_name[j];
 
@@ -271,7 +419,7 @@ static void do_cmd_options_win(const char *name, int row)
 
 		/* Display the options */
 		for (i = 0; i < PW_MAX_FLAGS; i++) {
-			byte a = COLOUR_WHITE;
+			uint8_t a = COLOUR_WHITE;
 
 			const char *str = window_flag_desc[i];
 
@@ -286,7 +434,7 @@ static void do_cmd_options_win(const char *name, int row)
 
 			/* Display the windows */
 			for (j = 0; j < ANGBAND_TERM_MAX; j++) {
-				char c = '.';
+				wchar_t c = L'.';
 
 				a = COLOUR_WHITE;
 
@@ -294,7 +442,7 @@ static void do_cmd_options_win(const char *name, int row)
 				if ((i == y) && (j == x)) a = COLOUR_L_BLUE;
 
 				/* Active flag */
-				if (new_flags[j] & (1L << i)) c = 'X';
+				if (new_flags[j] & ((uint32_t) 1 << i)) c = L'X';
 
 				/* Flag value */
 				Term_putch(35 + j * 5, i + 5, a, c);
@@ -319,12 +467,14 @@ static void do_cmd_options_win(const char *name, int row)
 				&& (choicex > 0) && (choicex < ANGBAND_TERM_MAX)
 				&& !(ke.mouse.x % 5)) {
 				if ((choicey == y) && (choicex == x)) {
+					uint32_t flag = ((uint32_t) 1) << y;
+
 					/* Toggle flag (off) */
-					if (new_flags[x] & (1L << y))
-						new_flags[x] &= ~(1L << y);
+					if (new_flags[x] & flag)
+						new_flags[x] &= ~flag;
 					/* Toggle flag (on) */
 					else
-						new_flags[x] |= (1L << y);
+						new_flags[x] |= flag;
 				} else {
 					y = choicey;
 					x = (ke.mouse.x - 35)/5;
@@ -337,17 +487,17 @@ static void do_cmd_options_win(const char *name, int row)
 			/* Toggle */
 			else if (ke.key.code == '5' || ke.key.code == 't' ||
 					ke.key.code == KC_ENTER) {
-				/* Hack -- ignore the main window */
+				/* Ignore the main window */
 				if (x == 0)
-					bell("Cannot set main window flags!");
+					bell();
 
 				/* Toggle flag (off) */
-				else if (new_flags[x] & (1L << y))
-					new_flags[x] &= ~(1L << y);
+				else if (new_flags[x] & (((uint32_t) 1) << y))
+					new_flags[x] &= ~(((uint32_t) 1) << y);
 
 				/* Toggle flag (on) */
 				else
-					new_flags[x] |= (1L << y);
+					new_flags[x] |= (((uint32_t) 1) << y);
 
 				/* Continue */
 				continue;
@@ -406,7 +556,7 @@ static struct keypress keymap_get_trigger(void)
 	/* Convert to ascii */
 	keypress_to_text(tmp, sizeof(tmp), buf, false);
 
-	/* Hack -- display the trigger */
+	/* Display the trigger */
 	Term_addstr(-1, COLOUR_WHITE, tmp);
 
 	/* Flush */
@@ -476,8 +626,8 @@ static void ui_keymap_create(const char *title, int row)
 	prt("Key: ", 14, 0);
 
 	c = keymap_get_trigger();
-	if (c.code == '$') {
-		c_prt(COLOUR_L_RED, "The '$' key is reserved.", 16, 2);
+	if (c.code == '=') {
+		c_prt(COLOUR_L_RED, "The '=' key is reserved.", 16, 2);
 		prt("Press any key to continue.", 18, 0);
 		inkey();
 		return;
@@ -494,14 +644,14 @@ static void ui_keymap_create(const char *title, int row)
 		keypress_to_text(tmp, sizeof(tmp), keymap_buffer, false);
 		c_prt(color, format("Action: %s", tmp), 15, 0);
 
-		c_prt(COLOUR_L_BLUE, "  Press '$' when finished.", 17, 0);
-		c_prt(COLOUR_L_BLUE, "  Use 'CTRL-U' to reset.", 18, 0);
+		c_prt(COLOUR_L_BLUE, "  Press '=' when finished.", 17, 0);
+		c_prt(COLOUR_L_BLUE, "  Use 'CTRL-u' to reset.", 18, 0);
 		c_prt(COLOUR_L_BLUE, format("(Maximum keymap length is %d keys.)",
 									KEYMAP_ACTION_MAX), 19, 0);
 
 		kp = inkey();
 
-		if (kp.code == '$') {
+		if (kp.code == '=') {
 			done = true;
 			continue;
 		}
@@ -536,9 +686,9 @@ static void ui_keymap_create(const char *title, int row)
 		}
 	}
 
-	if (c.code && get_check("Save this keymap? ")) {
+	if (c.code && get_check("Keep this keymap? ")) {
 		keymap_add(mode, c, keymap_buffer, true);
-		prt("Keymap added.  Press any key to continue.", 17, 0);
+		prt("To use in other sessions, save the keymaps to a file.  Press a key to continue.", 17, 0);
 		inkey();
 	}
 }
@@ -712,7 +862,7 @@ static void colors_pref_load(const char *title, int row)
 	 * colour changes - how about doing this in the pref file
 	 * loading code too? */
 	Term_xtra(TERM_XTRA_REACT, 0);
-	Term_redraw();
+	Term_redraw_all();
 }
 
 static void colors_pref_dump(const char *title, int row)
@@ -724,12 +874,12 @@ static void colors_modify(const char *title, int row)
 {
 	int i;
 
-	static byte a = 0;
+	static uint8_t a = 0;
 
 	/* Prompt */
 	prt("Command: Modify colors", 8, 0);
 
-	/* Hack -- query until done */
+	/* Query until done */
 	while (1) {
 		const char *name;
 		char index;
@@ -745,11 +895,11 @@ static void colors_modify(const char *title, int row)
 			Term_putstr(i*3, 20, -1, a, "##");
 
 			/* Exhibit character letter */
-			Term_putstr(i*3, 21, -1, (byte)i,
+			Term_putstr(i*3, 21, -1, (uint8_t)i,
 						format(" %c", color_table[i].index_char));
 
 			/* Exhibit all colors */
-			Term_putstr(i*3, 22, -1, (byte)i, format("%2d", i));
+			Term_putstr(i*3, 22, -1, (uint8_t)i, format("%2d", i));
 		}
 
 		/* Describe the color */
@@ -780,31 +930,47 @@ static void colors_modify(const char *title, int row)
 		if (cx.code == ESCAPE) break;
 
 		/* Analyze */
-		if (cx.code == 'n')
-			a = (byte)(a + 1);
-		if (cx.code == 'N')
-			a = (byte)(a - 1);
+		if (cx.code == 'n') {
+			a = (uint8_t)(a + 1);
+			if (a >= MAX_COLORS) {
+				a = 0;
+			}
+		}
+		if (cx.code == 'N') {
+			a = (uint8_t)(a - 1);
+			if (a >= MAX_COLORS) {
+				a = MAX_COLORS - 1;
+			}
+		}
 		if (cx.code == 'k')
-			angband_color_table[a][0] = (byte)(angband_color_table[a][0] + 1);
+			angband_color_table[a][0] =
+				(uint8_t)(angband_color_table[a][0] + 1);
 		if (cx.code == 'K')
-			angband_color_table[a][0] = (byte)(angband_color_table[a][0] - 1);
+			angband_color_table[a][0] =
+				(uint8_t)(angband_color_table[a][0] - 1);
 		if (cx.code == 'r')
-			angband_color_table[a][1] = (byte)(angband_color_table[a][1] + 1);
+			angband_color_table[a][1] =
+				(uint8_t)(angband_color_table[a][1] + 1);
 		if (cx.code == 'R')
-			angband_color_table[a][1] = (byte)(angband_color_table[a][1] - 1);
+			angband_color_table[a][1] =
+				(uint8_t)(angband_color_table[a][1] - 1);
 		if (cx.code == 'g')
-			angband_color_table[a][2] = (byte)(angband_color_table[a][2] + 1);
+			angband_color_table[a][2] =
+				(uint8_t)(angband_color_table[a][2] + 1);
 		if (cx.code == 'G')
-			angband_color_table[a][2] = (byte)(angband_color_table[a][2] - 1);
+			angband_color_table[a][2] =
+				(uint8_t)(angband_color_table[a][2] - 1);
 		if (cx.code == 'b')
-			angband_color_table[a][3] = (byte)(angband_color_table[a][3] + 1);
+			angband_color_table[a][3] =
+				(uint8_t)(angband_color_table[a][3] + 1);
 		if (cx.code == 'B')
-			angband_color_table[a][3] = (byte)(angband_color_table[a][3] - 1);
+			angband_color_table[a][3] =
+				(uint8_t)(angband_color_table[a][3] - 1);
 
-		/* Hack -- react to changes */
+		/* React to changes */
 		Term_xtra(TERM_XTRA_REACT, 0);
 
-		/* Hack -- redraw */
+		/* Redraw */
 		Term_redraw();
 	}
 }
@@ -885,7 +1051,7 @@ static bool askfor_aux_numbers(char *buf, size_t buflen, size_t *curs, size_t *l
 /**
  * Set base delay factor
  */
-static void do_cmd_delay(const char *name, int row)
+static void do_cmd_delay(const char *name, int unused)
 {
 	char tmp[4] = "";
 	int msec = player->opts.delay_factor;
@@ -895,16 +1061,52 @@ static void do_cmd_delay(const char *name, int row)
 	screen_save();
 
 	/* Prompt */
+	prt("", 19, 0);
 	prt("Command: Base Delay Factor", 20, 0);
-
-	prt(format("Current base delay factor: %d msec",
-			   player->opts.delay_factor, msec), 22, 0);
 	prt("New base delay factor (0-255): ", 21, 0);
+	prt(format("Current base delay factor: %d msec", msec), 22, 0);
+	prt("", 23, 0);
 
 	/* Ask for a numeric value */
 	if (askfor_aux(tmp, sizeof(tmp), askfor_aux_numbers)) {
-		u16b val = (u16b) strtoul(tmp, NULL, 0);
+		uint16_t val = (uint16_t) strtoul(tmp, NULL, 0);
 		player->opts.delay_factor = MIN(val, 255);
+	}
+
+	screen_load();
+}
+
+/**
+ * Set sidebar mode
+ */
+static void do_cmd_sidebar_mode(const char *name, int unused)
+{
+	char tmp[20] = "";	
+	const char *names[SIDEBAR_MAX] = {"Left", "Top", "None"};
+	struct keypress cx = KEYPRESS_NULL;
+
+	screen_save();
+
+	while (true) {	
+
+		// Get the name
+		my_strcpy(tmp, names[SIDEBAR_MODE % SIDEBAR_MAX], sizeof(tmp));
+
+		/* Prompt */
+		prt("", 19, 0);
+		prt("Command: Sidebar Mode", 20, 0);
+		prt(format("Current mode: %s", tmp), 21, 0);
+		prt("ESC: go back, other: cycle", 22, 0);
+		prt("", 23, 0);
+
+		/* Get a command */
+		cx = inkey();
+
+		/* All done */
+		if (cx.code == ESCAPE) break;
+
+		// Cycle
+		SIDEBAR_MODE = (SIDEBAR_MODE + 1) % SIDEBAR_MAX;
 	}
 
 	screen_load();
@@ -914,29 +1116,31 @@ static void do_cmd_delay(const char *name, int row)
 /**
  * Set hitpoint warning level
  */
-static void do_cmd_hp_warn(const char *name, int row)
+static void do_cmd_hp_warn(const char *name, int unused)
 {
 	bool res;
 	char tmp[4] = "";
-	byte warn;
+	uint8_t warn;
 
 	strnfmt(tmp, sizeof(tmp), "%i", player->opts.hitpoint_warn);
 
 	screen_save();
 
 	/* Prompt */
+	prt("", 19, 0);
 	prt("Command: Hitpoint Warning", 20, 0);
-
-	prt(format("Current hitpoint warning: %d (%d%%)",
-			   player->opts.hitpoint_warn, player->opts.hitpoint_warn * 10), 22, 0);
 	prt("New hitpoint warning (0-9): ", 21, 0);
+	prt(format("Current hitpoint warning: %d (%d%%)",
+		player->opts.hitpoint_warn, player->opts.hitpoint_warn * 10),
+		22, 0);
+	prt("", 23, 0);
 
 	/* Ask the user for a string */
 	res = askfor_aux(tmp, sizeof(tmp), askfor_aux_numbers);
 
 	/* Process input */
 	if (res) {
-		warn = (byte) strtoul(tmp, NULL, 0);
+		warn = (uint8_t) strtoul(tmp, NULL, 0);
 		
 		/* Reset nonsensical warnings */
 		if (warn > 9)
@@ -952,7 +1156,7 @@ static void do_cmd_hp_warn(const char *name, int row)
 /**
  * Set "lazy-movement" delay
  */
-static void do_cmd_lazymove_delay(const char *name, int row)
+static void do_cmd_lazymove_delay(const char *name, int unused)
 {
 	bool res;
 	char tmp[4] = "";
@@ -962,18 +1166,22 @@ static void do_cmd_lazymove_delay(const char *name, int row)
 	screen_save();
 
 	/* Prompt */
+	prt("", 19, 0);
 	prt("Command: Movement Delay Factor", 20, 0);
-
-	prt(format("Current movement delay: %d (%d msec)",
-			   player->opts.lazymove_delay, player->opts.lazymove_delay * 10), 22, 0);
 	prt("New movement delay: ", 21, 0);
+	prt(format("Current movement delay: %d (%d msec)",
+		player->opts.lazymove_delay, player->opts.lazymove_delay * 10),
+		22, 0);
+	prt("", 23, 0);
 
 	/* Ask the user for a string */
 	res = askfor_aux(tmp, sizeof(tmp), askfor_aux_numbers);
 
 	/* Process input */
-	if (res)
-		player->opts.lazymove_delay = (u16b) strtoul(tmp, NULL, 0);
+	if (res) {
+		unsigned long delay = strtoul(tmp, NULL, 0);
+		player->opts.lazymove_delay = (uint8_t) MIN(delay, 255);
+	}
 
 	screen_load();
 }
@@ -996,10 +1204,13 @@ static void do_cmd_pref_file_hack(long row)
 	screen_save();
 
 	/* Prompt */
+	if (row > 0) {
+		prt("", row - 1, 0);
+	}
 	prt("Command: Load a user pref file", row, 0);
-
-	/* Prompt */
+	prt("", row + 1, 0);
 	prt("File: ", row + 2, 0);
+	prt("", row + 3, 0);
 
 	/* Get the filesystem-safe name and append .prf */
 	player_safe_name(ftmp, sizeof(ftmp), player->full_name, true);
@@ -1041,6 +1252,13 @@ static void do_dump_options(const char *title, int row) {
  */
 static void do_dump_autoinsc(const char *title, int row) {
 	dump_pref_file(dump_autoinscriptions, "Dump autoinscriptions", 20);
+}
+
+/**
+ * Write character screen customizations to a file.
+ */
+static void do_dump_charscreen_opt(const char *title, int row) {
+	dump_pref_file(dump_ui_entry_renderers, "Dump char screen options", 20);
 }
 
 /**
@@ -1144,8 +1362,8 @@ static void ego_display(struct menu * menu, int oid, bool cursor, int row,
 	struct ego_desc *choice = (struct ego_desc *) menu->menu_data;
 	bool ignored = ego_is_ignored(choice[oid].e_idx, choice[oid].itype);
 
-	byte attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
-	byte sq_attr = (ignored ? COLOUR_L_RED : COLOUR_L_GREEN);
+	uint8_t attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
+	uint8_t sq_attr = (ignored ? COLOUR_L_RED : COLOUR_L_GREEN);
 
 	/* Acquire the "name" of object "i" */
 	(void) ego_item_name(buf, sizeof(buf), &choice[oid]);
@@ -1307,7 +1525,7 @@ static int cmp_ignore(const void *a, const void *b)
 /**
  * Determine if an item is a valid choice
  */
-int quality_validity(struct menu *menu, int oid)
+static int quality_validity(struct menu *menu, int oid)
 {
 	return oid ? 1 : 0;
 }
@@ -1318,17 +1536,29 @@ int quality_validity(struct menu *menu, int oid)
 static void quality_display(struct menu *menu, int oid, bool cursor, int row,
 							int col, int width)
 {
-	/* Note: the order of the values in quality_choices do not align with the
-	 * ignore_type_t enum order. - fix? NRM*/
-	const char *name = quality_choices[oid].name;
+	if (oid) {
+		/* Note: the order of the values in quality_choices do not
+			align with the ignore_type_t enum order. - fix? NRM*/
+		const char *name = quality_choices[oid].name;
+		uint8_t level = ignore_level[oid];
+		const char *level_name = quality_values[level].name;
+		uint8_t attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
+		size_t u8len = utf8_strlen(name);
 
-	byte level = ignore_level[oid];
-	const char *level_name = quality_values[level].name;
+		if (u8len < 30) {
+			c_put_str(attr, format("%s%*s", name, (int)(30 - u8len),
+				" "), row, col);
+		} else {
+			char *name_copy = string_make(name);
 
-	byte attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
-
-	if (oid)
-		c_put_str(attr, format("%-30s : %s", name, level_name), row, col);
+			if (u8len > 30) {
+				utf8_clipto(name_copy, 30);
+			}
+			c_put_str(attr, name_copy, row, col);
+			string_free(name_copy);
+		}
+		c_put_str(attr, format(" : %s", level_name), row, col + 30);
+	}
 }
 
 
@@ -1339,7 +1569,7 @@ static void quality_subdisplay(struct menu *menu, int oid, bool cursor, int row,
 							   int col, int width)
 {
 	const char *name = quality_values[oid].name;
-	byte attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
+	uint8_t attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
 
 	c_put_str(attr, name, row, col);
 }
@@ -1394,7 +1624,7 @@ static bool quality_action(struct menu *m, const ui_event *event, int oid)
 /**
  * Display quality ignore menu.
  */
-static void quality_menu(void *unused, const char *also_unused)
+static void quality_menu(const char *unused, int also_unused)
 {
 	struct menu menu;
 	menu_iter menu_f = { NULL, quality_validity, quality_display,
@@ -1490,7 +1720,7 @@ static void ignore_sval_menu_display(struct menu *menu, int oid, bool cursor,
 	struct object_kind *kind = choice[oid].kind;
 	bool aware = choice[oid].aware;
 
-	byte attr = curs_attrs[(int)aware][0 != cursor];
+	uint8_t attr = curs_attrs[(int)aware][0 != cursor];
 
 	/* Acquire the "name" of object "i" */
 	object_kind_name(buf, sizeof(buf), kind, aware);
@@ -1634,6 +1864,7 @@ static bool sval_menu(int tval, const char *desc)
 	menu_select(menu, 0, false);
 
 	/* Free memory */
+	mem_free(menu);
 	mem_free(choices);
 
 	/* Load screen */
@@ -1672,7 +1903,7 @@ static struct
 {
 	char tag;
 	const char *name;
-	void (*action)(); /* this is a nasty hack */
+	void (*action)(const char*, int);
 } extra_item_options[] = {
 	{ 'Q', "Quality ignoring options", quality_menu },
 	{ 'E', "Ego ignoring options", ego_menu},
@@ -1684,7 +1915,7 @@ static char tag_options_item(struct menu *menu, int oid)
 	size_t line = (size_t) oid;
 
 	if (line < N_ELEMENTS(sval_dependent))
-		return I2A(oid);
+		return all_letters_nohjkl[oid];
 
 	/* Separator - blank line. */
 	if (line == N_ELEMENTS(sval_dependent))
@@ -1725,11 +1956,11 @@ static void display_options_item(struct menu *menu, int oid, bool cursor,
 	/* Most of the menu is svals, with a small "extra options" section below */
 	if (line < N_ELEMENTS(sval_dependent)) {
 		bool known = seen_tval(sval_dependent[line].tval);
-		byte attr = curs_attrs[known ? CURS_KNOWN: CURS_UNKNOWN][(int)cursor];
+		uint8_t attr = curs_attrs[known ? CURS_KNOWN: CURS_UNKNOWN][(int)cursor];
 
 		c_prt(attr, sval_dependent[line].desc, row, col);
 	} else {
-		byte attr = curs_attrs[CURS_KNOWN][(int)cursor];
+		uint8_t attr = curs_attrs[CURS_KNOWN][(int)cursor];
 
 		line = line - N_ELEMENTS(sval_dependent) - 1;
 
@@ -1748,7 +1979,7 @@ static bool handle_options_item(struct menu *menu, const ui_event *event,
 		} else {
 			oid = oid - (int)N_ELEMENTS(sval_dependent) - 1;
 			assert((size_t) oid < N_ELEMENTS(extra_item_options));
-			extra_item_options[oid].action();
+			extra_item_options[oid].action(NULL, 0);
 		}
 
 		return true;
@@ -1812,12 +2043,14 @@ static menu_action option_actions[] =
 	{ 0, 'd', "Set base delay factor", do_cmd_delay },
 	{ 0, 'h', "Set hitpoint warning", do_cmd_hp_warn },
 	{ 0, 'm', "Set movement delay", do_cmd_lazymove_delay },
+	{ 0, 'o', "Set sidebar mode", do_cmd_sidebar_mode },
 	{ 0, 0, NULL, NULL },
 	{ 0, 's', "Save subwindow setup to pref file", do_dump_options },
 	{ 0, 't', "Save autoinscriptions to pref file", do_dump_autoinsc },
+	{ 0, 'u', "Save char screen options to pref file", do_dump_charscreen_opt },
 	{ 0, 0, NULL, NULL },
-	{ 0, 'l', "Load a user pref file", options_load_pref_file },
-	{ 0, 'k', "Edit keymaps (advanced)", do_cmd_keymaps },
+	{ 0, 'p', "Load a user pref file", options_load_pref_file },
+	{ 0, 'e', "Edit keymaps (advanced)", do_cmd_keymaps },
 	{ 0, 'c', "Edit colours (advanced)", do_cmd_colors },
 	{ 0, 'v', "Save visuals (advanced)", do_cmd_visuals },
 };

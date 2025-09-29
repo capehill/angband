@@ -15,7 +15,7 @@ int setup_tests(void **state) {
 NOTEARDOWN
 
 /* Testing the linked list functions in obj-pile.c */
-int test_obj_piles(void *state) {
+static int test_obj_piles(void *state) {
 	struct object *pile = NULL;
 
 	struct object *o1 = object_new();
@@ -60,7 +60,7 @@ int test_obj_piles(void *state) {
 	eq(pile_contains(pile, o3), false);
 	ptreq(pile_last_item(pile), o2);
 	ptreq(pile_last_item(pile)->prev, o1);
-	object_delete(&o3);
+	object_delete(NULL, NULL, &o3);
 
 	/* Now put it back, and add another */
 	o3 = object_new();
@@ -85,7 +85,7 @@ int test_obj_piles(void *state) {
 	null(o4->next);
 
 	/* Free up */
-	object_pile_free(pile);
+	object_pile_free(NULL, NULL, pile);
 	object_free(o3);
 
 	ok;

@@ -10,14 +10,22 @@ Angband allows you to change various aspects of the game to suit your tastes.  T
 * `Keymaps`_ - a way to assign commonly-used actions to specific keys
 * `Visuals`_ - allowing you to change the appearance of in-game entities like objects and monsters
 * `Colours`_ - allowing you to make a given color brighter, darker, or even completely different
+* `Interface details`_ - depending on which interface to the game you use, these give you control over the font, window placement, and graphical tile set
 
-You can save your preferences for these into files, which are called `user pref files`.
+Except for the options, which are linked to the save file, and interface
+details, that are handled by the front end rather than the core of the game,
+you can save your preferences for these into files, which are called
+`user pref files`.  For the options, customize those using the ``=`` command
+while playing.
 
+
+.. _user-pref-files:
 
 User Pref Files
 ===============
 
-User pref files are Angband's way of saving and loading certain settings.  They can store:
+User pref files are Angband's way of saving and loading certain settings.
+They can store:
 
 * Altered visual appearances for game entities
 * Inscriptions to automatically apply to items
@@ -27,9 +35,12 @@ User pref files are Angband's way of saving and loading certain settings.  They 
 * Colours for different types of messages
 * What audio files to play for different types of messages
 
-They are simple text files with an easy to modify format, and the game has a set of pre-existing pref files in the lib/customize/ folder.  It's recommended you don't modify these.
+They are simple text files with an easy to modify format, and the game has
+a set of pre-existing pref files in the ``lib/customize/`` folder. It's
+recommended you don't modify these.
 
-Several options menu (``=``) items allow you to load existing user pref files, create new user pref files, or save to a user pref file.
+Several options menu (``=``) items allow you to load existing user pref files,
+create new user pref files, or save to a user pref file.
 
 Where to find them
 ~~~~~~~~~~~~~~~~~~
@@ -43,25 +54,35 @@ On Windows you can find them in ``lib/user/``.
 How do they get loaded?
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-When the game starts up, after you have loaded or created a character, some user pref files are loaded automatically.  These are the ones mentioned above in the ``lib/customize/`` folder, namely ``pref.prf`` followed by ``font.prf``.  If you have graphics turned on, then the game will also load some settings from ``lib/tiles/``.
+When the game starts up, after you have loaded or created a character, some user
+pref files are loaded automatically. These are the ones mentioned above in the
+``lib/customize/`` folder, namely ``pref.prf`` followed by ``font.prf``.  If you
+have graphics turned on, then the game will also load some settings from
+``lib/tiles/``.
 
 After these are complete, the game will try to load (in order):
 
-* ``Race.prf`` - where race is your character's race
-* ``Class.prf`` - where class if your character's class
-* ``Name.prf`` - where name is your character's name
+* ``window.prf`` - loaded for all characters
+* *race*.prf - where *race* is your character's race, so something like
+  ``Dwarf.prf``
+* *class*.prf - where *class* is your character's class, so something like
+  ``Paladin.prf``
+* *name*.prf - where *name* is your character's name, so something like
+  ``Balin.prf``
 
-So, you can save some settings - for example, keymaps - to the ``Mage.prf`` file if you only want them to be loaded for mages.
+You can save some settings - for example, keymaps - to the ``Mage.prf`` file
+if you only want them to be loaded for mages.
 
-You may also enter single user pref commands directly, using the special "Enter a user pref command" command, activated by pressing ``"``.
+You may also enter single user pref commands directly, using the special "Enter a
+user pref command" command, activated by pressing ``"``.
 
-You may have to use the redraw command (``^R``) after changing certain of the aspects of the game to allow Angband to adapt to your changes.
-
+You may have to use the redraw command (``^r``) after changing certain of the
+aspects of the game to allow Angband to adapt to your changes.
 
 Ignoring items
 ==============
 
-Angband allows you to ignore specific items that you don't want to see anymore. These items are marked 'ignored' and any similar items are hidden from view. The easiest way to ignore an item is with the ``k`` (or ``^D``) command; the object is dropped and then hidden from view.  When ignoring an object, you will be given a choice of ignoring just that object, or all objects like it in some way.
+Angband allows you to ignore specific items that you don't want to see anymore. These items are marked 'ignored' and any similar items are hidden from view. The easiest way to ignore an item is with the ``k`` (or ``^d``) command; the object is dropped and then hidden from view.  When ignoring an object, you will be given a choice of ignoring just that object, or all objects like it in some way. If you accidentally ignore an item or find yourself in a situation where you want to see if a previously ignored item is available nearby, one way to handle that is to turn off ignoring for all items with the ``K`` (or ``O``) command, go to the item you want, unignore it with the ``k`` (or ``^d``) command, and then turn on ignoring again with the ``K`` (or ``O``) command. When ignoring has been turned off for all items, you will see ``Unignoring`` in the status line at the bottom of the screen.
 
 The entire ignoring system can also be accessed from the options menu (``=``) by choosing ``i`` for ``Item ignoring setup``.  This allows ignore settings for non-wearable items, and quality and ego ignore settings (described below) for wearable items, to be viewed or changed.
 
@@ -93,7 +114,14 @@ Inscribing an item with '!!':
 
 Inscribing an item with '=g':
 	This marks an item as 'always pick up'.  This is sometimes useful for
-	picking up ammunition after a shootout.
+	picking up ammunition after a shootout.  If there is a number
+	immediately after the 'g', then the amount picked up automatically
+	will be limited.  If you have inscribed a spellbook with '=g4' and have
+	four or more copies in your pack, you will not automatically pick up
+	any more copies when you have the 'pickup if in inventory' option
+	enabled.  If you have three copies in your pack with that inscription
+	and happen to find a pile of two copies, you'll automatically pick up
+	one so there is four in the pack.
 
 Inscribing an item with ``!`` followed by a command letter or ``*``:
 	This means "ask me before using this item".  '!w' means 'ask me before
@@ -111,7 +139,7 @@ Inscribing an item with ``!`` followed by a command letter or ``*``:
 	Some adventurers use this for Scrolls of Word of Recall so they don't
 	accidentally return to the dungeon too soon.
 
-Inscribing an item with ``@``, followed by a command latter, followed by 0-9:
+Inscribing an item with ``@``, followed by a command letter, followed by 0-9:
 	Normally when you select an item from your inventory you must enter the
 	letter that corresponds to the item. Since the order of your inventory
 	changes as items get added and removed, this can get annoying.  You
@@ -121,8 +149,8 @@ Inscribing an item with ``@``, followed by a command latter, followed by 0-9:
 	use the first one.
 
 	For example, if you inscribe a staff of Cure Light Wounds with '@u1',
-	you can refer to it by pressing 1 when ``u``sing it.  You could also
-	inscribe a wand of Wonder with '@a1', and when using ``a``, 1 would select
+	you can refer to it by pressing 1 when ``u``\sing it.  You could also
+	inscribe a wand of Wonder with '@a1', and when using ``a``\, 1 would select
 	that wand.
 
 	Spellcasters should inscribe their books, so that if they lose them they
@@ -146,6 +174,8 @@ Inscribing an item with ``^``, followed by a command letter:
 	very annoying!
 
 
+.. _showing-extra-info-in-subwindows:
+
 Showing extra info in subwindows
 ================================
 
@@ -156,27 +186,29 @@ You may then need to make the window visible using the "window" menu from the me
 There are a variety of subwindow choices and you should experiment to see which ones are the most useful for you.
 
 
+.. _keymaps:
+
 Keymaps
 =======
 
-You can set up keymaps in Angband, which allow you to map a single keypress to a series of keypresses.  For example you might map the key F1 to "maa" (the keypresses to cast "Magic Missile" as a spellcaster). This can speed up access to commonly-used features.
+You can set up keymaps in Angband, which allow you to map a single keypress, the trigger, to a series of keypresses, the action.  For example you might map the key F1 to "maa" (the keypresses to cast "Magic Missile" as a spellcaster).  This can speed up access to commonly-used features.  To bypass a keymap that's been assigned to a key, press ``\`` before pressing the key.
 
-To set up keymaps, go to the options menu (``=``) and select "Edit keymaps" (``k``).
+To set up keymaps, go to the options menu (``=``) and select "Edit keymaps" (``e``).  There, you can check if a key triggers a keymap:  select "Query a keymap" (``c``) and then press the key to check.  You can also remove an existing keymap:  select "Remove a keymap" (``e``) and then press the key that trigger the keymap to be removed.  To add a new keymap (or overwrite an existing one), select "Create a keymap" (``d``), it will then prompt you for the key that triggers the keymap.  After pressing the trigger key, you'll be prompted for the keymap's action, the series of keypresses that'll be generated when the trigger key is pressed.  If you make a mistake while entering the keypresses for the action, press ``Control-u`` to erase the keypresses already entered for the action.  Once you've finished entering the keypresses for the action, press ``=`` to end the sequence; you'll then be prompted for whether to keep the newly entered keymap.
 
-Keymaps have two parts: the trigger key and the action.  These are written where possible just as ordinary characters.  However, if modifier keys (shift, control, etc.) are used then they are encoded as special characters within curly braces {}.
+Within the action for a keymap, it is frequently useful to temporarily suppress -more- prompts since they can swallow keypresses from the keymap.  To disable those prompts from within the action, include ``(``.  To reenable the prompts, include ``)``.  So, a typical action where -more- prompts could happen would look like this: ``(`` your keypresses here ``)``.
 
-Possible modifiers are::
+The keypresses in the action will be interpreted relative to the keyset you are currently using (original or roguelike).  The game will remember what keyset was in effect when the keymap was created.  So if you change keysets, the keymaps which were only defined for the other keyset won't be visible.  You can have two keymaps, one for the original keyset and another for the roguelike keyset, bound to the same trigger.
 
-	K = Keypad (for numbers)
-	M = Meta (Cmd-key on OS X, alt on most other platforms)
-	^ = Control
-	S = Shift
+Keymaps are not recursive.  If you have F1 as the trigger for a keymap, including F1 as a keypress in the action for that or another keymap won't invoke that keymap.
 
-If the only modifier is the control key, the curly braces {} aren't included.
-For example::
+Any changes you make to keymaps from the options menu only last as long as the game is running.  To have them affect future sessions, save the keymaps to a file.  There's an option to do that from the menu for editing keymaps.  See `User Pref Files`_ for how the name of the file affects whether the file is loaded when the game reloads your character.
+
+Note that the game accounts for the modifier keys (Shift, Control, Alt, Meta) that are pressed along with a key.  On most platforms, the game also distinguishes between the keys on the numeric keypad that have equivalents on the main keyboard.  When a keypress is displayed or saved to the preference file, the modifiers, if any, for the keypress are displayed by code letters (S for Shift, ^ for Control, A for Alt, M for Meta, and K for the numeric keypad) within curly braces prior to the keypress.  There are two exceptions to that:  if Control is the only modifier it will displayed as ^ before the keypress without any curly braces and if Shift is the only modifier it will often be folded into the keypress itself.  For example::
 
 	{^S}& = Control-Shift-&
-	^D    = Control-D
+	{AK}0 = Alt-0 from the numeric keypad
+	^d    = Control-d
+	A     = Shift-a
 
 Special keys, like F1, F2, or Tab, are all written within square brackets [].
 For example::
@@ -186,23 +218,26 @@ For example::
 
 Special keys include [Escape].
 
-The game will run keymaps in whatever keyset you use (original or roguelike). So if you write keymaps for roguelike keys and switch to original keys, they may not work as you expect!  Keymap actions aren't recursive either, so if you had a keymap whose trigger was F1, including F1 inside the action wouldn't run the keymap action again.
+You may find it easier to edit the preference files directly to change a keymap.  Keymaps are written in pref files as::
 
-When you're running a keymap, you might want to automatically skip any -more- prompts.  To do this, place whatever commands you want to skip -more- prompts within between brackets: ``(`` and ``)``.
-
-Keymaps are written in pref files as::
-
-	A:<action>
-	C:<type>:<trigger>
+	keymap-act:<action>
+	keymap-input:<type>:<trigger>
 
 The action must always come first,  ```<type>``` means 'keyset type', which is either 0 for the original keyset or 1 for the roguelike keyset.  For example::
 
-	A:maa
-	C:0:[F1]
+	keymap-act:maa
+	keymap-input:0:[F1]
 
-Angband uses a few built-in keymaps.  These are for the movement keys (they are mapped to ``;`` plus the number, e.g. ``5`` -> ``;5``), amongst others.  You can see the full list in pref.prf but they shouldn't impact on you in any way.
+An action can have more than one trigger bound to it by having more than
+one keymap-input line after it and before the next keymap-act line.  One
+reason to do that would be to have the keymap work with either keyset.  For
+example::
 
-To avoid triggering a keymap for a given key, you can type the backslash (``\``) command before pressing that key.
+	keymap-act:maa
+	keymap-input:0:[F1]
+	keymap-input:1:[F1]
+
+Angband uses a few built-in keymaps.  These are for the movement keys (they are mapped to ``;`` plus the number, e.g. ``5`` -> ``;5``), amongst others.  You can see the full list in pref.prf, but they shouldn't impact you in any way.
 
 
 Colours
@@ -221,3 +256,249 @@ You can change how various in-game entities are displayed using the visuals edit
 If you are in graphics mode, you will be able to select a new tile for the entity.  If you are not, you will only be able to change its colours.
 
 Once you have made edits, you can save them from the options menu (``=``).  Press ``v`` for 'save visuals' and choose what you want to save.
+
+
+Interface details
+=================
+
+Some aspects of how the game is presented, notably the font, window placement
+and graphical tile set, are controlled by the front end, rather than the core
+of the game itself.  Each front end has its own mechanism for setting those
+details and recording them between game sessions.  Below are brief descriptions
+for what you can configure with the standard `Windows`_, `X11`_, `SDL`_,
+`SDL2`_ and `Mac`_ front ends.
+
+Windows
+~~~~~~~
+
+With the Windows front end, the game, by default, displays several of the
+the subwindows and uses David Gervais's graphical tiles to display the map.
+You can close a subwindow with the standard close control on the window's
+upper right corner.  Closing the main window with the standard control causes
+the game to save its current state and then exit.  You can reopen or also
+close a subwindow via the "Visibility" menu, the first entry in the "Window"
+menu for the main window.  To move a window, use the standard procedure:
+position the mouse pointer on the window's title bar and then click and drag
+the mouse to change the window's position.  Click and drag on the edges or
+corners of a window to change its size.  To select the font for a window, use
+the "Font" menu, the second entry in the "Window" menu for the main window.
+
+The "Term Options" entry in the "Window" menu for the main window is a shortcut
+to access the core game's method for selecting the contents of the subwindows.
+You can read more about that in `Showing extra info in subwindows`_.  The
+"Reset Layout" will rearrange the windows to conform with the current size and
+will have a similar result to what you would get from restarting the Windows
+interface without a preset configuration.
+
+The "Bizarre Display" entry in the "Window" menu allows to toggle on or off
+an alternate text display algorithm for each window.  That was added for
+compatibility with Windows Vista and later.  The default setting, on, should
+likely be used, unless text display is garbled on your system and the off
+setting allows text to be displayed properly.
+
+The "Increase Tile Width" and "Decrease Tile Width" options in the "Window",
+let you increment or decrement, by one pixel, the width of the columns in a
+window.  The "Increase Tile Height" and "Decrease Tile Height" options are
+similar but work with the height of the rows.  For the primary window, you
+could use the "Term 0 Font Tile Size" entry as an alternative to those to set
+the width of the columns and height of the rows to certain combinations or to
+match the width and height of the font, which is the default.  When the
+"Enable Nice Graphics" option is on (it's in the "Options" menu for the main
+window), the "Increase Tile Width", "Decrease Tile Width",
+"Increase Tile Height", "Decrease Tile Height", and "Term 0 Font Tile Size"
+entries will have no effect since the column width and row height are set
+automatically when that option is on.
+
+To change whether graphical tiles are used, use the "Graphics" menu, the first
+entry in the "Options" menu for the main window.  The "None" option in the
+"Graphics" menu will disable graphical tiles and use text for the map.  The
+next section section in that menu allows you to select one of the graphical
+tile sets.  Turning on the "Enable Nice Graphics" option in the "Graphics"
+menu is a shortcut for automatically setting sizes to get a reasonable-looking
+result.  When that is turned on or is already on and the tile set is changed,
+the width of the columns ("tile width"), height of the rows ("tile height")
+and the number of rows and columns used to display a tile (the
+"Tile Multiplier") will be adjusted to work well with the current font size and
+the native size of the graphical tiles.  You can manually adjust the number of
+rows and columns used for displaying a tile with the "Tile Multiplier" entry
+in the "Graphics" menu.  Since typical fonts are often twice as tall as wide,
+multipliers where the first value, for the width, is twice the second, often
+x work better with the tiles that are natively square (the original ones,
+Adam Bolt's, David Gervais's, and the two versions of Shockbolt's tiles).
+Nomad's tiles are 8 x 16 and so usually work best with multipliers that use the
+same value for both dimensions.
+
+When you leave the game, the current settings for the Windows interface are
+saved as ``angband.INI`` in the directory that holds the executable.  Those
+settings will be automatically reloaded the next time you start the Windows
+interface.
+
+X11
+~~~
+
+With the X11 front end, the number of windows opened is set by the '-n' option
+on the command line, i.e. running ``./angband -mx11 -- -n4`` will open the
+main window and subwindows one through three if the executable is in the
+current working directory.  To control the font, placement, and size used for
+each of the windows, set environment variables before running Angband.  Those
+environment variables for window 'z' where 'z' is an integer between 0 (the
+main window) and 7 are:
+
+* ANGBAND_X11_FONT_z holds the name of the font to use for the window
+* ANGBAND_X11_AT_X_z holds the horizontal coordinate (zero is leftmost) for the upper left corner of the window
+* ANGBAND_X11_AT_Y_z holds the vertical coordinate (zero is topmost) for the upper left corner of the window
+* ANGBAND_X11_COLS_z holds the number of columns to display in the window
+* ANGBAND_X11_ROWS_z holds the number of rows to display in the window
+
+SDL
+~~~
+
+With the SDL front end, the main window and any subwindows are displayed within
+the application's rectangular window.  At the top of the application's window
+is a status line.  Within that status line, items highlighted in yellow are
+buttons that can be pressed to initiate an action.  From left to right they are:
+
+* The application's version number - pressing it displays an information dialog about the application
+* The currently selected terminal - pressing it brings up a menu for selecting the current terminal; you can also make a terminal the current one by clicking on the terminal's title bar if it is visible
+* Whether or not the current terminal is visible - pressing it for any terminal that is not the main window will allow you to show or hide that terminal
+* The font for the current terminal - pressing it brings up a menu to choose the font for the terminal
+* Options - brings up a dialog for selecting global options including those for the graphical tile set used and whether fullscreen mode is enabled
+* Quit - to save the game and exit
+
+To move a terminal window, click on its title bar and then drag the mouse.
+To resize a terminal window, position the mouse pointer over the lower right
+corner.  That should cause a blue square to appear, then click and drag to
+resize the terminal.
+
+To change the graphical tile set used when displaying the game's map, press
+the Options button in the status bar.  Then, in the dialog that appears, press
+one of the red buttons that appear to the right of the label,
+"Available Graphics:".  The last of those buttons, labeled "None", selects
+text as the method for displaying the map.  Your choice for the graphical tile
+set does not take effect until you press the red button labeled "OK" at the
+bottom of the dialog.
+
+When you leave the game, the current settings for the SDL interface are saved
+as ``sdlinit.txt`` in the same directory as is used for preference files, see
+`User Pref Files`_ for details.  Those settings will be automatically reloaded
+the next time you start the SDL interface.
+
+SDL2
+~~~~
+
+With the SDL2 front end, the application has one window that can contain the
+main window and any of the subwindows.  The application may also have up to
+three additional windows which can contain any of the subwindows.  A subwindow
+may not appear in more than one of those application windows:  adding a
+subwindow to a window automatically removes it from the other window, if any,
+that had it.  Unused portions of an application window are tiled with
+repetitions of the game's logo.
+
+Each of the application windows has a menu bar along the top.  The "Menu"
+entry at the left end of the menu bar has the main menu for controlling
+aspects of the SDL2 interface.
+
+Next to "Menu", are a series of one letter labels that act as toggles for the
+terminal windows shown in the application window.  Click on one to toggle it
+between on (drawn in white) and off (drawn in gray).  It is not possible to
+toggle off the main window shown in the primary application window.
+
+At the end of the menu bar are two toggle buttons labeled "Size" and "Move".
+Each will be gray if disabled or white if enabled.  Clicking on "Size" when
+it is disabled will enable it, disable "Move", turn off input to the game's
+core, and cause clicks and drags within the displayed subwindows to change
+the sizes for those subwindows.  Clicking on "Move" when it is disabled will
+enable it, disable "Size", turn off input to the game's core, and cause clicks
+and drags within the displayed subwindows to change the positions for those
+subwindows.  Disable both "Move" and "Size", by clicking on one if it is
+enabled, to restore passing input to the game's core.
+
+Within "Menu", the first entries control properties for each of the displayed
+terminal windows within that application window.  For the main window, you
+can set the font, graphical tile set, whether the window is shown with borders
+or not, and whether or not the window will be shown on top of the other windows.
+For subwindows, you can set the font, the purpose (which is a shortcut for
+enabling the subwindow content as described in
+`Showing extra info in subwindows`_), the opaqueness ("alpha") of the window,
+whether the window is shown with borders or not, and whether or not the window
+will be shown on top of the other windows.
+
+Below the entries for the contained terminal windows, is an entry,
+"Fullscreen" for toggling fullscreen mode for that application window.  That
+entry will display a rectangle at the end of the entry when fullscreen mode
+is on.  That rectangle will be absent when fullscreen mode is off.
+
+In the primary application window which contains the main window, there is an
+entry, "Send Keypad Modifier", after that for whether key strokes from the
+numeric keypad will be sent to the game with the keypad modifier set.  That
+entry will be gray when the modifier is not send and will be white when the
+modifier is sent.  Sending the modifier allows some predefined keymaps to work,
+for instance shift with 8 from the numeric keypad to run north, at the cost of
+compatibility issues with some keyboard layouts that differ from the standard
+English keyboard layout for which normal keys have equivalents on the numeric
+keypad.  https://github.com/angband/angband/issues/4522 has an example of the
+problems that can be avoided by not sending the keypad modifier.
+
+Below "Send Keypad Modifier" in the primary application window's "Menu" is
+"Menu Shortcuts...".  That allows you to set a keystroke to transfer control
+to a window's menu.  By default, no such keystrokes are defined.  That avoids
+potential conflicts with any keymaps you may have.  While in the menus,
+keystrokes can be used for navigation.  The in-game horizontal and vertical
+movement keys will work to move between controls as will Tab (to go to the
+"next" control) and Shift-Tab (to go to the previous control).  Enter will
+activate a menu item if it can be activated.  Trying to descend further into
+the menus with the in-game movement keys will also activate if a menu item if
+it is as deep as you can go.  Below "Menu Shortcuts..." is "Windows":  use
+that to bring up one of the additional application windows.
+
+The final two entries in "Menu" are "About" for displaying an information
+dialog about the game and "Quit" to save the game and exit.
+
+When you leave the game, the current settings for the SDL interface are saved
+as ``sdl2init.txt`` in the same directory as is used for preference files, see
+`User Pref Files`_ for details.  Those settings will be automatically reloaded
+the next time you start the SDL2 interface.
+
+Mac
+~~~
+
+With the Mac-specific front end, you can use Apple's standard mechanisms to
+control window placement:  click and drag on a window's title bar to move it,
+click and drag on a window's edge or corner to change the window's dimensions,
+and click the red button at the top left corner of a subwindow to close it.
+To reopen a subwindow that you closed, use the Window menu from the Mac's
+menu bar while the game is the active application and select the entry near the
+bottom of that menu that corresponds to the subwindow you want to see.  For a
+subwindow's entry to be enabled in the Window menu, that subwindow must be
+configured to display at least one category of information:  see
+`Showing extra info in subwindows`_ for details.
+
+To change the font for a window, click on the window's title bar and select
+"Edit Font" from the Settings menu in the Mac's menu bar.  That will open a
+dialog which displays the family, typeface and size for the current font.
+Changing the selection for any of those will change the font in the window.
+
+Whether the game's map is displayed as text or as graphical tiles can be set
+by selecting Settings from the Mac's menu bar while the game is the active
+application and then choosing from one of the entries in the Graphics option.
+Choosing "Classic ASCII" will display the map as text.  Any of the other options
+will use some form of graphical tiles to display the map.  If you wish to
+adjust how graphical tiles are scaled to match up with the currently selected
+font in the main window, use the 'Tile Size' menu in the Settings menu.  The
+100% entry in the 'Tile Size' menu will cause a tile to be displayed as
+close as possible to its native resolution.  The 200% entry will cause a
+tile to be displayed as close as possible to twice the tile's native width and
+height.
+
+When you leave the game, the current Mac-specific settings are saved and will
+be automatically reloaded when you restart.  The settings are stored in
+``Library/Preferences/org.rephial.angband.plist`` within your user directory.
+If you suspect those settings have been corrupted in some way or would like to
+start again from the default settings, quit the game if it is running, open a
+Terminal window (i.e. select 'Go->Utilities->Terminal' from the Finder's
+menus), and, in that Terminal window, run this::
+
+	defaults delete org.rephial.angband
+
+to clear the contents of the preferences file and any cached preferences that
+may be retained in memory.

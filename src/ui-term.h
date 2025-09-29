@@ -40,6 +40,7 @@ struct term_win
 {
 	bool cu, cv;
 	int cx, cy;
+	int cnx, cny;
 
 	int **a;
 	wchar_t **c;
@@ -109,13 +110,6 @@ struct term_win
  *	- Flag "never_frosh"
  *	  Never call the "TERM_XTRA_FROSH" action
  *
- *
- *	- Value "attr_blank"
- *	  Use this "attr" value for "blank" grids
- *
- *	- Value "char_blank"
- *	  Use this "char" value for "blank" grids
- *
  *	- Flag "complex_input"
  *	  Distinguish between Enter/^m/^j, Tab/^i, etc.
  *
@@ -155,6 +149,8 @@ struct term_win
  *	- Hook for drawing a string of chars using an attr
  *
  *	- Hook for drawing a sequence of special attr/char pairs
+ *
+ *      - Hook to test if an attr/char pair is a double-height tile
  */
 
 typedef struct term term;
@@ -181,18 +177,16 @@ struct term
 	bool unused_flag;
 	bool never_bored;
 	bool never_frosh;
-
-	int attr_blank;
-	wchar_t char_blank;
+	int sidebar_mode;
 
 	bool complex_input;
 
 	ui_event *key_queue;
 
-	u16b key_head;
-	u16b key_tail;
-	u16b key_xtra;
-	u16b key_size;
+	uint16_t key_head;
+	uint16_t key_tail;
+	uint16_t key_xtra;
+	uint16_t key_size;
 
 	int wid;
 	int hgt;
@@ -214,7 +208,7 @@ struct term
 	term_win *mem;
 
 	/* Number of times saved */
-	byte saved;
+	uint8_t saved;
 
 	void (*init_hook)(term *t);
 	void (*nuke_hook)(term *t);
@@ -233,10 +227,9 @@ struct term
 
 	void (*view_map_hook)(term *t);
 
+        int (*dblh_hook)(int a, wchar_t c);
+
 };
-
-
-
 
 
 /**
@@ -250,10 +243,25 @@ struct term
  */
 #define ANGBAND_TERM_MAX 8
 
+#define SIDEBAR_MODE (angband_term[0]->sidebar_mode)
+
+#define SIDEBAR_LEFT 0
+#define SIDEBAR_TOP  1
+#define SIDEBAR_NONE 2
+#define SIDEBAR_MAX  (SIDEBAR_NONE+1)
+
+extern int row_top_map[SIDEBAR_MAX];
+extern int row_bottom_map[SIDEBAR_MAX];
+extern int col_map[SIDEBAR_MAX];
+
+#define ROW_MAP	(row_top_map[Term->sidebar_mode])
+#define ROW_BOTTOM_MAP (row_bottom_map[Term->sidebar_mode])
+#define COL_MAP	(col_map[Term->sidebar_mode])
+
 /**
  * Number of text rows in each map screen, regardless of tile size
  */
-#define SCREEN_ROWS	(Term->hgt - ROW_MAP - 1) 
+#define SCREEN_ROWS	(Term->hgt - ROW_MAP - ROW_BOTTOM_MAP)
 
 /**
  * Number of grids in each screen (vertically)
@@ -264,10 +272,6 @@ struct term
  * Number of grids in each screen (horizontally)
  */
 #define SCREEN_WID	((int)((Term->wid - COL_MAP - 1) / tile_width))
-
-#define ROW_MAP			1
-#define COL_MAP			13
-
 
 /**
  * Definitions for the "actions" of "Term_xtra()"
@@ -314,6 +318,12 @@ struct term
 #define PW_MONLIST          0x00000400L /* Display monster list */
 #define PW_STATUS           0x00000800L /* Display status */
 #define PW_ITEMLIST         0x00001000L /* Display item list */
+#define PW_PLAYER_3         0x00002000L /* Display player (topbar) */
+#ifdef ALLOW_BORG
+ /* xxx */
+#define PW_BORG_1           0x00004000L /* Display borg messages */
+#define PW_BORG_2           0x00008000L /* Display borg status */
+#endif
 
 #define PW_MAPS (PW_MAP | PW_OVERHEAD)
 
@@ -335,16 +345,16 @@ extern struct keypress keylog[KEYLOG_SIZE];
  * ------------------------------------------------------------------------ */
 
 extern term *Term;
-extern byte tile_width;
-extern byte tile_height;
+extern uint8_t tile_width;
+extern uint8_t tile_height;
 extern bool bigcurs;
 extern bool smlcurs;
 extern term *angband_term[ANGBAND_TERM_MAX];
 extern char angband_term_name[ANGBAND_TERM_MAX][16];
-extern u32b window_flag[ANGBAND_TERM_MAX];
+extern uint32_t window_flag[ANGBAND_TERM_MAX];
 
 /**
- * Hack -- The main "screen"
+ * The main "screen"
  */
 #define term_screen	(angband_term[0])
 
@@ -355,10 +365,12 @@ extern u32b window_flag[ANGBAND_TERM_MAX];
  *  Available Functions
  * ------------------------------------------------------------------------ */
 
+extern errr Term_redraw_all(void);
 extern errr Term_xtra(int n, int v);
 
 extern void Term_queue_char(term *t, int x, int y, int a, wchar_t c, int ta, wchar_t tc);
-extern void Term_big_queue_char(term *t, int x, int y, int a, wchar_t c, int a1, wchar_t c1);
+extern void Term_big_queue_char(term *t, int x, int y, int clipy,
+	int a, wchar_t c, int a1, wchar_t c1);
 extern void Term_queue_chars(int x, int y, int n, int a, const wchar_t *s);
 
 extern errr Term_fresh(void);
@@ -383,13 +395,14 @@ extern errr Term_what(int x, int y, int *a, wchar_t *c);
 
 extern errr Term_flush(void);
 extern errr Term_mousepress(int x, int y, char button);
-extern errr Term_keypress(keycode_t k, byte mods);
+extern errr Term_keypress(keycode_t k, uint8_t mods);
 extern errr Term_key_push(int k);
 extern errr Term_event_push(const ui_event *ke);
 extern errr Term_inkey(ui_event *ch, bool wait, bool take);
 
 extern errr Term_save(void);
 extern errr Term_load(void);
+extern errr Term_load_all(void);
 
 extern errr Term_resize(int w, int h);
 
@@ -398,6 +411,8 @@ extern errr Term_activate(term *t);
 extern errr term_nuke(term *t);
 extern errr term_init(term *t, int w, int h, int k);
 
-extern int big_pad(int col, int row, byte a, wchar_t c);
+extern int big_pad(int col, int row, uint8_t a, wchar_t c);
+
+extern int Term_get_first_tile_row(term *t);
 
 #endif /* INCLUDED_Z_TERM_H */

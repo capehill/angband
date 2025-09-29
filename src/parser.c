@@ -93,7 +93,7 @@ struct parser *parser_new(void) {
 static struct parser_hook *findhook(struct parser *p, const char *dir) {
 	struct parser_hook *h = p->hooks;
 	while (h) {
-		if (!strcmp(h->dir, dir))
+		if (streq(h->dir, dir))
 			break;
 		h = h->next;
 	}
@@ -114,79 +114,84 @@ static void parser_freeold(struct parser *p) {
 
 static bool parse_random(const char *str, random_value *bonus) {
 	bool negative = false;
-
-	char buffer[50];
-	int i = 0, b, dn, ds, mb;
-	
-	const char end_chr = '|';
-	char eov;
+	/* base, number of dice, sides, and bonus */
+	int values[4] = { 0, 0, 0, 0 };
+	int i = 0, min_i = 1;
 
 	/* Entire value may be negated */
 	if (str[0] == '-') {
 		negative = true;
-		i++;
+		++str;
 	}
 
-	/* Make a working copy of the string */
-	my_strcpy(buffer, &str[i], N_ELEMENTS(buffer) - 2);
+	while (1) {
+		if (*str == 'd') {
+			if (i > 2) {
+				return false;
+			}
+			if (i < 2) {
+				i = 2;
+				/*
+				 * 'd' with no preceding number implies one die.
+				 */
+				values[1] = 1;
+			}
+			min_i = 3;
+			++str;
+		} else if (*str == 'M') {
+			if (i == 2) {
+				return false;
+			}
+			i = 3;
+			min_i = 4;
+			++str;
+		} else {
+			char *pe;
+			unsigned long uv = strtoul(str, &pe, 10);
 
-	/* Check for invalid negative numbers */
-	if (NULL != strstr(buffer, "-"))
-		return false;
-
-	/*
-	 * Add a sentinal value at the end of the string.
-	 * Used by scanf to make sure there's no text after the final conversion.
-	 */
-	buffer[strlen(buffer) + 1] = '\0';
-	buffer[strlen(buffer)] = end_chr;
-
-	/* Scan the value, apply defaults for unspecified components */
-	if (5 == sscanf(buffer, "%d+%dd%dM%d%c", &b, &dn, &ds, &mb, &eov) &&
-		eov == end_chr) {
-	} else if (4 == sscanf(buffer, "%d+d%dM%d%c", &b, &ds, &mb, &eov) &&
-			   eov == end_chr) {
-		dn = 1;
-	} else if (3 == sscanf(buffer, "%d+M%d%c", &b, &mb, &eov) &&
-			   eov == end_chr) {
-		dn = 0; ds = 0;
-	} else if (4 == sscanf(buffer, "%d+%dd%d%c", &b, &dn, &ds, &eov) &&
-			   eov == end_chr) {
-		mb = 0;
-	} else if (3 == sscanf(buffer, "%d+d%d%c", &b, &ds, &eov) &&
-			   eov == end_chr) {
-		dn = 1; mb = 0;
-	} else if (4 == sscanf(buffer, "%dd%dM%d%c", &dn, &ds, &mb, &eov) &&
-			   eov == end_chr) {
-		b = 0;
-	} else if (3 == sscanf(buffer, "d%dM%d%c", &ds, &mb, &eov) &&
-			   eov == end_chr) {
-		b = 0; dn = 1;
-	} else if (2 == sscanf(buffer, "M%d%c", &mb, &eov) &&
-			   eov == end_chr) {
-		b = 0; dn = 0; ds = 0;
-	} else if (3 == sscanf(buffer, "%dd%d%c", &dn, &ds, &eov) &&
-			   eov == end_chr) {
-		b = 0; mb = 0;
-	} else if (2 == sscanf(buffer, "d%d%c", &ds, &eov) &&
-			   eov == end_chr) {
-		b = 0; dn = 1; mb = 0;
-	} else if (2 == sscanf(buffer, "%d%c", &b, &eov) &&
-			   eov == end_chr) {
-		dn = 0; ds = 0; mb = 0;
-	} else {
-		return false;
+			if (pe == str) {
+				/*
+				 * Trailing garbage or not enough values are
+				 * not accepted.
+				 */
+				if (!contains_only_spaces(str) || i < min_i) {
+					return false;
+				}
+				break;
+			} else if (uv > INT_MAX || *str == '+') {
+				return false;
+			}
+			str = pe;
+			if (i == 0) {
+				if (*str == 'd') {
+					i = 1;
+				} else if (*str == '+') {
+					++str;
+					min_i = 3;
+				} else {
+					if (!contains_only_spaces(pe)) {
+						return false;
+					}
+					values[0] = (int)uv;
+					break;
+				}
+			} else if (i == 4) {
+				return false;
+			}
+			values[i] = (int)uv;
+			++i;
+		}
 	}
 
 	/* Assign the values */
-	bonus->base = b;
-	bonus->dice = dn;
-	bonus->sides = ds;
-	bonus->m_bonus = mb;
+	bonus->base = values[0];
+	bonus->dice = values[1];
+	bonus->sides = values[2];
+	bonus->m_bonus = values[3];
 
 	/*
-	 * Handle negation (the random components are always positive, so the base
-	 * must be adjusted as necessary).
+	 * Handle negation (the random components are always positive, so the
+	 * base must be adjusted as necessary).
 	 */
 	if (negative) {
 		bonus->base *= -1;
@@ -259,8 +264,20 @@ enum parser_error parser_parse(struct parser *p, const char *line) {
 			sp = NULL;
 		} else if (t == PARSE_T_CHAR) {
 			tok = strtok(sp, "");
-			if (tok)
-				sp = tok + 2;
+			if (tok) {
+				sp = utf8_fskip(tok, 1, NULL);
+				if (sp) {
+					if (*sp == ':') {
+						++sp;
+					} else if (*sp) {
+						my_strcpy(p->errmsg, s->name,
+							sizeof(p->errmsg));
+						p->error = PARSE_ERROR_FIELD_TOO_LONG;
+						mem_free(cline);
+						return PARSE_ERROR_FIELD_TOO_LONG;
+					}
+				}
+			}
 		} else {
 			tok = strtok(sp, "");
 			sp = NULL;
@@ -352,17 +369,17 @@ static int parse_type(const char *s) {
 		rv |= PARSE_T_OPT;
 		s++;
 	}
-	if (!strcmp(s, "int"))
+	if (streq(s, "int"))
 		return PARSE_T_INT | rv;
-	if (!strcmp(s, "sym"))
+	if (streq(s, "sym"))
 		return PARSE_T_SYM | rv;
-	if (!strcmp(s, "str"))
+	if (streq(s, "str"))
 		return PARSE_T_STR | rv;
-	if (!strcmp(s, "rand"))
+	if (streq(s, "rand"))
 		return PARSE_T_RAND | rv;
-	if (!strcmp(s, "uint"))
+	if (streq(s, "uint"))
 		return PARSE_T_UINT | rv;
-	if (!strcmp(s, "char"))
+	if (streq(s, "char"))
 		return PARSE_T_CHAR | rv;
 	return PARSE_T_NONE;
 }
@@ -457,9 +474,9 @@ static errr parse_specs(struct parser_hook *h, char *fmt) {
  * Registers a parser hook.
  *
  * Hooks have the following format:
- *   <fmt>  ::= <name> [<type> <name>]* [?<type> <name>]*
- *   <type> ::= int | str | sym | rand | char
- * The first <name> is called the directive for this hook. Any other hooks with
+ *   `fmt`  ::= `name` [`type` `name`]* [?`type` `name`]*
+ *   `type` ::= int | str | sym | rand | char
+ * The first `name` is called the directive for this hook. Any other hooks with
  * the same directive are superseded by this hook. It is an error for a
  * mandatory field to follow an optional field. It is an error for any field to
  * follow a field of type `str`, since `str` fields are not delimited and will
@@ -507,7 +524,7 @@ enum parser_error ignored(struct parser *p) {
 bool parser_hasval(struct parser *p, const char *name) {
 	struct parser_value *v;
 	for (v = p->fhead; v; v = (struct parser_value *)v->spec.next) {
-		if (!strcmp(v->spec.name, name))
+		if (streq(v->spec.name, name))
 			return true;
 	}
 	return false;
@@ -516,7 +533,7 @@ bool parser_hasval(struct parser *p, const char *name) {
 static struct parser_value *parser_getval(struct parser *p, const char *name) {
 	struct parser_value *v;
 	for (v = p->fhead; v; v = (struct parser_value *)v->spec.next) {
-		if (!strcmp(v->spec.name, name)) {
+		if (streq(v->spec.name, name)) {
 			return v;
 		}
 	}

@@ -22,6 +22,9 @@
 #include "h-basic.h"
 
 
+struct my_rational { unsigned int n, d; }; /* numerator and denominator */
+
+
 /**
  * ------------------------------------------------------------------------
  * Available variables
@@ -38,6 +41,11 @@ extern char *argv0;
  * Aux functions
  */
 extern size_t (*text_mbcs_hook)(wchar_t *dest, const char *src, int n);
+extern int (*text_wctomb_hook)(char *s, wchar_t wchar);
+extern int (*text_wcsz_hook)(void);
+extern int (*text_iswprint_hook)(wint_t wc);
+extern wchar_t *(*text_wcschr_hook)(const wchar_t *wcs, wchar_t wc);
+extern size_t (*text_wcslen_hook)(const wchar_t *s);
 extern void (*plog_aux)(const char *);
 extern void (*quit_aux)(const char *);
 
@@ -62,13 +70,35 @@ extern void (*quit_aux)(const char *);
 /**
  * Count the number of characters in a UTF-8 encoded string
  */
-size_t utf8_strlen(char *s);
+size_t utf8_strlen(const char *s);
 
 /**
  * Clip a null-terminated UTF-8 string 's' to 'n' unicode characters.
  * e.g. utf8_clipto("example", 4) will clip after 'm', resulting in 'exam'.
  */
 void utf8_clipto(char *s, size_t n);
+
+/**
+ * Advance a pointer to a UTF-8 buffer by a given number of Unicode code points.
+ */
+char *utf8_fskip(char *s, size_t n, char *lim);
+
+/**
+ * Decrement a pointer to a UTF-8 buffer by a given number of Unicode code
+ * points.
+ */
+char *utf8_rskip(char *s, size_t n, char *lim);
+
+/**
+ * Convert a sequence of UTF-32 values, in the native byte order, to UTF-8.
+ */
+size_t utf32_to_utf8(char *out, size_t n_out, const uint32_t *in, size_t n_in,
+	size_t *pn_cnvt);
+
+/**
+ * Return whether a given UTF-32 value corresponds to a printable character.
+ */
+bool utf32_isprint(uint32_t v);
 
 /**
  * Case insensitive comparison between two strings
@@ -122,6 +152,7 @@ extern bool streq(const char *s, const char *t);
 extern bool prefix(const char *s, const char *t);
 extern bool prefix_i(const char *s, const char *t);
 extern bool suffix(const char *s, const char *t);
+extern bool suffix_i(const char *s, const char *t);
 
 #define streq(s, t)		(!strcmp(s, t))
 
@@ -130,6 +161,16 @@ extern bool suffix(const char *s, const char *t);
  */
 extern void strskip(char *s, const char c, const char e);
 extern void strescape(char *s, const char c);
+
+/**
+ * Get the integer value of a hex string
+ */
+extern int hex_str_to_int(const char *s);
+
+/**
+ * Change escaped characters into their literal representation
+ */
+extern void strunescape(char *s);
 
 /**
  * Determines if a string is "empty"
@@ -146,6 +187,33 @@ bool is_a_vowel(int ch);
  * Allow override of the multi-byte to wide char conversion
  */
 size_t text_mbstowcs(wchar_t *dest, const char *src, int n);
+
+/**
+ * Convert a wide character to multibyte representation.
+ */
+int text_wctomb(char *s, wchar_t wchar);
+
+/**
+ * Get the maximum size to store a wide character converted to multibyte.
+ */
+int text_wcsz(void);
+
+/**
+ * Return whether the given wide character is printable.
+ */
+int text_iswprint(wint_t wc);
+
+/**
+ * Return pointer to the first occurrence of wc in the wide-character
+ * string pointed to by wcs, or NULL if wc does not occur in the
+ * string.
+ */
+wchar_t *text_wcschr(const wchar_t *wcs, wchar_t wc);
+
+/**
+ * Return the number of wide characters in s.
+ */
+size_t text_wcslen(const wchar_t *s);
 
 /**
  * Print an error message
@@ -167,12 +235,26 @@ extern void sort(void *array, size_t nmemb, size_t smemb,
 /**
  * Create a hash for a string
  */
-u32b djb2_hash(const char *str);
+uint32_t djb2_hash(const char *str);
 
 /**
  * Mathematical functions
  */
-int mean(int *nums, int size);
-int variance(int *nums, int size);
+int add_guardi(int a, int b);
+int sub_guardi(int a, int b);
+int add_guardi16(int16_t a, int16_t b);
+int sub_guardi16(int16_t a, int16_t b);
+int mean(const int *nums, int size, struct my_rational *frac);
+int variance(const int *nums, int size, bool unbiased, bool of_mean,
+		struct my_rational *frac);
+unsigned int gcd(unsigned int a, unsigned int b);
+struct my_rational my_rational_construct(unsigned int numerator,
+		unsigned int denominator);
+unsigned int my_rational_to_uint(const struct my_rational *a,
+		unsigned int scale, unsigned int *remainder);
+struct my_rational my_rational_product(const struct my_rational *a,
+		const struct my_rational *b);
+struct my_rational my_rational_sum(const struct my_rational *a,
+		const struct my_rational *b);
 
 #endif /* INCLUDED_Z_UTIL_H */

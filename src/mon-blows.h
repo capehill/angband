@@ -41,7 +41,7 @@ struct blow_method {
 	struct blow_method *next;
 };
 
-struct blow_method *blow_methods;
+extern struct blow_method *blow_methods;
 
 /**
  * Storage for context information for effect handlers called in
@@ -52,16 +52,19 @@ struct blow_method *blow_methods;
  * any initializers. Ideally, this should eventually used named initializers.
  */
 typedef struct melee_effect_handler_context_s {
-	struct player * const p;
-	struct monster * const mon;
-	struct monster * const t_mon;
+	struct player * const p;	/* Target (if player) */
+	struct monster * const mon;	/* Attacker */
+	struct monster * const t_mon;	/* Target (if other monster) */
 	const int rlev;
 	const struct blow_method *method;
 	const int ac;
-	const char *ddesc;
+	const char *ddesc;		/* short monster name for death
+						messages; unused if target is
+						not the player */
 	bool obvious;
 	bool blinked;
 	int damage;
+	const char *m_name;		/* monster name for messaging */
 } melee_effect_handler_context_t;
 
 /**
@@ -74,20 +77,20 @@ struct blow_effect {
 	int power;
 	int eval;
 	char *desc;
-	byte lore_attr;			/* Color of the attack used in lore text */
-	byte lore_attr_resist;	/* Color used in lore text when resisted */
-	byte lore_attr_immune;	/* Color used in lore text when resisted strongly */
+	uint8_t lore_attr;		/* Color of the attack used in lore text */
+	uint8_t lore_attr_resist;	/* Color used in lore text when resisted */
+	uint8_t lore_attr_immune;	/* Color used in lore text when resisted strongly */
 	char *effect_type;
 	int resist;
 	int lash_type;
 	struct blow_effect *next;
 };
 
-struct blow_effect *blow_effects;
+extern struct blow_effect *blow_effects;
 
 /* Functions */
 int blow_index(const char *name);
-char *monster_blow_method_action(struct blow_method *method, int midx);
+char *monster_blow_method_action(const struct blow_method *method, int midx);
 extern melee_effect_handler_f melee_handler_for_blow_effect(const char *name);
 
 #endif /* MON_BLOWS_H */

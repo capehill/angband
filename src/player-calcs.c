@@ -30,6 +30,7 @@
 #include "obj-gear.h"
 #include "obj-ignore.h"
 #include "obj-knowledge.h"
+#include "obj-pile.h"
 #include "obj-power.h"
 #include "obj-tval.h"
 #include "obj-util.h"
@@ -947,6 +948,17 @@ bool earlier_object(struct object *orig, struct object *new, bool store)
 		if (!obj_can_browse(orig) && obj_can_browse(new)) return true;
 	}
 
+	/* Usable ammo is before other ammo */
+	if (tval_is_ammo(orig) && tval_is_ammo(new)) {
+		/* First favour usable ammo */
+		if ((player->state.ammo_tval == orig->tval) &&
+			(player->state.ammo_tval != new->tval))
+			return false;
+		if ((player->state.ammo_tval != orig->tval) &&
+			(player->state.ammo_tval == new->tval))
+			return true;
+	}
+
 	/* Objects sort by decreasing type */
 	if (orig->tval > new->tval) return false;
 	if (orig->tval < new->tval) return true;
@@ -975,18 +987,14 @@ bool earlier_object(struct object *orig, struct object *new, bool store)
 
 	/* Objects sort by decreasing value, except ammo */
 	if (tval_is_ammo(orig)) {
-		if (object_value(orig, 1) <
-			object_value(new, 1))
+		if (object_value(orig, 1) < object_value(new, 1))
 			return false;
-		if (object_value(orig, 1) >
-			object_value(new, 1))
+		if (object_value(orig, 1) >	object_value(new, 1))
 			return true;
 	} else {
-		if (object_value(orig, 1) >
-			object_value(new, 1))
+		if (object_value(orig, 1) >	object_value(new, 1))
 			return false;
-		if (object_value(orig, 1) <
-			object_value(new, 1))
+		if (object_value(orig, 1) <	object_value(new, 1))
 			return true;
 	}
 
@@ -1012,163 +1020,221 @@ int equipped_item_slot(struct player_body body, struct object *item)
  * Put the player's inventory and quiver into easily accessible arrays.  The
  * pack may be overfull by one item
  */
-void calc_inventory(struct player_upkeep *upkeep, struct object *gear,
-					struct player_body body)
+void calc_inventory(struct player *p)
 {
-	int i;
-	int old_inven_cnt = upkeep->inven_cnt;
-	struct object **old_quiver = mem_zalloc(z_info->quiver_size *
-												sizeof(struct object *));
-	struct object **old_pack = mem_zalloc(z_info->pack_size *
-											  sizeof(struct object *));
+	int old_inven_cnt = p->upkeep->inven_cnt;
+	int n_stack_split = 0;
+	int n_pack_remaining = z_info->pack_size - pack_slots_used(p);
+	int n_max = 1 + z_info->pack_size + z_info->quiver_size
+		+ p->body.count;
+	struct object **old_quiver = mem_zalloc(z_info->quiver_size
+		* sizeof(*old_quiver));
+	struct object **old_pack = mem_zalloc(z_info->pack_size
+		* sizeof(*old_pack));
+	bool *assigned = mem_alloc(n_max * sizeof(*assigned));
+	struct object *current;
+	int i, j;
+
+	/*
+	 * Equipped items are already taken care of.  Only the others need
+	 * to be tested for assignment to the quiver or pack.
+	 */
+	for (current = p->gear, j = 0; current; current = current->next, ++j) {
+		assert(j < n_max);
+		assigned[j] = object_is_equipped(p->body, current);
+	}
+	for (; j < n_max; ++j) {
+		assigned[j] = false;
+	}
 
 	/* Prepare to fill the quiver */
-	upkeep->quiver_cnt = 0;
+	p->upkeep->quiver_cnt = 0;
 
-	/* Copy the current quiver */
-	for (i = 0; i < z_info->quiver_size; i++)
-		if (upkeep->quiver[i])
-			old_quiver[i] = upkeep->quiver[i];
-		else
-			old_quiver[i] = NULL;
-
-	/* First, allocate inscribed items */
+	/* Copy the current quiver and then leave it empty. */
 	for (i = 0; i < z_info->quiver_size; i++) {
-		struct object *current;
+		if (p->upkeep->quiver[i]) {
+			old_quiver[i] = p->upkeep->quiver[i];
+			p->upkeep->quiver[i] = NULL;
+		} else {
+			old_quiver[i] = NULL;
+		}
+	}
 
-		/* Start with an empty slot */
-		upkeep->quiver[i] = NULL;
+	/* Fill quiver.  First, allocate inscribed items. */
+	for (current = p->gear, j = 0; current; current = current->next, ++j) {
+		int prefslot;
 
-		/* Find the first quiver object with the correct label */
-		for (current = gear; current; current = current->next) {
-			/* Ignore non-ammo */
-			if (!tval_is_ammo(current)) continue;
+		/* Skip already assigned (i.e. equipped) items. */
+		if (assigned[j]) continue;
 
-			/* Allocate inscribed objects if it's the right slot */
-			if (current->note) {
-				const char *s = strchr(quark_str(current->note), '@');
-				if (s && s[1] == 'f') {
-					int choice = s[2] - '0';
+		prefslot  = preferred_quiver_slot(current);
+		if (prefslot >= 0 && prefslot < z_info->quiver_size
+				&& !p->upkeep->quiver[prefslot]) {
+			/*
+			 * The preferred slot is empty.  Split the stack if
+			 * necessary.  Don't allow splitting if it could
+			 * result in overfilling the pack by more than one slot.
+			 */
+			int mult = tval_is_ammo(current) ?
+				1 : z_info->thrown_quiver_mult;
+			struct object *to_quiver;
 
-					/* Correct slot, fill it straight away */
-					if (choice == i) {
-						upkeep->quiver[i] = current;
-						upkeep->quiver_cnt += current->number;
+			if (current->number * mult
+					<= z_info->quiver_slot_size) {
+				to_quiver = current;
+			} else {
+				int nsplit = z_info->quiver_slot_size / mult;
 
-						/* In the quiver counts as worn */
-						object_learn_on_wield(player, current);
-
-						/* Done with this slot */
-						break;
-					}
+				assert(nsplit < current->number);
+				if (nsplit > 0 && n_stack_split
+						<= n_pack_remaining) {
+					/*
+					 * Split off the portion that goes to
+					 * the pack.  Since the stack in the
+					 * quiver is earlier in the gear list it
+					 * will prefer to remain in the quiver
+					 * in future calls to calc_inventory()
+					 * and will be the preferred target for
+					 * combine_pack().
+					 */
+					to_quiver = current;
+					gear_insert_end(p, object_split(current,
+						current->number - nsplit));
+					++n_stack_split;
+				} else {
+					to_quiver = NULL;
 				}
+			}
+
+			if (to_quiver) {
+				p->upkeep->quiver[prefslot] = to_quiver;
+				p->upkeep->quiver_cnt += to_quiver->number * mult;
+
+				/* That part of the gear has been dealt with. */
+				assigned[j] = true;
 			}
 		}
 	}
 
-	/* Now fill the rest of the slots in order */
-	for (i = 0; i < z_info->quiver_size; i++) {
-		struct object *current, *first = NULL;
-		int j;
+	/* Now fill the rest of the slots in order. */
+	for (i = 0; i < z_info->quiver_size; ++i) {
+		struct object *first = NULL;
+		int jfirst = -1;
 
-		/* If the slot is full, move on */
-		if (upkeep->quiver[i]) continue;
+		/* If the slot is full, move on. */
+		if (p->upkeep->quiver[i]) continue;
 
-		/* Find the first quiver object not yet allocated */
-		for (current = gear; current; current = current->next) {
-			bool already = false;
+		/* Find the quiver object that should go there. */
+		j = 0;
+		current = p->gear;
+		while (1) {
+			if (!current) break;
+			assert(j < n_max);
 
-			/* Ignore non-ammo */
-			if (!tval_is_ammo(current)) continue;
-
-			/* Ignore stuff already quivered */
-			for (j = 0; j < z_info->quiver_size; j++)
-				if (upkeep->quiver[j] == current)
-					already = true;
-			if (already) continue;
-
-			/* Choose the first in order */
-			if (earlier_object(first, current, false)) {
-				first = current;
+			/*
+			 * Only try to assign if not assigned, ammo, and,
+			 * if necessary to split, have room for the split
+			 * stacks.
+			 */
+			if (!assigned[j] && tval_is_ammo(current)
+					&& (current->number
+					<= z_info->quiver_slot_size
+					|| (z_info->quiver_slot_size > 0
+					&& n_stack_split
+					<= n_pack_remaining))) {
+				/* Choose the first in order. */
+				if (earlier_object(first, current, false)) {
+					first = current;
+					jfirst = j;
+				}
 			}
+
+			current = current->next;
+			++j;
 		}
 
-		/* Stop looking if there's nothing left */
+		/* Stop looking if there's nothing left in the gear. */
 		if (!first) break;
 
-		/* If we have an item, slot it */
-		upkeep->quiver[i] = first;
-		upkeep->quiver_cnt += first->number;
+		/* Put the item in the slot, splitting (if needed) to fit. */
+		if (first->number > z_info->quiver_slot_size) {
+			assert(z_info->quiver_slot_size > 0
+				&& n_stack_split <= n_pack_remaining);
+			/* As above, split off the portion going to the pack. */
+			gear_insert_end(p, object_split(first,
+				first->number - z_info->quiver_slot_size));
+		}
+		p->upkeep->quiver[i] = first;
+		p->upkeep->quiver_cnt += first->number;
 
-		/* In the quiver counts as worn */
-		object_learn_on_wield(player, first);
+		/* That part of the gear has been dealt with. */
+		assigned[jfirst] = true;
 	}
 
 	/* Note reordering */
-	if (character_dungeon)
-		for (i = 0; i < z_info->quiver_size; i++)
-			if (old_quiver[i] && (upkeep->quiver[i] != old_quiver[i])) {
+	if (character_dungeon) {
+		for (i = 0; i < z_info->quiver_size; i++) {
+			if (old_quiver[i] && p->upkeep->quiver[i] != old_quiver[i]) {
 				msg("You re-arrange your quiver.");
 				break;
 			}
+		}
+	}
 
 	/* Copy the current pack */
-	for (i = 0; i < z_info->pack_size; i++)
-		old_pack[i] = upkeep->inven[i];
+	for (i = 0; i < z_info->pack_size; i++) {
+		old_pack[i] = p->upkeep->inven[i];
+	}
 
 	/* Prepare to fill the inventory */
-	upkeep->inven_cnt = 0;
+	p->upkeep->inven_cnt = 0;
 
 	for (i = 0; i <= z_info->pack_size; i++) {
-		struct object *current, *first = NULL;
-		for (current = gear; current; current = current->next) {
-			bool possible = true;
-			int j;
+		struct object *first = NULL;
+		int jfirst = -1;
 
-			/* Skip equipment */
-			if (object_is_equipped(body, current))
-				possible = false;
+		/* Find the object that should go there. */
+		j = 0;
+		current = p->gear;
+		while (1) {
+			if (!current) break;
+			assert(j < n_max);
 
-			/* Skip quivered objects */
-			for (j = 0; j < z_info->quiver_size; j++)
-				if (upkeep->quiver[j] == current)
-					possible = false;
-
-			/* Skip objects already allocated to the inventory */
-			for (j = 0; j < upkeep->inven_cnt; j++)
-				if (upkeep->inven[j] == current)
-					possible = false;
-
-			/* If still possible, choose the first in order */
-			if (!possible)
-				continue;
-			else if (earlier_object(first, current, false)) {
-				first = current;
+			/* Consider it if it hasn't already been handled. */
+			if (!assigned[j]) {
+				/* Choose the first in order. */
+				if (earlier_object(first, current, false)) {
+					first = current;
+					jfirst = j;
+				}
 			}
+
+			current = current->next;
+			++j;
 		}
 
 		/* Allocate */
-		upkeep->inven[i] = first;
-		if (first)
-			upkeep->inven_cnt++;
+		p->upkeep->inven[i] = first;
+		if (first) {
+			++p->upkeep->inven_cnt;
+			assigned[jfirst] = true;
+		}
 	}
 
 	/* Note reordering */
-	if (character_dungeon && (upkeep->inven_cnt == old_inven_cnt))
-		for (i = 0; i < z_info->pack_size; i++)
-			if (old_pack[i] && (upkeep->inven[i] != old_pack[i]) &&
-				!object_is_equipped(body, old_pack[i])) {
+	if (character_dungeon && p->upkeep->inven_cnt == old_inven_cnt) {
+		for (i = 0; i < z_info->pack_size; i++) {
+			if (old_pack[i] && p->upkeep->inven[i] != old_pack[i]
+					 && !object_is_equipped(p->body, old_pack[i])) {
 				msg("You re-arrange your pack.");
 				break;
 			}
+		}
+	}
 
-	mem_free(old_quiver);
+	mem_free(assigned);
 	mem_free(old_pack);
-}
-
-static void update_inventory(struct player *p)
-{
-	calc_inventory(p->upkeep, p->gear, p->body);
+	mem_free(old_quiver);
 }
 
 /**
@@ -1207,15 +1273,15 @@ static void calc_spells(struct player *p)
 
 	const struct class_spell *spell;
 
-	s16b old_spells;
+	int16_t old_spells;
 
-	/* Hack -- must be literate */
+	/* Must be literate */
 	if (!p->class->magic.total_spells) return;
 
-	/* Hack -- wait for creation */
+	/* Wait for creation */
 	if (!character_generated) return;
 
-	/* Hack -- handle partial mode */
+	/* Handle partial mode */
 	if (p->upkeep->only_partial) return;
 
 	/* Save the new_spells value */
@@ -1224,7 +1290,7 @@ static void calc_spells(struct player *p)
 	/* Determine the number of spells allowed */
 	levels = p->lev - p->class->magic.spell_first + 1;
 
-	/* Hack -- no negative spells */
+	/* No negative spells */
 	if (levels < 0) levels = 0;
 
 	/* Number of 1/100 spells per level (or something - needs clarifying) */
@@ -1253,7 +1319,7 @@ static void calc_spells(struct player *p)
 		if (j >= 99) continue;
 
 		/* Get the spell */
-		spell = spell_by_index(j);
+		spell = spell_by_index(p, j);
 
 		/* Skip spells we are allowed to know */
 		if (spell->slevel <= p->lev) continue;
@@ -1287,7 +1353,7 @@ static void calc_spells(struct player *p)
 		if (j >= 99) continue;
 
 		/* Get the spell */
-		spell = spell_by_index(j);
+		spell = spell_by_index(p, j);
 
 		/* Forget it (if learned) */
 		if (p->spell_flags[j] & PY_SPELL_LEARNED) {
@@ -1318,7 +1384,7 @@ static void calc_spells(struct player *p)
 		if (j >= 99) break;
 
 		/* Get the spell */
-		spell = spell_by_index(j);
+		spell = spell_by_index(p, j);
 
 		/* Skip spells we cannot remember */
 		if (spell->slevel > p->lev) continue;
@@ -1346,7 +1412,7 @@ static void calc_spells(struct player *p)
 	/* Count spells that can be learned */
 	for (j = 0; j < num_total; j++) {
 		/* Get the spell */
-		spell = spell_by_index(j);
+		spell = spell_by_index(p, j);
 
 		/* Skip spells we cannot remember or don't exist */
 		if (!spell) continue;
@@ -1442,15 +1508,15 @@ static void calc_mana(struct player *p, struct player_state *state, bool update)
 		struct object *obj_local = slot_object(p, i);
 
 		/* Ignore non-armor */
-		if (slot_type_is(i, EQUIP_WEAPON)) continue;
-		if (slot_type_is(i, EQUIP_BOW)) continue;
-		if (slot_type_is(i, EQUIP_RING)) continue;
-		if (slot_type_is(i, EQUIP_AMULET)) continue;
-		if (slot_type_is(i, EQUIP_LIGHT)) continue;
+		if (slot_type_is(p, i, EQUIP_WEAPON)) continue;
+		if (slot_type_is(p, i, EQUIP_BOW)) continue;
+		if (slot_type_is(p, i, EQUIP_RING)) continue;
+		if (slot_type_is(p, i, EQUIP_AMULET)) continue;
+		if (slot_type_is(p, i, EQUIP_LIGHT)) continue;
 
 		/* Add weight */
 		if (obj_local)
-			cur_wgt += obj_local->weight;
+			cur_wgt += object_weight_one(obj_local);
 	}
 
 	/* Determine the weight allowance */
@@ -1527,8 +1593,7 @@ static void calc_hitpoints(struct player *p)
 /**
  * Calculate and set the current light radius.
  *
- * The light radius will be the total of all lights carried; characters with
- * UNLIGHT will have this modified according to level.
+ * The light radius will be the total of all lights carried.
  */
 static void calc_light(struct player *p, struct player_state *state,
 					   bool update)
@@ -1556,11 +1621,17 @@ static void calc_light(struct player *p, struct player_state *state,
 		if (!obj) continue;
 
 		/* Light radius - innate plus modifier */
-		if (of_has(obj->flags, OF_LIGHT_2))
+		if (of_has(obj->flags, OF_LIGHT_2)) {
 			amt = 2;
-		else if (of_has(obj->flags, OF_LIGHT_3))
+		} else if (of_has(obj->flags, OF_LIGHT_3)) {
 			amt = 3;
+		}
 		amt += obj->modifiers[OBJ_MOD_LIGHT];
+
+		/* Adjustment to allow UNLIGHT players to use +1 LIGHT gear */
+		if ((obj->modifiers[OBJ_MOD_LIGHT] > 0) && pf_has(state->pflags, PF_UNLIGHT)) {
+			amt--;
+		}
 
 		/* Examine actual lights */
 		if (tval_is_light(obj) && !of_has(obj->flags, OF_NO_FUEL) &&
@@ -1570,11 +1641,6 @@ static void calc_light(struct player *p, struct player_state *state,
 
 		/* Alter p->state.cur_light if reasonable */
 	    state->cur_light += amt;
-	}
-
-	/* UNLIGHT players have a special darkness aura */
-	if (player_has(p, PF_UNLIGHT)) {
-		state->cur_light -= (2 + p->lev / 6);
 	}
 }
 
@@ -1598,9 +1664,35 @@ void calc_digging_chances(struct player_state *state, int chances[DIGGING_MAX])
 		chances[i] = MAX(0, chances[i]);
 }
 
+/*
+ * Return the chance, out of 100, for unlocking a locked door with the given
+ * lock power.
+ *
+ * \param p is the player trying to unlock the door.
+ * \param lock_power is the power of the lock.
+ * \param lock_unseen, if true, assumes the player does not have sufficient
+ * light to work with the lock.
+ */
+int calc_unlocking_chance(const struct player *p, int lock_power,
+		bool lock_unseen)
+{
+	int skill = p->state.skills[SKILL_DISARM_PHYS];
+
+	if (lock_unseen || p->timed[TMD_BLIND]) {
+		skill /= 10;
+	}
+	if (p->timed[TMD_CONFUSED] || p->timed[TMD_IMAGE]) {
+		skill /= 10;
+	}
+
+	/* Always allow some chance of unlocking. */
+	return MAX(2, skill - 4 * lock_power);
+}
+
 /**
  * Calculate the blows a player would get.
  *
+ * \param p is the player of interest
  * \param obj is the object for which we are calculating blows
  * \param state is the player state for which we are calculating blows
  * \param extra_blows is the number of +blows available from this object and
@@ -1616,7 +1708,7 @@ int calc_blows(struct player *p, const struct object *obj,
 	int div;
 	int blow_energy;
 
-	int weight = (obj == NULL) ? 0 : obj->weight;
+	int weight = (obj == NULL) ? 0 : object_weight_one(obj);
 	int min_weight = p->class->min_weight;
 
 	/* Enforce a minimum "weight" (tenth pounds) */
@@ -1637,8 +1729,9 @@ int calc_blows(struct player *p, const struct object *obj,
 
 	blows = MIN((10000 / blow_energy), (100 * p->class->max_attacks));
 
-	/* Require at least one blow */
-	return MAX(blows + (100 * extra_blows), 100);
+	/* Require at least one blow, two for O-combat */
+	return MAX(blows + (100 * extra_blows),
+			   OPT(p, birth_percent_damage) ? 200 : 100);
 }
 
 
@@ -1674,9 +1767,35 @@ int weight_remaining(struct player *p)
 
 
 /**
+ * Adjust a value by a relative factor of the absolute value.  Mimics the
+ * inline calculations of value = (value * (den + num)) / num when value is
+ * positive.
+ * \param v Is a pointer to the value to adjust.
+ * \param num Is the numerator of the relative factor.  Use a negative value
+ * for a decrease in the value, and a positive value for an increase.
+ * \param den Is the denominator for the relative factor.  Must be positive.
+ * \param minv Is the minimum absolute value of v to use when computing the
+ * adjustment; use zero for this to get a pure relative adjustment.  Must be
+ * be non-negative.
+ */
+static void adjust_skill_scale(int *v, int num, int den, int minv)
+{
+	if (num >= 0) {
+		*v += (MAX(minv, ABS(*v)) * num) / den;
+	} else {
+		/*
+		 * To mimic what (value * (den + num)) / den would give for
+		 * positive value, need to round up the adjustment.
+		 */
+		*v -= (MAX(minv, ABS(*v)) * -num + den - 1) / den;
+	}
+}
+
+
+/**
  * Calculate the effect of a shapechange on player state
  */
-static void calc_shapechange(struct player_state *state,
+static void calc_shapechange(struct player_state *state, bool vuln[ELEM_MAX],
 							 struct player_shape *shape,
 							 int *blows, int *shots, int *might, int *moves)
 {
@@ -1717,28 +1836,20 @@ static void calc_shapechange(struct player_state *state,
 
 	/* Resists and vulnerabilities */
 	for (i = 0; i < ELEM_MAX; i++) {
-		if (state->el_info[i].res_level == 0) {
-			/* Simple, just apply shape res/vuln */
-			state->el_info[i].res_level = shape->el_info[i].res_level;
-		} else if (state->el_info[i].res_level == -1) {
-			/* Shape resists cancel, immunities trump, vulnerabilities */
-			if (shape->el_info[i].res_level == 1) {
-				state->el_info[i].res_level = 0;
-			} else if (shape->el_info[i].res_level == 3) {
-				state->el_info[i].res_level = 3;
-			}
-		} else if (state->el_info[i].res_level == 1) {
-			/* Shape vulnerabilities cancel, immunities enhance, resists */
-			if (shape->el_info[i].res_level == -1) {
-				state->el_info[i].res_level = 0;
-			} else if (shape->el_info[i].res_level == 3) {
-				state->el_info[i].res_level = 3;
-			}
-		} else if (state->el_info[i].res_level == 3) {
-			/* Immmunity, shape has no effect */
+		if (shape->el_info[i].res_level == -1) {
+			/* Remember vulnerabilities for application later. */
+			vuln[i] = true;
+		} else if (shape->el_info[i].res_level
+				> state->el_info[i].res_level) {
+			/*
+			 * Otherwise apply the shape's resistance level if it
+			 * is better; this is okay because any vulnerabilities
+			 * have not been included in the state's res_level yet.
+			 */
+			state->el_info[i].res_level =
+				shape->el_info[i].res_level;
 		}
 	}
-
 }
 
 /**
@@ -1810,10 +1921,6 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	/* Extract the player flags */
 	player_flags(p, collect_f);
 
-	/* Add player specific pflags */
-	if (!p->msp)
-		pf_on(state->pflags, PF_NO_MANA);
-
 	/* Analyze equipment */
 	for (i = 0; i < p->body.count; i++) {
 		int index = 0;
@@ -1877,7 +1984,7 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 			for (j = 0; j < ELEM_MAX; j++) {
 				if (!known_only || obj->known->el_info[j].res_level) {
 					if (obj->el_info[j].res_level == -1)
-						vuln[i] = true;
+						vuln[j] = true;
 
 					/* OK because res_level hasn't included vulnerability yet */
 					if (obj->el_info[j].res_level > state->el_info[j].res_level)
@@ -1889,7 +1996,8 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 			state->ac += obj->ac;
 			if (!known_only || obj->known->to_a)
 				state->to_a += obj->to_a;
-			if (!slot_type_is(i, EQUIP_WEAPON) && !slot_type_is(i, EQUIP_BOW)) {
+			if (!slot_type_is(p, i, EQUIP_WEAPON)
+					&& !slot_type_is(p, i, EQUIP_BOW)) {
 				if (!known_only || obj->known->to_h) {
 					state->to_h += obj->to_h;
 				}
@@ -1919,22 +2027,28 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	/* Apply the collected flags */
 	of_union(state->flags, collect_f);
 
+	/* Add shapechange info */
+	calc_shapechange(state, vuln, p->shape, &extra_blows, &extra_shots,
+		&extra_might, &extra_moves);
+
 	/* Now deal with vulnerabilities */
 	for (i = 0; i < ELEM_MAX; i++) {
 		if (vuln[i] && (state->el_info[i].res_level < 3))
 			state->el_info[i].res_level--;
 	}
 
-	/* Add shapechange info */
-	calc_shapechange(state, p->shape, &extra_blows, &extra_shots, &extra_might,
-		&extra_moves);
-
 	/* Calculate light */
 	calc_light(p, state, update);
 
 	/* Unlight - needs change if anything but resist is introduced for dark */
-	if (player_has(p, PF_UNLIGHT) && character_dungeon) {
+	if (pf_has(state->pflags, PF_UNLIGHT) && character_dungeon) {
 		state->el_info[ELEM_DARK].res_level = 1;
+	}
+
+	/* Evil */
+	if (pf_has(state->pflags, PF_EVIL) && character_dungeon) {
+		state->el_info[ELEM_NETHER].res_level = 1;
+		state->el_info[ELEM_HOLY_ORB].res_level = -1;
 	}
 
 	/* Calculate the various stat values */
@@ -1977,47 +2091,63 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 		state->stat_ind[i] = ind;
 	}
 
-	/* Temporary flags */
-	if (player_timed_grade_eq(p, TMD_FOOD, "Gorged")) {
-		state->speed -= 10;
-	} else if (player_timed_grade_eq(p, TMD_FOOD, "Hungry")) {
-		int badness = 10 - (player->timed[TMD_FOOD] * 10) / PY_FOOD_HUNGRY;
-		state->to_h -= badness;
-		state->to_d -= badness;
-	} else if (player_timed_grade_eq(p, TMD_FOOD, "Weak")) {
-		int badness = 15 - (player->timed[TMD_FOOD] * 10) / PY_FOOD_WEAK;
-		state->to_h -= badness;
-		state->to_d -= badness;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 9 / 10;
-	} else if (player_timed_grade_eq(p, TMD_FOOD, "Faint")) {
-		int badness = 20 - (player->timed[TMD_FOOD] * 10) / PY_FOOD_FAINT;
-		state->to_h -= badness;
-		state->to_d -= badness;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 8 / 10;
-		state->skills[SKILL_DISARM_PHYS] =
-			state->skills[SKILL_DISARM_PHYS] * 9 / 10;
-		state->skills[SKILL_DISARM_MAGIC] =
-			state->skills[SKILL_DISARM_MAGIC] * 9 / 10;
-	} else if (player_timed_grade_eq(p, TMD_FOOD, "Starving")) {
-		int badness = 28 - (player->timed[TMD_FOOD] * 10) / PY_FOOD_STARVE;
-		state->to_h -= badness;
-		state->to_d -= badness;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 7 / 10;
-		state->skills[SKILL_DISARM_PHYS] =
-			state->skills[SKILL_DISARM_PHYS] * 8 / 10;
-		state->skills[SKILL_DISARM_MAGIC] =
-			state->skills[SKILL_DISARM_MAGIC] * 8 / 10;
-		state->skills[SKILL_SAVE] = state->skills[SKILL_SAVE] * 9 / 10;
-		state->skills[SKILL_SEARCH] = state->skills[SKILL_SEARCH] * 9 / 10;
+	/* Effects of food outside the "Fed" range */
+	if (!player_timed_grade_eq(p, TMD_FOOD, "Fed")) {
+		int excess = p->timed[TMD_FOOD] - PY_FOOD_FULL;
+		int lack = PY_FOOD_HUNGRY - p->timed[TMD_FOOD];
+		if ((excess > 0) && !p->timed[TMD_ATT_VAMP]) {
+			/* Scale to units 1/10 of the range and subtract from speed */
+			excess = (excess * 10) / (PY_FOOD_MAX - PY_FOOD_FULL);
+			state->speed -= excess;
+		} else if (lack > 0) {
+			/* Scale to units 1/20 of the range */
+			lack = (lack * 20) / PY_FOOD_HUNGRY;
+
+			/* Apply effects progressively */
+			state->to_h -= lack;
+			state->to_d -= lack;
+			if ((lack > 10) && (lack <= 15)) {
+				adjust_skill_scale(&state->skills[SKILL_DEVICE],
+					-1, 10, 0);
+			} else if ((lack > 15) && (lack <= 18)) {
+				adjust_skill_scale(&state->skills[SKILL_DEVICE],
+					-1, 5, 0);
+				state->skills[SKILL_DISARM_PHYS] *= 9;
+				state->skills[SKILL_DISARM_PHYS] /= 10;
+				state->skills[SKILL_DISARM_MAGIC] *= 9;
+				state->skills[SKILL_DISARM_MAGIC] /= 10;
+			} else if (lack > 18) {
+				adjust_skill_scale(&state->skills[SKILL_DEVICE],
+					-3, 10, 0);
+				state->skills[SKILL_DISARM_PHYS] *= 8;
+				state->skills[SKILL_DISARM_PHYS] /= 10;
+				state->skills[SKILL_DISARM_MAGIC] *= 8;
+				state->skills[SKILL_DISARM_MAGIC] /= 10;
+				state->skills[SKILL_SAVE] *= 9;
+				state->skills[SKILL_SAVE] /= 10;
+				state->skills[SKILL_SEARCH] *=9;
+				state->skills[SKILL_SEARCH] /= 10;
+			}
+		}
 	}
+
+	/* Other timed effects */
+	player_flags_timed(p, state->flags);
+
 	if (player_timed_grade_eq(p, TMD_STUN, "Heavy Stun")) {
 		state->to_h -= 20;
 		state->to_d -= 20;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 8 / 10;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 5, 0);
+		if (update) {
+			p->timed[TMD_FASTCAST] = 0;
+		}
 	} else if (player_timed_grade_eq(p, TMD_STUN, "Stun")) {
 		state->to_h -= 5;
 		state->to_d -= 5;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 9 / 10;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 10, 0);
+		if (update) {
+			p->timed[TMD_FASTCAST] = 0;
+		}
 	}
 	if (p->timed[TMD_INVULN]) {
 		state->to_a += 100;
@@ -2025,7 +2155,7 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	if (p->timed[TMD_BLESSED]) {
 		state->to_a += 5;
 		state->to_h += 10;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 105 / 100;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], 1, 20, 0);
 	}
 	if (p->timed[TMD_SHIELD]) {
 		state->to_a += 50;
@@ -2034,19 +2164,14 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 		state->to_a += 40;
 		state->speed -= 5;
 	}
-	if (p->timed[TMD_BOLD]) {
-		of_on(state->flags, OF_PROT_FEAR);
-	}
 	if (p->timed[TMD_HERO]) {
-		of_on(state->flags, OF_PROT_FEAR);
 		state->to_h += 12;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 105 / 100;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], 1, 20, 0);
 	}
 	if (p->timed[TMD_SHERO]) {
-		of_on(state->flags, OF_PROT_FEAR);
-		state->to_h += 24;
+		state->skills[SKILL_TO_HIT_MELEE] += 75;
 		state->to_a -= 10;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 9 / 10;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 10, 0);
 	}
 	if (p->timed[TMD_FAST] || p->timed[TMD_SPRINT]) {
 		state->speed += 10;
@@ -2057,58 +2182,41 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	if (p->timed[TMD_SINFRA]) {
 		state->see_infra += 5;
 	}
-	if (p->timed[TMD_TELEPATHY]) {
-		of_on(state->flags, OF_TELEPATHY);
-	}
-	if (p->timed[TMD_SINVIS]) {
-		of_on(state->flags, OF_SEE_INVIS);
-	}
-	if (p->timed[TMD_AFRAID] || p->timed[TMD_TERROR]) {
-		of_on(state->flags, OF_AFRAID);
-	}
 	if (p->timed[TMD_TERROR]) {
 		state->speed += 10;
 	}
-	if (p->timed[TMD_OPP_ACID] && (state->el_info[ELEM_ACID].res_level < 2)) {
-			state->el_info[ELEM_ACID].res_level++;
-	}
-	if (p->timed[TMD_OPP_ELEC] && (state->el_info[ELEM_ELEC].res_level < 2)) {
-			state->el_info[ELEM_ELEC].res_level++;
-	}
-	if (p->timed[TMD_OPP_FIRE] && (state->el_info[ELEM_FIRE].res_level < 2)) {
-			state->el_info[ELEM_FIRE].res_level++;
-	}
-	if (p->timed[TMD_OPP_COLD] && (state->el_info[ELEM_COLD].res_level < 2)) {
-			state->el_info[ELEM_COLD].res_level++;
-	}
-	if (p->timed[TMD_OPP_POIS] && (state->el_info[ELEM_POIS].res_level < 2)) {
-			state->el_info[ELEM_POIS].res_level++;
-	}
-	if (p->timed[TMD_OPP_CONF]) {
-		of_on(state->flags, OF_PROT_CONF);
+	for (i = 0; i < TMD_MAX; ++i) {
+		if (p->timed[i] && timed_effects[i].temp_resist != -1
+				&& state->el_info[timed_effects[i].temp_resist].res_level
+				< 2) {
+			state->el_info[timed_effects[i].temp_resist].res_level++;
+		}
 	}
 	if (p->timed[TMD_CONFUSED]) {
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 75 / 100;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 4, 0);
 	}
 	if (p->timed[TMD_AMNESIA]) {
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 8 / 10;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 5, 0);
 	}
 	if (p->timed[TMD_POISONED]) {
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 95 / 100;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 20, 0);
 	}
 	if (p->timed[TMD_IMAGE]) {
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 8 / 10;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 5, 0);
 	}
 	if (p->timed[TMD_BLOODLUST]) {
 		state->to_d += p->timed[TMD_BLOODLUST] / 2;
 		extra_blows += p->timed[TMD_BLOODLUST] / 20;
+	}
+	if (p->timed[TMD_STEALTH]) {
+		state->skills[SKILL_STEALTH] += 10;
 	}
 
 	/* Analyze flags - check for fear */
 	if (of_has(state->flags, OF_AFRAID)) {
 		state->to_h -= 20;
 		state->to_a += 8;
-		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 95 / 100;
+		adjust_skill_scale(&state->skills[SKILL_DEVICE], -1, 20, 0);
 	}
 
 	/* Analyze weight */
@@ -2146,8 +2254,10 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	/* Analyze launcher */
 	state->heavy_shoot = false;
 	if (launcher) {
-		if (hold < launcher->weight / 10) {
-			state->to_h += 2 * (hold - launcher->weight / 10);
+		int16_t launcher_weight = object_weight_one(launcher);
+
+		if (hold < launcher_weight / 10) {
+			state->to_h += 2 * (hold - launcher_weight / 10);
 			state->heavy_shoot = true;
 		}
 
@@ -2168,8 +2278,8 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 		if (!state->heavy_shoot) {
 			state->num_shots += extra_shots;
 			state->ammo_mult += extra_might;
-			if (player_has(p, PF_FAST_SHOT) && (state->ammo_tval == TV_ARROW)) {
-				state->num_shots += p->lev / 5;
+			if (pf_has(state->pflags, PF_FAST_SHOT)) {
+				state->num_shots += p->lev / 3;
 			}
 		}
 
@@ -2182,33 +2292,40 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	state->heavy_wield = false;
 	state->bless_wield = false;
 	if (weapon) {
+		int16_t weapon_weight = object_weight_one(weapon);
+
 		/* It is hard to hold a heavy weapon */
-		if (hold < weapon->weight / 10) {
-			state->to_h += 2 * (hold - weapon->weight / 10);
+		if (hold < weapon_weight / 10) {
+			state->to_h += 2 * (hold - weapon_weight / 10);
 			state->heavy_wield = true;
 		}
 
 		/* Normal weapons */
 		if (!state->heavy_wield) {
 			state->num_blows = calc_blows(p, weapon, state, extra_blows);
-			state->skills[SKILL_DIGGING] += (weapon->weight / 10);
+			state->skills[SKILL_DIGGING] += weapon_weight / 10;
 		}
 
 		/* Divine weapon bonus for blessed weapons */
-		if (player_has(p, PF_BLESS_WEAPON) && of_has(state->flags, OF_BLESSED)){
-			state->to_h += 2;
+		if (pf_has(state->pflags, PF_BLESS_WEAPON)
+				&& (weapon->tval == TV_HAFTED
+				|| of_has(state->flags, OF_BLESSED))) {
 			state->to_d += 2;
 			state->bless_wield = true;
 		}
 	} else {
+		/* Unarmed */
 		state->num_blows = calc_blows(p, NULL, state, extra_blows);
 	}
 
 	/* Mana */
 	calc_mana(p, state, update);
+	if (!p->msp) {
+		pf_on(state->pflags, PF_NO_MANA);
+	}
 
 	/* Movement speed */
-	state->num_moves = 1 + extra_moves;;
+	state->num_moves = extra_moves;
 
 	return;
 }
@@ -2260,12 +2377,12 @@ static void update_bonuses(struct player *p)
 	}
 
 
-	/* Hack -- Telepathy Change */
+	/* Telepathy Change */
 	if (of_has(state.flags, OF_TELEPATHY) !=
 		of_has(p->state.flags, OF_TELEPATHY))
 		/* Update monster visibility */
 		p->upkeep->update |= (PU_MONSTERS);
-	/* Hack -- See Invis Change */
+	/* See Invis Change */
 	if (of_has(state.flags, OF_SEE_INVIS) !=
 		of_has(p->state.flags, OF_SEE_INVIS))
 		/* Update monster visibility */
@@ -2286,7 +2403,12 @@ static void update_bonuses(struct player *p)
 		p->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 	}
 
-	/* Hack -- handle partial mode */
+	/* Notice changes to the weight limit. */
+	if (weight_limit(&p->state) != weight_limit(&state)) {
+		p->upkeep->redraw |= (PR_INVEN);
+	}
+
+	/* Handle partial mode */
 	if (!p->upkeep->only_partial) {
 		/* Take note when "heavy bow" changes */
 		if (p->state.heavy_shoot != state.heavy_shoot) {
@@ -2324,9 +2446,9 @@ static void update_bonuses(struct player *p)
 		if (p->state.cumber_armor != state.cumber_armor) {
 			/* Message */
 			if (state.cumber_armor)
-				msg("The weight of your armor encumbers your movement.");
+				msg("The weight of your armor reduces your maximum SP.");
 			else
-				msg("You feel able to move more freely.");
+				msg("Your maximum SP is no longer reduced by armor weight.");
 		}
 	}
 
@@ -2419,13 +2541,13 @@ void notice_stuff(struct player *p)
 	/* Deal with ignore stuff */
 	if (p->upkeep->notice & PN_IGNORE) {
 		p->upkeep->notice &= ~(PN_IGNORE);
-		ignore_drop();
+		ignore_drop(p);
 	}
 
 	/* Combine the pack */
 	if (p->upkeep->notice & PN_COMBINE) {
 		p->upkeep->notice &= ~(PN_COMBINE);
-		combine_pack();
+		combine_pack(p);
 	}
 
 	/* Dump the monster messages */
@@ -2448,7 +2570,7 @@ void update_stuff(struct player *p)
 
 	if (p->upkeep->update & (PU_INVEN)) {
 		p->upkeep->update &= ~(PU_INVEN);
-		update_inventory(p);
+		calc_inventory(p);
 	}
 
 	if (p->upkeep->update & (PU_BONUS)) {
@@ -2511,7 +2633,7 @@ void update_stuff(struct player *p)
 
 struct flag_event_trigger
 {
-	u32b flag;
+	uint32_t flag;
 	game_event_type event;
 };
 
@@ -2539,6 +2661,7 @@ static const struct flag_event_trigger redraw_events[] =
 	{ PR_STUDY,   EVENT_STUDYSTATUS },
 	{ PR_DTRAP,   EVENT_DETECTIONSTATUS },
 	{ PR_FEELING, EVENT_FEELING },
+	{ PR_LIGHT,   EVENT_LIGHT },
 
 	{ PR_INVEN,   EVENT_INVENTORY },
 	{ PR_EQUIP,   EVENT_EQUIPMENT },
@@ -2555,7 +2678,7 @@ static const struct flag_event_trigger redraw_events[] =
 void redraw_stuff(struct player *p)
 {
 	size_t i;
-	u32b redraw = p->upkeep->redraw;
+	uint32_t redraw = p->upkeep->redraw;
 
 	/* Redraw stuff */
 	if (!redraw) return;
@@ -2569,7 +2692,7 @@ void redraw_stuff(struct player *p)
 
 	/* Hack - rarely update while resting or running, makes it over quicker */
 	if (((player_resting_count(p) % 100) || (p->upkeep->running % 100))
-		&& !(redraw & PR_MESSAGE))
+		&& !(redraw & (PR_MESSAGE | PR_MAP)))
 		return;
 
 	/* For each listed flag, send the appropriate signal to the UI */

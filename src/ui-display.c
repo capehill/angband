@@ -41,6 +41,7 @@
 #include "project.h"
 #include "savefile.h"
 #include "target.h"
+#include "trap.h"
 #include "ui-birth.h"
 #include "ui-display.h"
 #include "ui-game.h"
@@ -55,6 +56,7 @@
 #include "ui-prefs.h"
 #include "ui-store.h"
 #include "ui-term.h"
+#include "ui-visuals.h"
 #include "wizard.h"
 
 /**
@@ -88,6 +90,7 @@ static game_event_type statusline_events[] =
 	EVENT_DETECTIONSTATUS,
 	EVENT_STATE,
 	EVENT_FEELING,
+	EVENT_LIGHT,
 };
 
 /**
@@ -167,31 +170,36 @@ static void prt_stat(int stat, int row, int col)
 		put_str("!", row, col + 3);
 }
 
+static int fmt_title(char buf[], int max, bool short_mode)
+{
+	buf[0] = 0;
+
+	/* Wizard, winner or neither */
+	if (player->wizard) {
+		my_strcpy(buf, "[=-WIZARD-=]", max);
+	} else if (player->total_winner || (player->lev > PY_MAX_LEVEL)) {
+		my_strcpy(buf, "***WINNER***", max);
+	} else if (player_is_shapechanged(player)) {		
+		my_strcpy(buf, player->shape->name, max);
+		my_strcap(buf);		
+	} else if (!short_mode) {
+		my_strcpy(buf, player->class->title[(player->lev - 1) / 5], max);
+	}
+
+	return strlen(buf);
+}
 
 /**
  * Prints title, including wizard, winner or shape as needed.
  */
 static void prt_title(int row, int col)
-{
-	const char *p;
+{	
+	char buf[32];
 
-	/* Wizard, winner or neither */
-	if (player->wizard) {
-		p = "[=-WIZARD-=]";
-	} else if (player->total_winner || (player->lev > PY_MAX_LEVEL)) {
-		p = "***WINNER***";
-	} else if (player_is_shapechanged(player)) {
-		char buf[20];
-		my_strcpy(buf, player->shape->name, sizeof(buf));
-		my_strcap(buf);
-		p = buf;
-	} else {
-		p = player->class->title[(player->lev - 1) / 5];
-	}
+	fmt_title(buf, sizeof(buf), false);	
 
-	prt_field(p, row, col);
+	prt_field(buf, row, col);
 }
-
 
 /**
  * Prints level
@@ -229,7 +237,7 @@ static void prt_exp(int row, int col)
 			player->exp;
 
 	/* Format XP */
-	strnfmt(out_val, sizeof(out_val), "%8d", xp);
+	strnfmt(out_val, sizeof(out_val), "%8ld", xp);
 
 
 	if (player->exp >= player->max_exp) {
@@ -250,7 +258,7 @@ static void prt_gold(int row, int col)
 	char tmp[32];
 
 	put_str("AU ", row, col);
-	strnfmt(tmp, sizeof(tmp), "%9d", player->au);
+	strnfmt(tmp, sizeof(tmp), "%9ld", (long)player->au);
 	c_put_str(COLOUR_L_GREEN, tmp, row, col + 3);
 }
 
@@ -262,24 +270,22 @@ static void prt_equippy(int row, int col)
 {
 	int i;
 
-	byte a;
+	uint8_t a;
 	wchar_t c;
 
 	struct object *obj;
-
-	/* No equippy chars in bigtile mode */
-	if (tile_width > 1 || tile_height > 1) return;
 
 	/* Dump equippy chars */
 	for (i = 0; i < player->body.count; i++) {
 		/* Object */
 		obj = slot_object(player, i);
 
-		if (obj) {
+		/* Get attr/char for display; clear if big tiles or no object */
+		if (obj && tile_width == 1 && tile_height == 1) {
 			c = object_char(obj);
 			a = object_attr(obj);
 		} else {
-			c = ' ';
+			c = L' ';
 			a = COLOUR_WHITE;
 		}
 
@@ -308,7 +314,7 @@ static void prt_ac(int row, int col)
 static void prt_hp(int row, int col)
 {
 	char cur_hp[32], max_hp[32];
-	byte color = player_hp_attr(player);
+	uint8_t color = player_hp_attr(player);
 
 	put_str("HP ", row, col);
 
@@ -326,12 +332,21 @@ static void prt_hp(int row, int col)
 static void prt_sp(int row, int col)
 {
 	char cur_sp[32], max_sp[32];
-	byte color = player_sp_attr(player);
+	uint8_t color = player_sp_attr(player);
 
 	/* Do not show mana unless we should have some */
-	if (player_has(player, PF_NO_MANA) || 
-		(player->lev < player->class->magic.spell_first))
+	if (!player->class->magic.total_spells
+			|| (player->lev < player->class->magic.spell_first)) {
+		/*
+		 * But clear if experience drain may have left no points after
+		 * having points.
+		 */
+		if (player->class->magic.total_spells
+				&& player->exp < player->max_exp) {
+			put_str("            ", row, col);
+		}
 		return;
+	}
 
 	put_str("SP ", row, col);
 
@@ -347,10 +362,10 @@ static void prt_sp(int row, int col)
 /**
  * Calculate the monster bar color separately, for ports.
  */
-byte monster_health_attr(void)
+uint8_t monster_health_attr(void)
 {
 	struct monster *mon = player->upkeep->health_who;
-	byte attr;
+	uint8_t attr;
 
 	if (!mon) {
 		/* Not tracking */
@@ -389,7 +404,7 @@ byte monster_health_attr(void)
 		if (mon->m_timed[MON_TMD_DISEN]) attr = COLOUR_L_UMBER;
 
 		/* Commanded */
-		if (mon->m_timed[MON_TMD_DISEN]) attr = COLOUR_L_PURPLE;
+		if (mon->m_timed[MON_TMD_COMMAND]) attr = COLOUR_L_PURPLE;
 
 		/* Confused */
 		if (mon->m_timed[MON_TMD_CONF]) attr = COLOUR_UMBER;
@@ -407,26 +422,16 @@ byte monster_health_attr(void)
 	return attr;
 }
 
-/**
- * Redraw the "monster health bar"
- *
- * The "monster health bar" provides visual feedback on the "health"
- * of the monster currently being "tracked".  There are several ways
- * to "track" a monster, including targetting it, attacking it, and
- * affecting it (and nobody else) with a ranged attack.  When nothing
- * is being tracked, we clear the health bar.  If the monster being
- * tracked is not currently visible, a special health bar is shown.
- */
-static void prt_health(int row, int col)
+static int prt_health_aux(int row, int col)
 {
-	byte attr = monster_health_attr();
+	uint8_t attr = monster_health_attr();
 	struct monster *mon = player->upkeep->health_who;
 
 	/* Not tracking */
 	if (!mon) {
 		/* Erase the health bar */
 		Term_erase(col, row, 12);
-		return;
+		return 0;
 	}
 
 	/* Tracking an unseen, hallucinatory, or dead monster */
@@ -448,43 +453,78 @@ static void prt_health(int row, int col)
 		/* Dump the current "health" (use '*' symbols) */
 		Term_putstr(col + 1, row, len, attr, "**********");
 	}
+
+	return 12;
 }
 
+/**
+ * Redraw the "monster health bar"
+ *
+ * The "monster health bar" provides visual feedback on the "health"
+ * of the monster currently being "tracked".  There are several ways
+ * to "track" a monster, including targetting it, attacking it, and
+ * affecting it (and nobody else) with a ranged attack.  When nothing
+ * is being tracked, we clear the health bar.  If the monster being
+ * tracked is not currently visible, a special health bar is shown.
+ */
+static void prt_health(int row, int col)
+{
+	prt_health_aux(row, col);
+}
+
+static int prt_speed_aux(char buf[], int max, uint8_t *attr)
+{
+	int i = player->state.speed;
+	const char *type = NULL;
+
+	*attr = COLOUR_WHITE;
+	buf[0] = 0;
+
+	/* 110 is normal speed, and requires no display */
+	if (i > 110) {
+		*attr = COLOUR_L_GREEN;
+		type = "Fast";
+	} else if (i < 110) {
+		*attr = COLOUR_L_UMBER;
+		type = "Slow";
+	}
+
+	if (type && !OPT(player, effective_speed))
+		strnfmt(buf, max, "%s (%+d)", type, (i - 110));
+	else if (type && OPT(player, effective_speed))
+	{
+		int multiplier = 10 * extract_energy[i] / extract_energy[110];
+		int int_mul = multiplier / 10;
+		int dec_mul = multiplier % 10;
+		strnfmt(buf, max, "%s (%d.%dx)", type, int_mul, dec_mul);
+	}
+
+	return strlen(buf);
+}
 
 /**
  * Prints the speed of a character.
  */
 static void prt_speed(int row, int col)
 {
-	int i = player->state.speed;
-
-	byte attr = COLOUR_WHITE;
-	const char *type = NULL;
+	uint8_t attr = COLOUR_WHITE;
 	char buf[32] = "";
 
-	/* 110 is normal speed, and requires no display */
-	if (i > 110) {
-		attr = COLOUR_L_GREEN;
-		type = "Fast";
-	} else if (i < 110) {
-		attr = COLOUR_L_UMBER;
-		type = "Slow";
-	}
-
-	if (type && !OPT(player, effective_speed))
-		strnfmt(buf, sizeof(buf), "%s (%+d)", type, (i - 110));
-	else if (type && OPT(player, effective_speed))
-	{
-		int multiplier = 10 * extract_energy[i] / extract_energy[110];
-		int int_mul = multiplier / 10;
-		int dec_mul = multiplier % 10;
-		strnfmt(buf, sizeof(buf), "%s (%d.%dx)", type, int_mul, dec_mul);
-	}
+	prt_speed_aux(buf, sizeof(buf), &attr);
 
 	/* Display the speed */
 	c_put_str(attr, format("%-11s", buf), row, col);
 }
 
+static int fmt_depth(char buf[], int max)
+{
+	if (!player->depth)
+		my_strcpy(buf, "Town", max);
+	else
+		strnfmt(buf, max, "%d' (L%d)",
+		        player->depth * 50, player->depth);
+	return strlen(buf);
+}
 
 /**
  * Prints depth in stat area
@@ -493,11 +533,7 @@ static void prt_depth(int row, int col)
 {
 	char depths[32];
 
-	if (!player->depth)
-		my_strcpy(depths, "Town", sizeof(depths));
-	else
-		strnfmt(depths, sizeof(depths), "%d' (L%d)",
-		        player->depth * 50, player->depth);
+	fmt_depth(depths, sizeof(depths));
 
 	/* Right-Adjust the "depth", and clear old values */
 	put_str(format("%-13s", depths), row, col);
@@ -521,12 +557,245 @@ static void prt_race(int row, int col) {
 		prt_field(player->race->name, row, col);
 	}
 }
+
+static int prt_race_class_short(int row, int col)
+{
+	char buf[512] = "";
+
+	if (player_is_shapechanged(player)) return 0;
+
+	strnfmt(buf, sizeof(buf), "%s %s",
+		player->race->name,
+		player->class->title[(player->lev - 1) / 5]);
+
+	c_put_str(COLOUR_L_GREEN, buf, row, col);
+
+	return strlen(buf)+1;
+}
+
 static void prt_class(int row, int col) {
 	if (player_is_shapechanged(player)) {
 		prt_field("", row, col);
 	} else {
 		prt_field(player->class->name, row, col);
 	}
+}
+
+/**
+ * Prints level
+ */
+static int prt_level_short(int row, int col)
+{
+	char tmp[32];
+
+	strnfmt(tmp, sizeof(tmp), "%d", player->lev);
+
+	if (player->lev >= player->max_lev) {
+		put_str("L:", row, col);
+		c_put_str(COLOUR_L_GREEN, tmp, row, col + 2);
+	} else {
+		put_str("l:", row, col);
+		c_put_str(COLOUR_YELLOW, tmp, row, col + 2);
+	}
+
+	return 3+strlen(tmp);
+}
+
+static int prt_stat_short(int stat, int row, int col)
+{
+	char tmp[32];
+
+	/* Injured or healthy stat */
+	if (player->stat_cur[stat] < player->stat_max[stat]) {
+		put_str(format("%c:", stat_names_reduced[stat][0]), row, col);		
+		cnv_stat(player->state.stat_use[stat], tmp, sizeof(tmp));
+		/* Trim whitespace */
+		strskip(tmp,' ', 0);
+		c_put_str(COLOUR_YELLOW, tmp, row, col + 2);
+	} else {
+		put_str(format("%c:", stat_names[stat][0]), row, col);
+		cnv_stat(player->state.stat_use[stat], tmp, sizeof(tmp));
+		/* Trim whitespace */
+		strskip(tmp,' ', 0);
+		if (player->stat_max[stat] == 18+100) {
+			c_put_str(COLOUR_L_BLUE, tmp, row, col + 2);
+		}
+		else {
+			c_put_str(COLOUR_L_GREEN, tmp, row, col + 2);	
+		}		
+	}
+
+	return 3+strlen(tmp);
+}
+
+static int prt_exp_short(int row, int col)
+{
+	char out_val[32];
+	bool lev50 = (player->lev == 50);
+
+	long xp = (long)player->exp;
+
+	/* Calculate XP for next level */
+	if (!lev50)
+		xp = (long)(player_exp[player->lev - 1] * player->expfact / 100L) -
+			player->exp;
+
+	/* Format XP */
+	strnfmt(out_val, sizeof(out_val), "%ld", xp);
+
+	if (player->exp >= player->max_exp) {
+		put_str((lev50 ? "EXP:" : "NXT:"), row, col);
+		c_put_str(COLOUR_L_GREEN, out_val, row, col + 4);
+	} else {
+		put_str((lev50 ? "exp:" : "nxt:"), row, col);
+		c_put_str(COLOUR_YELLOW, out_val, row, col + 4);
+	}
+
+	return 5+strlen(out_val);
+}
+
+static int prt_ac_short(int row, int col)
+{
+	char tmp[32];
+
+	put_str("AC:", row, col);
+	strnfmt(tmp, sizeof(tmp), "%d", 
+			player->known_state.ac + player->known_state.to_a);
+	c_put_str(COLOUR_L_GREEN, tmp, row, col + 3);
+	return 4+strlen(tmp);
+}
+
+static int prt_gold_short(int row, int col)
+{
+	char tmp[32];
+
+	put_str("AU:", row, col);
+	strnfmt(tmp, sizeof(tmp), "%ld", (long)player->au);
+	c_put_str(COLOUR_L_GREEN, tmp, row, col + 3);
+	return 4+strlen(tmp);
+}
+
+static int prt_hp_short(int row, int col)
+{
+	char cur_hp[32], max_hp[32];
+	uint8_t color = player_hp_attr(player);
+
+	put_str("HP:", row, col);
+	col += 3;
+
+	strnfmt(max_hp, sizeof(max_hp), "%d", player->mhp);
+	strnfmt(cur_hp, sizeof(cur_hp), "%d", player->chp);
+	
+	c_put_str(color, cur_hp, row, col);
+	col += strlen(cur_hp);
+	c_put_str(COLOUR_WHITE, "/", row, col);
+	col += 1;
+	c_put_str(COLOUR_L_GREEN, max_hp, row, col);
+	return 5+strlen(cur_hp)+strlen(max_hp);
+}
+
+static int prt_sp_short(int row, int col)
+{
+	char cur_sp[32], max_sp[32];
+	uint8_t color = player_sp_attr(player);
+
+	/* Do not show mana unless we should have some */
+	if (!player->class->magic.total_spells
+			|| (player->lev < player->class->magic.spell_first))
+		return 0;
+
+	put_str("SP:", row, col);
+	col += 3;
+
+	strnfmt(max_sp, sizeof(max_sp), "%d", player->msp);
+	strnfmt(cur_sp, sizeof(cur_sp), "%d", player->csp);
+
+	/* Show mana */
+	c_put_str(color, cur_sp, row, col);
+	col += strlen(cur_sp);
+	c_put_str(COLOUR_WHITE, "/", row, col);
+	col += 1;
+	c_put_str(COLOUR_L_GREEN, max_sp, row, col);
+	return 5+strlen(cur_sp)+strlen(max_sp);
+}
+
+static int prt_health_short(int row, int col)
+{
+	int len = prt_health_aux(row, col);
+	if (len > 0) {
+		return len+1;
+	}
+	return 0;
+}
+
+static int prt_speed_short(int row, int col)
+{
+	char buf[32];
+	uint8_t attr;
+
+	int len = prt_speed_aux(buf, sizeof(buf), &attr);	
+	if (len > 0) {
+		c_put_str(attr, buf, row, col);
+		return len+1;
+	}
+	return 0;
+}
+
+static int prt_depth_short(int row, int col)
+{
+	char buf[32];
+	
+	int len = fmt_depth(buf, sizeof(buf));
+	put_str(buf, row, col);
+	return len+1;
+}
+
+static int prt_title_short(int row, int col)
+{
+	char buf[32];
+	
+	int len = fmt_title(buf, sizeof(buf), true);
+	if (len > 0) {
+		c_put_str(COLOUR_YELLOW, buf, row, col);	
+		return len+1;
+	}	
+	return 0;
+}
+
+static void update_topbar(game_event_type type, game_event_data *data,
+						  void *user, int row)
+{	
+	int col = 0;	
+
+	prt("", row, col);	
+
+	col += prt_level_short(row, col);
+
+	col += prt_exp_short(row, col);
+	
+	col += prt_stat_short(STAT_STR, row, col);
+	col += prt_stat_short(STAT_INT, row, col);
+	col += prt_stat_short(STAT_WIS, row, col);
+	col += prt_stat_short(STAT_DEX, row, col);
+	col += prt_stat_short(STAT_CON, row, col);
+
+	col += prt_ac_short(row, col);
+
+	col += prt_gold_short(row, col);
+
+	col += prt_race_class_short(row, col);
+
+	++row;
+	col = 0;
+
+	prt("", row, col);
+
+	col += prt_hp_short(row, col);
+	col += prt_sp_short(row, col);
+	col += prt_health_short(row, col);	
+	col += prt_speed_short(row, col);
+	col += prt_depth_short(row, col);
+	col += prt_title_short(row, col);
 }
 
 
@@ -579,6 +848,14 @@ static void update_sidebar(game_event_type type, game_event_data *data,
 	int max_priority;
 	size_t i;
 
+	if (Term->sidebar_mode == SIDEBAR_NONE) {		
+		return;
+	}
+
+	if (Term->sidebar_mode == SIDEBAR_TOP) {
+		update_topbar(type, data, user, 1);
+		return;
+	}
 
 	Term_get_size(&x, &y);
 
@@ -632,11 +909,6 @@ static void hp_colour_change(game_event_type type, game_event_data *data,
  * ------------------------------------------------------------------------ */
 
 /**
- * Simple macro to initialise structs
- */
-#define S(s)		s, sizeof(s)
-
-/**
  * Struct to describe different timed effects
  */
 struct state_info
@@ -644,7 +916,7 @@ struct state_info
 	int value;
 	const char *str;
 	size_t len;
-	byte attr;
+	uint8_t attr;
 };
 
 /**
@@ -684,7 +956,7 @@ static size_t prt_descent(int row, int col)
  */
 static size_t prt_state(int row, int col)
 {
-	byte attr = COLOUR_WHITE;
+	uint8_t attr = COLOUR_WHITE;
 
 	char text[16] = "";
 
@@ -741,10 +1013,10 @@ static size_t prt_state(int row, int col)
 	/* Display the info (or blanks) */
 	c_put_str(attr, text, row, col);
 
-	return strlen(text);
+	return strlen(text) + 1;
 }
 
-static const byte obj_feeling_color[] = 
+static const uint8_t obj_feeling_color[] =
 {
 	/* Colors used to display each obj feeling 	*/
 	COLOUR_WHITE,  /* "Looks like any other level." */
@@ -757,10 +1029,10 @@ static const byte obj_feeling_color[] =
 	COLOUR_L_GREEN, /* "there may not be much interesting here." */
 	COLOUR_L_GREEN, /* "there aren't many treasures here." */
 	COLOUR_L_BLUE, /* "there are only scraps of junk here." */
-	COLOUR_L_BLUE  /* "there are naught but cobwebs here. */
+	COLOUR_L_BLUE  /* "there is naught but cobwebs here. */
 };
 
-static const byte mon_feeling_color[] = 
+static const uint8_t mon_feeling_color[] =
 {
 	/* Colors used to display each monster feeling */
 	COLOUR_WHITE, /* "You are still uncertain about this place" */
@@ -780,12 +1052,12 @@ static const byte mon_feeling_color[] =
  */
 static size_t prt_level_feeling(int row, int col)
 {
-	u16b obj_feeling;
-	u16b mon_feeling;
+	uint16_t obj_feeling;
+	uint16_t mon_feeling;
 	char obj_feeling_str[6];
 	char mon_feeling_str[6];
 	int new_col;
-	byte obj_feeling_color_print;
+	uint8_t obj_feeling_color_print;
 
 	/* Don't show feelings for cold-hearted characters */
 	if (!OPT(player, birth_feelings)) return 0;
@@ -803,10 +1075,10 @@ static size_t prt_level_feeling(int row, int col)
 	 *   0 -> * "Looks like any other level."
 	 *   1 -> $ "you sense an item of wondrous power!" (special feeling)
 	 *   2 to 10 are feelings from 2 meaning superb feeling to 10
-	 * meaning naught but cowebs.
+	 * meaning naught but cobwebs.
 	 *   It is easier for the player to have poor feelings as a
 	 * low number and superb feelings as a higher one. So for
-	 * display we reverse this numbers and substract 1.
+	 * display we reverse this numbers and subtract 1.
 	 *   Thus (2-10) becomes (1-9 reversed)
 	 *
 	 *   But before that check if the player has explored enough
@@ -852,6 +1124,84 @@ static size_t prt_level_feeling(int row, int col)
 }
 
 /**
+ * Prints player grid light level
+ */
+static size_t prt_light(int row, int col)
+{
+	int light = square_light(cave, player->grid);
+
+	if (light > 0) {
+		c_put_str(COLOUR_YELLOW, format("Light %d ", light), row, col);
+	} else {
+		c_put_str(COLOUR_PURPLE, format("Light %d ", light), row, col);
+	}
+
+	return 8 + (ABS(light) > 9 ? 1 : 0) + (light < 0 ? 1 : 0);
+}
+
+/**
+ * Prints the movement speed of a character.
+ */
+static size_t prt_moves(int row, int col)
+{
+	int i = player->state.num_moves;
+
+	/* 1 move is normal and requires no display */
+	if (i > 0) {
+		/* Display the number of moves */
+		c_put_str(COLOUR_L_TEAL, format("Moves +%d ", i), row, col);
+	} else if (i < 0) {
+		/* Display the number of moves */
+		c_put_str(COLOUR_L_TEAL, format("Moves -%d ", ABS(i)), row, col);
+	}
+
+	/* Shouldn't be double digits, but be paranoid */
+	return (i != 0) ? (9 + ABS(i) / 10) : 0;
+}
+
+/**
+ * Get the longest relevant terrain or trap name for prt_terrain()
+ */
+static int longest_terrain_name(void)
+{
+	size_t i, max = 0;
+	for (i = 0; i < z_info->trap_max; i++) {
+		if (strlen(trap_info[i].name) > max) {
+			max = strlen(trap_info[i].name);
+		}
+	}
+	for (i = 0; i < FEAT_MAX; i++) {
+		if (strlen(f_info[i].name) > max) {
+			max = strlen(f_info[i].name);
+		}
+	}
+	return max;
+}
+
+/**
+ * Prints player trap (if any) or terrain
+ */
+static size_t prt_terrain(int row, int col)
+{
+	struct feature *feat = square_feat(cave, player->grid);
+	struct trap *trap = square_trap(cave, player->grid);
+	char buf[30];
+	uint8_t attr;
+
+	if (trap && !square_isinvis(cave, player->grid)) {
+		my_strcpy(buf, trap->kind->name, sizeof(buf));
+		attr = trap->kind->d_attr;
+	} else {
+		my_strcpy(buf, feat->name, sizeof(buf));
+		attr = feat->d_attr;
+	}
+	my_strcap(buf);
+	c_put_str(attr, format("%s ", buf), row, col);
+
+	return longest_terrain_name() + 1;
+}
+
+/**
  * Prints trap detection status
  */
 static size_t prt_dtrap(int row, int col)
@@ -860,11 +1210,11 @@ static size_t prt_dtrap(int row, int col)
 	if (square_isdtrap(cave, player->grid)) {
 		/* The player is on the border */
 		if (square_dtrap_edge(cave, player->grid))
-			c_put_str(COLOUR_YELLOW, "DTrap", row, col);
+			c_put_str(COLOUR_YELLOW, "DTrap ", row, col);
 		else
-			c_put_str(COLOUR_L_GREEN, "DTrap", row, col);
+			c_put_str(COLOUR_L_GREEN, "DTrap ", row, col);
 
-		return 5;
+		return 6;
 	}
 
 	return 0;
@@ -911,6 +1261,13 @@ static size_t prt_tmd(int row, int col)
 			if (!grade->name) continue;
 			c_put_str(grade->color, grade->name, row, col + len);
 			len += strlen(grade->name) + 1;
+
+			/* Food meter */
+			if (i == TMD_FOOD) {
+				char *meter = format("%d %%", player->timed[i] / 100);
+				c_put_str(grade->color, meter, row, col + len);
+				len += strlen(meter) + 1;
+			}
 		}
 	}
 
@@ -937,17 +1294,12 @@ static size_t prt_unignore(int row, int col)
 typedef size_t status_f(int row, int col);
 
 static status_f *status_handlers[] =
-{ prt_level_feeling, prt_unignore, prt_recall, prt_descent, prt_state,
-  prt_study, prt_tmd, prt_dtrap };
+{ prt_level_feeling, prt_light, prt_moves, prt_unignore, prt_recall,
+  prt_descent, prt_state, prt_study, prt_tmd, prt_dtrap, prt_terrain };
 
 
-/**
- * Print the status line.
- */
-static void update_statusline(game_event_type type, game_event_data *data, void *user)
+static void update_statusline_aux(int row, int col)
 {
-	int row = Term->hgt - 1;
-	int col = 13;
 	size_t i;
 
 	/* Clear the remainder of the line */
@@ -956,6 +1308,20 @@ static void update_statusline(game_event_type type, game_event_data *data, void 
 	/* Display those which need redrawing */
 	for (i = 0; i < N_ELEMENTS(status_handlers); i++)
 		col += status_handlers[i](row, col);
+}
+
+/**
+ * Print the status line.
+ */
+static void update_statusline(game_event_type type, game_event_data *data, void *user)
+{
+	int row = Term->hgt - 1;
+
+	if (Term->sidebar_mode == SIDEBAR_TOP) {
+		row = 3;
+	}
+
+	update_statusline_aux(row, COL_MAP);
 }
 
 
@@ -994,6 +1360,7 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 
 		int ky, kx;
 		int vy, vx;
+		int clipy;
 
 		/* Location relative to panel */
 		ky = data->point.y - t->offset_y;
@@ -1002,35 +1369,25 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 		if (t == angband_term[0]) {
 			/* Verify location */
 			if ((ky < 0) || (ky >= SCREEN_HGT)) return;
-
-			/* Verify location */
 			if ((kx < 0) || (kx >= SCREEN_WID)) return;
 
 			/* Location in window */
-			vy = ky + ROW_MAP;
-			vx = kx + COL_MAP;
+			vy = tile_height * ky + ROW_MAP;
+			vx = tile_width * kx + COL_MAP;
 
-			if (tile_width > 1)
-				vx += (tile_width - 1) * kx;
-
-			if (tile_height > 1)
-				vy += (tile_height - 1) * ky;
-
+			/* Protect the status line against modification. */
+			clipy = ROW_MAP + SCREEN_ROWS;
 		} else {
-			if (tile_width > 1)
-			        kx += (tile_width - 1) * kx;
-
-			if (tile_height > 1)
-			        ky += (tile_height - 1) * ky;
-
-			
 			/* Verify location */
-			if ((ky < 0) || (ky >= t->hgt)) return;
-			if ((kx < 0) || (kx >= t->wid)) return;
+			if ((ky < 0) || (ky >= t->hgt / tile_height)) return;
+			if ((kx < 0) || (kx >= t->wid / tile_width)) return;
 
 			/* Location in window */
-			vy = ky;
-			vx = kx;
+			vy = tile_height * ky;
+			vx = tile_width * kx;
+
+			/* All the rows may be used for the map. */
+			clipy = t->hgt;
 		}
 
 
@@ -1044,13 +1401,15 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 #endif
 
 		if ((tile_width > 1) || (tile_height > 1))
-			Term_big_queue_char(t, vx, vy, a, c, COLOUR_WHITE, ' ');
+			Term_big_queue_char(t, vx, vy, clipy, a, c, COLOUR_WHITE, L' ');
 	}
 
 	/* Refresh the main screen unless the map needs to center */
 	if (player->upkeep->update & (PU_PANEL) && OPT(player, center_player)) {
-		int hgt = (t == angband_term[0]) ? SCREEN_HGT / 2 : t->hgt / 2;
-		int wid = (t == angband_term[0]) ? SCREEN_WID / 2 : t->wid / 2;
+		int hgt = (t == angband_term[0]) ? SCREEN_HGT / 2 :
+			t->hgt / (tile_height * 2);
+		int wid = (t == angband_term[0]) ? SCREEN_WID / 2 :
+			t->wid / (tile_width * 2);
 
 		if (panel_should_modify(t, player->grid.y - hgt, player->grid.x - wid))
 			return;
@@ -1065,48 +1424,10 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
  * ------------------------------------------------------------------------ */
 
 static bool animations_allowed = true;
-static byte flicker = 0;
-static byte color_flicker[MAX_COLORS][3] = 
-{
-	{COLOUR_DARK, COLOUR_L_DARK, COLOUR_L_RED},
-	{COLOUR_WHITE, COLOUR_L_WHITE, COLOUR_L_BLUE},
-	{COLOUR_SLATE, COLOUR_WHITE, COLOUR_L_DARK},
-	{COLOUR_ORANGE, COLOUR_YELLOW, COLOUR_L_RED},
-	{COLOUR_RED, COLOUR_L_RED, COLOUR_L_PINK},
-	{COLOUR_GREEN, COLOUR_L_GREEN, COLOUR_L_TEAL},
-	{COLOUR_BLUE, COLOUR_L_BLUE, COLOUR_SLATE},
-	{COLOUR_UMBER, COLOUR_L_UMBER, COLOUR_MUSTARD},
-	{COLOUR_L_DARK, COLOUR_SLATE, COLOUR_L_VIOLET},
-	{COLOUR_WHITE, COLOUR_SLATE, COLOUR_L_WHITE},
-	{COLOUR_L_PURPLE, COLOUR_PURPLE, COLOUR_L_VIOLET},
-	{COLOUR_YELLOW, COLOUR_L_YELLOW, COLOUR_MUSTARD},
-	{COLOUR_L_RED, COLOUR_RED, COLOUR_L_PINK},
-	{COLOUR_L_GREEN, COLOUR_L_TEAL, COLOUR_GREEN},
-	{COLOUR_L_BLUE, COLOUR_DEEP_L_BLUE, COLOUR_BLUE_SLATE},
-	{COLOUR_L_UMBER, COLOUR_UMBER, COLOUR_MUD},
-	{COLOUR_PURPLE, COLOUR_VIOLET, COLOUR_MAGENTA},
-	{COLOUR_VIOLET, COLOUR_L_VIOLET, COLOUR_MAGENTA},
-	{COLOUR_TEAL, COLOUR_L_TEAL, COLOUR_L_GREEN},
-	{COLOUR_MUD, COLOUR_YELLOW, COLOUR_UMBER},
-	{COLOUR_L_YELLOW, COLOUR_WHITE, COLOUR_L_UMBER},
-	{COLOUR_MAGENTA, COLOUR_L_PINK, COLOUR_L_RED},
-	{COLOUR_L_TEAL, COLOUR_L_WHITE, COLOUR_TEAL},
-	{COLOUR_L_VIOLET, COLOUR_L_PURPLE, COLOUR_VIOLET},
-	{COLOUR_L_PINK, COLOUR_L_RED, COLOUR_L_WHITE},
-	{COLOUR_MUSTARD, COLOUR_YELLOW, COLOUR_UMBER},
-	{COLOUR_BLUE_SLATE, COLOUR_BLUE, COLOUR_SLATE},
-	{COLOUR_DEEP_L_BLUE, COLOUR_L_BLUE, COLOUR_BLUE},
-};
-
-static byte get_flicker(byte a)
-{
-	switch(flicker % 3)
-	{
-		case 1: return color_flicker[a][1];
-		case 2: return color_flicker[a][2];
-	}
-	return a;
-}
+/**
+ * A counter to select the step color from the flicker table.
+ */
+static uint8_t flicker = 0;
 
 /**
  * This animates monsters and/or items as necessary.
@@ -1116,15 +1437,29 @@ static void do_animation(void)
 	int i;
 
 	for (i = 1; i < cave_monster_max(cave); i++) {
-		byte attr;
+		uint8_t attr;
 		struct monster *mon = cave_monster(cave, i);
 
 		if (!mon || !mon->race || !monster_is_visible(mon))
 			continue;
 		else if (rf_has(mon->race->flags, RF_ATTR_MULTI))
 			attr = randint1(BASIC_COLORS - 1);
-		else if (rf_has(mon->race->flags, RF_ATTR_FLICKER))
-			attr = get_flicker(monster_x_attr[mon->race->ridx]);
+		else if (rf_has(mon->race->flags, RF_ATTR_FLICKER)) {
+			uint8_t base_attr = monster_x_attr[mon->race->ridx];
+
+			/* Get the color cycled attribute, if available. */
+			attr = visuals_cycler_get_attr_for_race(mon->race, flicker);
+
+			if (attr == BASIC_COLORS) {
+				/* Fall back to the flicker attribute. */
+				attr = visuals_flicker_get_attr_for_frame(base_attr, flicker);
+			}
+
+			if (attr == BASIC_COLORS) {
+				/* Fall back to the static attribute if cycling fails. */
+				attr = base_attr;
+			}
+		}
 		else
 			continue;
 
@@ -1186,7 +1521,7 @@ void idle_update(void)
  * It is moving (or has moved) from (x, y) to (nx, ny); if the distance is not
  * "one", we (may) return "*".
  */
-static void bolt_pict(int y, int x, int ny, int nx, int typ, byte *a,
+static void bolt_pict(int y, int x, int ny, int nx, int typ, uint8_t *a,
 					  wchar_t *c)
 {
 	int motion;
@@ -1244,7 +1579,7 @@ static void display_explosion(game_event_type type, game_event_data *data,
 
 		/* Only do visuals if the player can see the blast */
 		if (player_sees_grid[i]) {
-			byte a;
+			uint8_t a;
 			wchar_t c;
 
 			drawn = true;
@@ -1322,7 +1657,7 @@ static void display_bolt(game_event_type type, game_event_data *data,
 
 	/* Only do visuals if the player can "see" the bolt */
 	if (seen) {
-		byte a;
+		uint8_t a;
 		wchar_t c;
 
 		/* Obtain the bolt pict */
@@ -1447,6 +1782,9 @@ void toggle_inven_equip(void)
 
 	/* Redraw any subwindows showing the inventory/equipment lists */
 	for (i = 0; i < ANGBAND_TERM_MAX; i++) {
+		/* Skip unused subwindows. */
+		if (!angband_term[i]) continue;
+
 		Term_activate(angband_term[i]); 
 
 		if (window_flag[i] & PW_INVEN) {
@@ -1554,6 +1892,8 @@ static void update_messages_subwindow(game_event_type type,
 	int i;
 	int w, h;
 	int x, y;
+	bool is_fresh = true;
+	static const char* prev_last_msg = NULL;
 
 	const char *msg;
 
@@ -1564,17 +1904,22 @@ static void update_messages_subwindow(game_event_type type,
 	Term_get_size(&w, &h);
 
 	/* Dump messages */
+	const char* last_msg = NULL;
 	for (i = 0; i < h; i++) {
-		byte color = message_color(i);
-		u16b count = message_count(i);
+		uint16_t count = message_count(i);
 		const char *str = message_str(i);
+		if (is_fresh && prev_last_msg == str) {
+			is_fresh = false;
+		}
+		uint8_t color = is_fresh? COLOUR_RED: message_color(i);
 
 		if (count == 1)
 			msg = str;
 		else if (count == 0)
 			msg = " ";
-		else
+		else {
 			msg = format("%s <%dx>", str, count);
+		}
 
 		Term_putstr(0, (h - 1) - i, -1, color, msg);
 
@@ -1584,7 +1929,11 @@ static void update_messages_subwindow(game_event_type type,
 
 		/* Clear to end of line */
 		Term_erase(x, y, 255);
+		if (i == 0){
+			last_msg = str;
+		}
 	}
+	prev_last_msg = last_msg;
 
 	Term_fresh();
 	
@@ -1608,7 +1957,7 @@ static void update_minimap_subwindow(game_event_type type,
 	if (type == EVENT_END) {
 		term *old = Term;
 		term *t = angband_term[flags->win_idx];
-		
+
 		/* Activate */
 		Term_activate(t);
 
@@ -1619,7 +1968,7 @@ static void update_minimap_subwindow(game_event_type type,
 		/* Redraw map */
 		display_map(NULL, NULL);
 		Term_fresh();
-		
+
 		/* Restore */
 		Term_activate(old);
 
@@ -1682,6 +2031,27 @@ static void update_player1_subwindow(game_event_type type,
 	Term_activate(old);
 }
 
+static void update_topbar_subwindow(game_event_type type,
+									game_event_data *data, void *user)
+{
+	term *old = Term;
+	term *inv_term = user;
+
+	/* Check sanity */
+	if (!(player && player->race && player->class && cave)) return;
+
+	/* Activate */
+	Term_activate(inv_term);
+
+	update_topbar(type, data, user, 0);
+
+	update_statusline_aux(2, 0);
+
+	Term_fresh();
+	
+	/* Restore */
+	Term_activate(old);
+}
 
 /**
  * Display the left-hand-side of the main term, in more compact fashion.
@@ -1732,7 +2102,7 @@ static void update_player_compact_subwindow(game_event_type type,
 	prt_sp(row++, col);
 
 	/* Monster health */
-	prt_health(row++, col);
+	prt_health(row, col);
 
 	Term_fresh();
 	
@@ -1779,9 +2149,14 @@ const char *window_flag_desc[32] =
 	"Display monster list",
 	"Display status",
 	"Display item list",
+	"Display player (topbar)",
+#ifdef ALLOW_BORG
+	"Display borg messages",
+	"Display borg status",
+#else
 	NULL,
 	NULL,
-	NULL,
+#endif
 	NULL,
 	NULL,
 	NULL,
@@ -1800,7 +2175,7 @@ const char *window_flag_desc[32] =
 	NULL
 };
 
-static void subwindow_flag_changed(int win_idx, u32b flag, bool new_state)
+static void subwindow_flag_changed(int win_idx, uint32_t flag, bool new_state)
 {
 	void (*register_or_deregister)(game_event_type type, game_event_handler *fn,
 								   void *user);
@@ -1856,8 +2231,25 @@ static void subwindow_flag_changed(int win_idx, u32b flag, bool new_state)
 		{
 			set_register_or_deregister(player_events, 
 						   N_ELEMENTS(player_events),
-						   update_player_compact_subwindow,
+						   update_player_compact_subwindow,						   
 						   angband_term[win_idx]);
+			break;
+		}
+
+		case PW_PLAYER_3:
+		{
+			/* Topbar */
+			set_register_or_deregister(player_events, 
+						   N_ELEMENTS(player_events),						 
+						   update_topbar_subwindow,
+						   angband_term[win_idx]);
+
+			/* Also update status */
+			set_register_or_deregister(statusline_events,
+						   N_ELEMENTS(statusline_events),
+						   update_topbar_subwindow,
+						   angband_term[win_idx]);
+
 			break;
 		}
 
@@ -1880,7 +2272,7 @@ static void subwindow_flag_changed(int win_idx, u32b flag, bool new_state)
 
 		case PW_MESSAGE:
 		{
-			register_or_deregister(EVENT_MESSAGE,
+			register_or_deregister(EVENT_STATE,
 					       update_messages_subwindow,
 					       angband_term[win_idx]);
 			break;
@@ -1938,7 +2330,7 @@ static void subwindow_flag_changed(int win_idx, u32b flag, bool new_state)
  * that has changed setting so that it can do any housekeeping to do with 
  * displaying the new thing or no longer displaying the old one.
  */
-static void subwindow_set_flags(int win_idx, u32b new_flags)
+static void subwindow_set_flags(int win_idx, uint32_t new_flags)
 {
 	term *old = Term;
 	int i;
@@ -1946,10 +2338,15 @@ static void subwindow_set_flags(int win_idx, u32b new_flags)
 	/* Deal with the changed flags by seeing what's changed */
 	for (i = 0; i < 32; i++)
 		/* Only process valid flags */
-		if (window_flag_desc[i])
-			if ((new_flags & (1L << i)) != (window_flag[win_idx] & (1L << i)))
-				subwindow_flag_changed(win_idx, (1L << i),
-									   (new_flags & (1L << i)) != 0);
+		if (window_flag_desc[i]) {
+			uint32_t flag = ((uint32_t) 1) << i;
+
+			if ((new_flags & flag) !=
+					(window_flag[win_idx] & flag)) {
+				subwindow_flag_changed(win_idx, flag,
+						(new_flags & flag) != 0);
+			}
+		}
 
 	/* Store the new flags */
 	window_flag[win_idx] = new_flags;
@@ -1971,7 +2368,7 @@ static void subwindow_set_flags(int win_idx, u32b new_flags)
  * Called with an array of the new flags for all the subwindows, in order
  * to set them to the new values, with a chance to perform housekeeping.
  */
-void subwindows_set_flags(u32b *new_flags, size_t n_subwindows)
+void subwindows_set_flags(uint32_t *new_flags, size_t n_subwindows)
 {
 	size_t j;
 
@@ -2111,33 +2508,24 @@ static void repeated_command_display(game_event_type type,
 static void new_level_display_update(game_event_type type,
 									 game_event_data *data, void *user)
 {
-	/* Hack -- enforce illegal panel */
+	/* Enforce illegal panel */
 	Term->offset_y = z_info->dungeon_hgt;
 	Term->offset_x = z_info->dungeon_wid;
-
-	/* If autosave is pending, do it now. */
-	if (player->upkeep->autosave) {
-		save_game();
-		player->upkeep->autosave = false;
-	}
 
 	/* Choose panel */
 	verify_panel();
 
-	/* Hack -- Invoke partial update mode */
-	player->upkeep->only_partial = true;
-
 	/* Clear */
 	Term_clear();
+
+	/* Invoke partial update mode */
+	player->upkeep->only_partial = true;
 
 	/* Update stuff */
 	player->upkeep->update |= (PU_BONUS | PU_HP | PU_SPELLS);
 
 	/* Calculate torch radius */
 	player->upkeep->update |= (PU_TORCH);
-
-	/* Update stuff */
-	update_stuff(player);
 
 	/* Fully update the visuals (and monster distances) */
 	player->upkeep->update |= (PU_UPDATE_VIEW | PU_DISTANCE);
@@ -2152,13 +2540,20 @@ static void new_level_display_update(game_event_type type,
 	 * set for a few game turns, manually force an update on level change. */
 	monster_list_force_subwindow_update();
 
-	/* Update stuff */
-	update_stuff(player);
+	/* If autosave is pending, do it now. */
+	if (player->upkeep->autosave) {
+		save_game();
+		player->upkeep->autosave = false;
+	}
 
-	/* Redraw stuff */
-	redraw_stuff(player);
+	/*
+	 * Saving has side effect of calling handle_stuff(), but if we did
+	 * not save or saving no longer calls handle_stuff(), call
+	 * handle_stuff() now to process the pending updates and redraws.
+	 */
+	handle_stuff(player);
 
-	/* Hack -- Kill partial update mode */
+	/* Kill partial update mode */
 	player->upkeep->only_partial = false;
 
 	/* Refresh */
@@ -2189,15 +2584,15 @@ static void see_floor_items(game_event_type type, game_event_data *data,
 	int floor_max = z_info->floor_size;
 	struct object **floor_list = mem_zalloc(floor_max * sizeof(*floor_list));
 	int floor_num = 0;
-	bool blind = ((player->timed[TMD_BLIND]) || (no_light()));
+	bool blind = ((player->timed[TMD_BLIND]) || (no_light(player)));
 
 	const char *p = "see";
 	bool can_pickup = false;
 	int i;
 
 	/* Scan all visible, sensed objects in the grid */
-	floor_num = scan_floor(floor_list, floor_max,
-						   OFLOOR_SENSE | OFLOOR_VISIBLE, NULL);
+	floor_num = scan_floor(floor_list, floor_max, player,
+		OFLOOR_SENSE | OFLOOR_VISIBLE, NULL);
 	if (floor_num == 0) {
 		mem_free(floor_list);
 		return;
@@ -2220,10 +2615,13 @@ static void see_floor_items(game_event_type type, game_event_data *data,
 			p = "feel";
 
 		/* Describe the object.  Less detail if blind. */
-		if (blind)
-			object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_BASE);
-		else
-			object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
+		if (blind) {
+			object_desc(o_name, sizeof(o_name), obj,
+				ODESC_PREFIX | ODESC_BASE, player);
+		} else {
+			object_desc(o_name, sizeof(o_name), obj,
+				ODESC_PREFIX | ODESC_FULL, player);
+		}
 
 		/* Message */
 		event_signal(EVENT_MESSAGE_FLUSH);
@@ -2301,9 +2699,11 @@ static void ui_enter_init(game_event_type type, game_event_data *data,
 static void ui_leave_init(game_event_type type, game_event_data *data,
 						  void *user)
 {
-	/* Reset visuals, then load prefs */
+	/* Reset visuals, then load prefs, and react to changes */
 	reset_visuals(true);
 	process_character_pref_files();
+	Term_xtra(TERM_XTRA_REACT, 0);
+	(void) Term_redraw_all();
 
 	/* Remove our splashscreen handlers */
 	event_remove_handler(EVENT_INITSTATUS, splashscreen_note, NULL);
@@ -2324,9 +2724,6 @@ static void ui_enter_world(game_event_type type, game_event_data *data,
 	/* Redraw stuff */
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP | PR_MONSTER | PR_MESSAGE);
 	redraw_stuff(player);
-
-	/* React to changes */
-	Term_xtra(TERM_XTRA_REACT, 0);
 
 	/* Because of the "flexible" sidebar, all these things trigger
 	   the same function. */
@@ -2383,7 +2780,7 @@ static void ui_enter_world(game_event_type type, game_event_data *data,
 	/* Allow the player to cheat death, if appropriate */
 	event_add_handler(EVENT_CHEAT_DEATH, cheat_death, NULL);
 
-	/* Hack -- Decrease "icky" depth */
+	/* Decrease "icky" depth */
 	screen_save_depth--;
 }
 
@@ -2451,7 +2848,7 @@ static void ui_leave_world(game_event_type type, game_event_data *data,
 	/* If we've gone into a store, we need to know how to leave */
 	event_add_handler(EVENT_LEAVE_STORE, leave_store, NULL);
 
-	/* Hack -- Increase "icky" depth */
+	/* Increase "icky" depth */
 	screen_save_depth++;
 }
 

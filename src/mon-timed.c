@@ -79,8 +79,7 @@ static bool saving_throw(const struct monster *mon, int effect_type, int timer, 
 						   );
 
 	/* Give unique monsters a double check */
-	if (rf_has(mon->race->flags, RF_UNIQUE) &&
-			(randint0(100) < resist_chance)) {
+	if (monster_is_unique(mon) && (randint0(100) < resist_chance)) {
 		return true;
 	}
 
@@ -164,6 +163,12 @@ static bool mon_set_timed(struct monster *mon,
 		m_note = effect->message_end;
 		flag |= MON_TMD_FLG_NOTIFY;
 		check_resist = false;
+
+		/* When monster command by player (Necromancer power) expires,
+		* don't leave stale monster -> monster target */
+		if (effect_type == MON_TMD_COMMAND) {
+			mon->target.midx = 0;
+		}
 	} else if (old_timer == 0) {
 		/* Turning on, usually mention */
 		m_note = effect->message_begin;
@@ -195,8 +200,9 @@ static bool mon_set_timed(struct monster *mon,
 				mon->m_timed[effect_type] = old_timer;
 			}
 		} else if (timer == 0) {
-			if (!monster_revert_shape(mon))
+			if (!monster_revert_shape(mon)) {
 				quit ("Monster shapechange reversion failed!");
+			}
 		}
 	}
 
@@ -206,8 +212,6 @@ static bool mon_set_timed(struct monster *mon,
 		!(flag & MON_TMD_FLG_NOMESSAGE) &&
 		(flag & MON_TMD_FLG_NOTIFY)
 		&& monster_is_obvious(mon)) {
-			char m_name[80];
-			monster_desc(m_name, sizeof(m_name), mon, MDESC_IND_HID);
 			add_monster_message(mon, m_note, true);
 	}
 
@@ -317,7 +321,7 @@ bool mon_clear_timed(struct monster *mon, int effect_type, int flag)
  * The level at which an effect is affecting a monster.
  * Levels range from 0 (unaffected) to 5 (maximum effect).
  */
-int monster_effect_level(struct monster *mon, int effect_type)
+int monster_effect_level(const struct monster *mon, int effect_type)
 {
 	struct mon_timed_effect *effect = &effects[effect_type];
 	int divisor = MAX(effect->max_timer / 5, 1);

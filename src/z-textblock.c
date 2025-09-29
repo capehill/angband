@@ -14,6 +14,16 @@
  *  * Redistributions in binary form must reproduce the above copyright notice,
  *    this list of conditions and the following disclaimer in the documentation
  *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+ * THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+ * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /**
@@ -26,13 +36,14 @@
 #include "z-util.h"
 #include "z-virt.h"
 #include "z-form.h"
+#include "z-file.h"
 
 #define TEXTBLOCK_LEN_INITIAL		128
 #define TEXTBLOCK_LEN_INCR(x)		((x) + 128)
 
 struct textblock {
 	wchar_t *text;
-	byte *attrs;
+	uint8_t *attrs;
 
 	size_t strlen;
 	size_t size;
@@ -71,7 +82,7 @@ void textblock_free(textblock *tb)
  * \param tb is the textblock we need to resize.
  * \param additional_size is how many characters we want to add.
  */
-void textblock_resize_if_needed(textblock *tb, size_t additional_size)
+static void textblock_resize_if_needed(textblock *tb, size_t additional_size)
 {
 	size_t remaining = tb->size - tb->strlen;
 
@@ -83,7 +94,7 @@ void textblock_resize_if_needed(textblock *tb, size_t additional_size)
 	}
 }
 
-static void textblock_vappend_c(textblock *tb, byte attr, const char *fmt,
+static void textblock_vappend_c(textblock *tb, uint8_t attr, const char *fmt,
 		va_list vp)
 {
 	size_t temp_len = TEXTBLOCK_LEN_INITIAL;
@@ -98,7 +109,7 @@ static void textblock_vappend_c(textblock *tb, byte attr, const char *fmt,
 		va_list args;
 		size_t len;
 
-		VA_COPY(args, vp);
+		va_copy(args, vp);
 		len = vstrnfmt(temp_space, temp_len, fmt, args);
 		va_end(args);
 		if (len < temp_len - 1) {
@@ -113,7 +124,7 @@ static void textblock_vappend_c(textblock *tb, byte attr, const char *fmt,
 	/* Get extent of addition in wide chars */
 	new_length = text_mbstowcs(NULL, temp_space, 0);
 	assert(new_length >= 0); /* If this fails, the string was badly formed */
-	textblock_resize_if_needed(tb, new_length);
+	textblock_resize_if_needed(tb, new_length + 1);
 
 	/* Convert to wide chars, into the text block buffer */
 	text_mbstowcs(tb->text + tb->strlen, temp_space, tb->size - tb->strlen);
@@ -125,7 +136,7 @@ static void textblock_vappend_c(textblock *tb, byte attr, const char *fmt,
 /**
  * Add a graphics tile to a text block.
  */
-void textblock_append_pict(textblock *tb, byte attr, int c)
+void textblock_append_pict(textblock *tb, uint8_t attr, int c)
 {
 	textblock_resize_if_needed(tb, 1);
 	tb->text[tb->strlen] = (wchar_t)c;
@@ -134,33 +145,20 @@ void textblock_append_pict(textblock *tb, byte attr, int c)
 }
 
 /**
- * Append a UTF-8 string to the textblock.
- *
- * This is needed in order for proper file writing. Normally, textblocks convert
- * to the system's encoding when a string is appended. However, there are still
- * some strings in the game that are imported from external files as UTF-8.
- * Instead of requiring each port to provide another converter back to UTF-8,
- * we'll just use the original strings as is.
+ * Append one textblock to another.
  *
  * \param tb is the textblock we are appending to.
- * \param utf8_string is the C string that is encoded as UTF-8.
+ * \param tba is the textblock to append.
  */
-void textblock_append_utf8(textblock *tb, const char *utf8_string)
+void textblock_append_textblock(textblock *tb, const textblock *tba)
 {
-	size_t i;
-	size_t new_length = strlen(utf8_string);
-
-	textblock_resize_if_needed(tb, new_length);
-
-	/* Append each UTF-8 char one at a time, so we don't trigger any
-	 * conversions (which would require multiple bytes). */
-	for (i = 0; i < new_length; i++) {
-		tb->text[tb->strlen + i] = (wchar_t)utf8_string[i];
-	}
-
-	memset(tb->attrs + tb->strlen, COLOUR_WHITE, new_length);
-	tb->strlen += new_length;
+	textblock_resize_if_needed(tb, tba->strlen);
+	(void) memcpy(tb->text + tb->strlen, tba->text,
+		tba->strlen * sizeof(*tb->text));
+	(void) memcpy(tb->attrs + tb->strlen, tba->attrs, tba->strlen);
+	tb->strlen += tba->strlen;
 }
+
 
 /**
  * Add text to a text block, formatted.
@@ -178,7 +176,7 @@ void textblock_append(textblock *tb, const char *fmt, ...)
 /**
  * Add coloured text to a text block, formatted.
  */
-void textblock_append_c(textblock *tb, byte attr, const char *fmt, ...)
+void textblock_append_c(textblock *tb, uint8_t attr, const char *fmt, ...)
 {
 	va_list vp;
 	va_start(vp, fmt);
@@ -200,7 +198,7 @@ const wchar_t *textblock_text(textblock *tb)
 /**
  * Return a pointer to the text attrs.
  */
-const byte *textblock_attrs(textblock *tb)
+const uint8_t *textblock_attrs(textblock *tb)
 {
 	return tb->attrs;
 }
@@ -325,23 +323,35 @@ void textblock_to_file(textblock *tb, ang_file *f, int indent, int wrap_at)
 	size_t *line_starts = NULL;
 	size_t *line_lengths = NULL;
 
-	size_t n_lines, i;
+	size_t n_lines, i, j;
+	char *mbbuf;
 
 	int width = wrap_at - indent;
 	assert(width > 0);
 
 	n_lines = textblock_calculate_lines(tb, &line_starts, &line_lengths, width);
+	mbbuf = mem_alloc(text_wcsz() + 1);
 
 	for (i = 0; i < n_lines; i++) {
-		/* For some reason, the %*c part of the format string was still
-		 * indenting, even when indent was zero */
-		if (indent == 0)
-			file_putf(f, "%.*ls\n", line_lengths[i], tb->text + line_starts[i]);
-		else
-			file_putf(f, "%*c%.*ls\n", indent, ' ', line_lengths[i],
-					  tb->text + line_starts[i]);
+		if (indent > 0) {
+			file_putf(f, "%*c", indent, ' ');
+		}
+		for (j = 0; j < line_lengths[i]; ++j) {
+			int nc = text_wctomb(mbbuf,
+				tb->text[line_starts[i] + j]);
+
+			if (nc > 0) {
+				mbbuf[nc] = 0;
+			} else {
+				mbbuf[0] = ' ';
+				mbbuf[1] = 0;
+			}
+			file_putf(f, "%s", mbbuf);
+		}
+		file_putf(f, "\n");
 	}
 
+	mem_free(mbbuf);
 	mem_free(line_starts);
 	mem_free(line_lengths);
 }
@@ -358,27 +368,27 @@ void textblock_to_file(textblock *tb, ang_file *f, int indent, int wrap_at)
 /**
  * Function hook to output (colored) text to the screen or to a file.
  */
-void (*text_out_hook)(byte a, const char *str);
+void (*text_out_hook)(uint8_t a, const char *str);
 
 /**
- * Hack -- Where to wrap the text when using text_out().  Use the default
+ * Where to wrap the text when using text_out().  Use the default
  * value (for example the screen width) when 'text_out_wrap' is 0.
  */
 int text_out_wrap = 0;
 
 /**
- * Hack -- Indentation for the text when using text_out().
+ * Indentation for the text when using text_out().
  */
 int text_out_indent = 0;
 
 /**
- * Hack -- Padding after wrapping
+ * Padding after wrapping
  */
 int text_out_pad = 0;
 
 
 /**
- * Hack - the destination file for text_out_to_file.
+ * The destination file for text_out_to_file.
  */
 ang_file *text_out_file = NULL;
 
@@ -396,7 +406,7 @@ ang_file *text_out_file = NULL;
  * You must be careful to end all file output with a newline character
  * to "flush" the stored line position.
  */
-void text_out_to_file(byte a, const char *str)
+void text_out_to_file(uint8_t a, const char *str)
 {
 	const char *s;
 	char buf[1024];
@@ -528,7 +538,7 @@ void text_out(const char *fmt, ...)
  * Output text to the screen (in color) or to a file depending on the
  * selected hook.
  */
-void text_out_c(byte a, const char *fmt, ...)
+void text_out_c(uint8_t a, const char *fmt, ...)
 {
 	char buf[1024];
 	va_list vp;
@@ -697,16 +707,13 @@ errr text_lines_to_file(const char *path, text_writer writer)
 
 	ang_file *new_file;
 
-	safe_setuid_grab();
-
 	/* Format filenames */
-	strnfmt(new_fname, sizeof(new_fname), "%s.new", path);
-	strnfmt(old_fname, sizeof(old_fname), "%s.old", path);
+	file_get_tempfile(new_fname, sizeof(new_fname), path, "new");
+	file_get_tempfile(old_fname, sizeof(old_fname), path, "old");
 
 	/* Write new file */
 	new_file = file_open(new_fname, MODE_WRITE, FTYPE_TEXT);
 	if (!new_file) {
-		safe_setuid_drop();
 		return -1;
 	}
 
@@ -717,7 +724,6 @@ errr text_lines_to_file(const char *path, text_writer writer)
 	file_close(new_file);
 
 	/* Move files around */
-	strnfmt(old_fname, sizeof(old_fname), "%s.old", path);
 	if (!file_exists(path)) {
 		file_move(new_fname, path);
 	} else if (file_move(path, old_fname)) {
@@ -726,8 +732,6 @@ errr text_lines_to_file(const char *path, text_writer writer)
 	} else {
 		file_delete(new_fname);
 	}
-
-	safe_setuid_drop();
 
 	return 0;
 }

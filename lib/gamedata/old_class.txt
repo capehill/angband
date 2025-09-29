@@ -18,13 +18,16 @@ skill-melee:34:15
 skill-shoot:20:15
 skill-throw:20:15
 skill-dig:0:0
-info:0:30
-attack:4:40:2
-equip:food:Ration of Food:1:3
-equip:light:Wooden Torch:1:3
-equip:sword:Dagger:1:1
-equip:scroll:Word of Recall:1:1
-flags:ZERO_FAIL | BEAM | CHOOSE_SPELLS
+hitdie:0
+exp:30
+max-attacks:4
+min-weight:40
+strength-multiplier:2
+equip:food:Ration of Food:1:3:none
+equip:light:Wooden Torch:1:3:none
+equip:sword:Dagger:1:1:none
+equip:scroll:Word of Recall:1:1:birth_no_recall
+player-flags:ZERO_FAIL | BEAM | CHOOSE_SPELLS
 title:Novice
 title:Apprentice
 title:Trickster
@@ -41,7 +44,7 @@ magic:1:300:9
 book:magic book:town:[Magic for Beginners]:6:arcane
 book-graphics:?:R
 book-properties:25:40:1 to 100
-equip:magic book:[Magic for Beginners]:1:1
+equip:magic book:[Magic for Beginners]:1:1:none
 
 spell:Magic Missile:1:1:22:4
 effect:BOLT_OR_BEAM:MISSILE:0:-10
@@ -66,7 +69,7 @@ desc:Teleports you randomly up to 10 squares away.
 
 spell:Light Area:1:2:26:4
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:1:10
+effect:SPHERE:LIGHT_WEAK:1:10
 dice:2d$S
 expr:S:PLAYER_LEVEL:/ 2
 desc:Lights up all squares in a level-dependent area, and hurts
@@ -149,11 +152,10 @@ book:magic book:town:[Incantations and Illusions]:9:arcane
 book-graphics:?:R
 book-properties:400:40:10 to 100
 
-spell:Satisfy Hunger:9:7:45:8
-effect:SET_NOURISH
-dice:16000
-desc:Magically renders you well-fed (but not satiated).
-desc:  This will also cure a bloated stomach.
+spell:Remove Hunger:9:7:45:8
+effect:NOURISH:INC_TO
+dice:50
+desc:Magically renders you comfortably fed (but not satiated).
 
 spell:Lesser Recharging:9:7:75:10
 effect:RECHARGE
@@ -249,7 +251,9 @@ expr:B:PLAYER_LEVEL:+ 55
 desc:Shoots a radius-2 fire ball.
 
 spell:Treasure Detection:30:10:70:10
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -493,14 +497,17 @@ skill-melee:48:20
 skill-shoot:35:20
 skill-throw:35:20
 skill-dig:0:0
-info:2:20
-attack:4:35:3
-equip:food:Ration of Food:1:3
-equip:light:Wooden Torch:1:3
-equip:hafted:Mace:1:1
-equip:potion:Cure Serious Wounds:2:2
-equip:scroll:Word of Recall:1:1
-flags:BLESS_WEAPON | ZERO_FAIL
+hitdie:2
+exp:20
+max-attacks:4
+min-weight:35
+strength-multiplier:3
+equip:food:Ration of Food:1:3:none
+equip:light:Wooden Torch:1:3:none
+equip:hafted:Mace:1:1:none
+equip:potion:Cure Serious Wounds:2:2:none
+equip:scroll:Word of Recall:1:1:birth_no_recall
+player-flags:BLESS_WEAPON | ZERO_FAIL
 title:Believer
 title:Acolyte
 title:Adept
@@ -514,10 +521,10 @@ title:Patriarch
 
 magic:1:350:9
 
-book:prayer book:town:[Beginners Handbook]:7:light
+book:prayer book:town:[Beginners Handbook]:7:divine
 book-graphics:?:G
 book-properties:25:40:1 to 100
-equip:prayer book:[Beginners Handbook]:1:1
+equip:prayer book:[Beginners Handbook]:1:1:none
 
 spell:Detect Evil:1:1:10:4
 effect:DETECT_EVIL
@@ -546,7 +553,7 @@ desc:Removes fear.
 
 spell:Call Light:3:2:25:1
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:1:10
+effect:SPHERE:LIGHT_WEAK:1:10
 dice:2d$S
 expr:S:PLAYER_LEVEL:/ 2
 desc:Lights up all squares in a level-dependent area, and hurts
@@ -557,7 +564,7 @@ spell:Slow Poison:3:3:28:4
 effect:TIMED_DEC:POISONED:0:2
 desc:Halves the remaining duration of any current poisoning.
 
-book:prayer book:town:[Words of Wisdom]:8:light
+book:prayer book:town:[Words of Wisdom]:8:divine
 book-graphics:?:G
 book-properties:100:40:5 to 100
 
@@ -595,11 +602,10 @@ expr:B:PLAYER_LEVEL:* 10 + 500
 desc:Attempts to put to sleep each monster directly adjacent to you.
 desc:  Uniques and monsters that resist sleep are not affected.
 
-spell:Satisfy Hunger:7:5:38:4
-effect:SET_NOURISH
-dice:16000
-desc:Magically renders you well-fed (but not satiated).
-desc:  This will also cure a bloated stomach.
+spell:Remove Hunger:7:5:38:4
+effect:NOURISH:INC_TO
+dice:50
+desc:Magically renders you comfortably fed (but not satiated).
 
 spell:Remove Curse:7:6:38:5
 effect:REMOVE_CURSE
@@ -613,7 +619,7 @@ effect:TIMED_INC:OPP_FIRE
 dice:10+d10
 desc:Gives you temporary resistance to cold and fire, for 10+1d10 turns each.
 
-book:prayer book:town:[Chants and Blessings]:9:light
+book:prayer book:town:[Chants and Blessings]:9:divine
 book-graphics:?:G
 book-properties:400:40:10 to 100
 
@@ -691,7 +697,7 @@ expr:B:PLAYER_LEVEL:+ 0
 desc:Attempts to scare each undead monster within line of sight,
 desc: causing it to flee in terror for a level-dependent duration.
 
-book:prayer book:town:[Exorcism and Dispelling]:6:light
+book:prayer book:town:[Exorcism and Dispelling]:6:divine
 book-graphics:?:G
 book-properties:800:40:20 to 100
 
@@ -748,7 +754,7 @@ desc:Inflicts unresistable damage on each evil monster within line of sight,
 desc: cures 1000 points of damage, cures all stunning, heals all cut damage,
 desc: neutralizes poison, and removes fear.
 
-book:prayer book:dungeon:[Ethereal Openings]:6:light
+book:prayer book:dungeon:[Ethereal Openings]:6:divine
 book-graphics:?:g
 book-properties:10000:15:40 to 100
 
@@ -793,7 +799,7 @@ desc: same dungeon depth) will be generated.  This has exactly the same
 desc: side effects as leaving and re-entering the level through a stair,
 desc: except that you won't start on a square with a stair.
 
-book:prayer book:dungeon:[Godly Insights]:5:light
+book:prayer book:dungeon:[Godly Insights]:5:divine
 book-graphics:?:g
 book-properties:20000:15:50 to 100
 
@@ -810,7 +816,9 @@ effect:DETECT_DOORS
 effect-yx:22:40
 effect:DETECT_STAIRS
 effect-yx:22:40
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -835,7 +843,7 @@ effect:LIGHT_LEVEL
 desc:Lights up, maps out, and senses all objects on the complete current
 desc: dungeon level.
 
-book:prayer book:dungeon:[Purifications and Healing]:5:light
+book:prayer book:dungeon:[Purifications and Healing]:5:divine
 book-graphics:?:g
 book-properties:30000:15:60 to 100
 
@@ -878,7 +886,7 @@ spell:Remembrance:35:70:90:250
 effect:RESTORE_EXP
 desc:Restores experience points to maximum if it is currently below maximum.
 
-book:prayer book:dungeon:[Holy Infusions]:6:light
+book:prayer book:dungeon:[Holy Infusions]:6:divine
 book-graphics:?:g
 book-properties:50000:15:70 to 100
 
@@ -922,7 +930,7 @@ desc: to-dam bonus of the same weapon.
 desc:  The prayer has no effect if the weapon is an artifact or ego item,
 desc: is already branded, has a slay, is broken, or is cursed.
 
-book:prayer book:dungeon:[Wrath of God]:5:light
+book:prayer book:dungeon:[Wrath of God]:5:divine
 book-graphics:?:g
 book-properties:90000:10:90 to 100
 
@@ -972,14 +980,17 @@ skill-melee:60:40
 skill-shoot:66:30
 skill-throw:66:30
 skill-dig:0:0
-info:6:25
-attack:5:30:4
-equip:food:Ration of Food:1:3
-equip:light:Wooden Torch:1:3
-equip:sword:Dagger:1:1
-equip:soft armour:Soft Leather Armour:1:1
-equip:scroll:Word of Recall:1:1
-flags:CHOOSE_SPELLS
+hitdie:6
+exp:25
+max-attacks:5
+min-weight:30
+strength-multiplier:4
+equip:food:Ration of Food:1:3:none
+equip:light:Wooden Torch:1:3:none
+equip:sword:Dagger:1:1:none
+equip:soft armour:Soft Leather Armour:1:1:none
+equip:scroll:Word of Recall:1:1:birth_no_recall
+player-flags:CHOOSE_SPELLS
 title:Vagabond
 title:Cutpurse
 title:Footpad
@@ -994,7 +1005,7 @@ title:Master Thief
 magic:5:350:9
 
 book:magic book:town:[Magic for Beginners]:6:arcane
-equip:magic book:[Magic for Beginners]:1:1
+equip:magic book:[Magic for Beginners]:1:1:none
 
 spell:Detect Monsters:5:1:50:1
 effect:DETECT_VISIBLE_MONSTERS
@@ -1009,7 +1020,7 @@ desc:Teleports you randomly up to 10 squares away.
 
 spell:Light Area:9:3:60:1
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:1:10
+effect:SPHERE:LIGHT_WEAK:1:10
 dice:2d$S
 expr:S:PLAYER_LEVEL:/ 2
 desc:Lights up all squares in a level-dependent area, and hurts
@@ -1017,6 +1028,8 @@ desc: all light-sensitive monsters in the area of effect.
 desc:  If you are in a room, the entire room will be lit up as well.
 
 spell:Object Detection:10:3:60:1
+effect:DETECT_ORE
+effect-yx:22:40
 effect:DETECT_GOLD
 effect-yx:22:40
 effect:DETECT_OBJECTS
@@ -1076,11 +1089,10 @@ desc:Invokes a random spell effect.
 
 book:magic book:town:[Incantations and Illusions]:6:arcane
 
-spell:Satisfy Hunger:25:12:95:1
-effect:SET_NOURISH
-dice:16000
-desc:Magically renders you well-fed (but not satiated).
-desc:  This will also cure a bloated stomach.
+spell:Remove Hunger:25:12:95:1
+effect:NOURISH:INC_TO
+dice:50
+desc:Magically renders you comfortably fed (but not satiated).
 
 spell:Lesser Recharging:27:15:99:1
 effect:RECHARGE
@@ -1293,15 +1305,18 @@ skill-melee:56:30
 skill-shoot:72:45
 skill-throw:72:45
 skill-dig:0:0
-info:4:30
-attack:5:35:4
-equip:food:Ration of Food:1:3
-equip:light:Wooden Torch:1:3
-equip:sword:Dagger:1:1
-equip:bow:Short Bow:1:1
-equip:arrow:Arrow:15:20
-equip:scroll:Word of Recall:1:1
-flags:FAST_SHOT | CHOOSE_SPELLS
+hitdie:4
+exp:30
+max-attacks:5
+min-weight:35
+strength-multiplier:4
+equip:food:Ration of Food:1:3:none
+equip:light:Wooden Torch:1:3:none
+equip:sword:Dagger:1:1:none
+equip:bow:Short Bow:1:1:none
+equip:arrow:Arrow:15:20:none
+equip:scroll:Word of Recall:1:1:birth_no_recall
+player-flags:FAST_SHOT | CHOOSE_SPELLS
 title:Runner
 title:Strider
 title:Scout
@@ -1316,7 +1331,7 @@ title:Ranger Lord
 magic:3:400:9
 
 book:magic book:town:[Magic for Beginners]:7:arcane
-equip:magic book:[Magic for Beginners]:1:1
+equip:magic book:[Magic for Beginners]:1:1:none
 
 spell:Magic Missile:3:1:30:1
 effect:BOLT_OR_BEAM:MISSILE:0:-10
@@ -1341,7 +1356,7 @@ desc:Teleports you randomly up to 10 squares away.
 
 spell:Light Area:5:3:35:1
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:1:10
+effect:SPHERE:LIGHT_WEAK:1:10
 dice:2d$S
 expr:S:PLAYER_LEVEL:/ 2
 desc:Lights up all squares in a level-dependent area, and hurts
@@ -1426,11 +1441,10 @@ desc:Invokes a random spell effect.
 
 book:magic book:town:[Incantations and Illusions]:9:arcane
 
-spell:Satisfy Hunger:17:17:55:3
-effect:SET_NOURISH
-dice:16000
-desc:Magically renders you well-fed (but not satiated).
-desc:  This will also cure a bloated stomach.
+spell:Remove Hunger:17:17:55:3
+effect:NOURISH:INC_TO
+dice:50
+desc:Magically renders you comfortably fed (but not satiated).
 
 spell:Lesser Recharging:29:17:90:4
 effect:RECHARGE
@@ -1524,7 +1538,9 @@ expr:B:PLAYER_LEVEL:+ 55
 desc:Shoots a radius-2 fire ball.
 
 spell:Treasure Detection:35:20:70:10
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -1731,13 +1747,16 @@ skill-melee:68:35
 skill-shoot:40:30
 skill-throw:40:30
 skill-dig:0:0
-info:6:35
-attack:5:30:5
-equip:food:Ration of Food:1:3
-equip:light:Wooden Torch:1:3
-equip:sword:Dagger:1:1
-equip:scroll:Protection from Evil:1:1
-equip:scroll:Word of Recall:1:1
+hitdie:6
+exp:35
+max-attacks:5
+min-weight:30
+strength-multiplier:5
+equip:food:Ration of Food:1:3:none
+equip:light:Wooden Torch:1:3:none
+equip:sword:Dagger:1:1:none
+equip:scroll:Protection from Evil:1:1:none
+equip:scroll:Word of Recall:1:1:birth_no_recall
 title:Gallant
 title:Keeper
 title:Protector
@@ -1751,8 +1770,8 @@ title:Paladin Lord
 
 magic:1:400:9
 
-book:prayer book:town:[Beginners Handbook]:7:light
-equip:prayer book:[Beginners Handbook]:1:1
+book:prayer book:town:[Beginners Handbook]:7:divine
+equip:prayer book:[Beginners Handbook]:1:1:none
 
 spell:Detect Evil:1:1:30:4
 effect:DETECT_EVIL
@@ -1781,7 +1800,7 @@ desc:Removes fear.
 
 spell:Call Light:5:4:35:4
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:1:10
+effect:SPHERE:LIGHT_WEAK:1:10
 dice:2d$S
 expr:S:PLAYER_LEVEL:/ 2
 desc:Lights up all squares in a level-dependent area, and hurts
@@ -1792,7 +1811,7 @@ spell:Slow Poison:9:7:40:3
 effect:TIMED_DEC:POISONED:0:2
 desc:Halves the remaining duration of any current poisoning.
 
-book:prayer book:town:[Words of Wisdom]:8:light
+book:prayer book:town:[Words of Wisdom]:8:divine
 
 spell:Scare Monster:9:7:40:3
 effect:BOLT_AWARE:TURN_ALL
@@ -1828,11 +1847,10 @@ expr:B:PLAYER_LEVEL:* 10 + 500
 desc:Attempts to put to sleep each monster directly adjacent to you.
 desc:  Uniques and monsters that resist sleep are not affected.
 
-spell:Satisfy Hunger:13:10:45:3
-effect:SET_NOURISH
-dice:16000
-desc:Magically renders you well-fed (but not satiated).
-desc:  This will also cure a bloated stomach.
+spell:Remove Hunger:13:10:45:3
+effect:NOURISH:INC_TO
+dice:50
+desc:Magically renders you comfortably fed (but not satiated).
 
 spell:Remove Curse:13:11:45:4
 effect:REMOVE_CURSE
@@ -1846,7 +1864,7 @@ effect:TIMED_INC:OPP_FIRE
 dice:10+d10
 desc:Gives you temporary resistance to cold and fire, for 10+1d10 turns each.
 
-book:prayer book:town:[Chants and Blessings]:9:light
+book:prayer book:town:[Chants and Blessings]:9:divine
 
 spell:Neutralize Poison:15:15:50:4
 effect:CURE:POISONED
@@ -1921,7 +1939,7 @@ expr:B:PLAYER_LEVEL:+ 0
 desc:Attempts to scare each undead monster within line of sight,
 desc: causing it to flee in terror for a level-dependent duration.
 
-book:prayer book:town:[Exorcism and Dispelling]:4:light
+book:prayer book:town:[Exorcism and Dispelling]:4:divine
 
 spell:Prayer:29:22:50:3
 effect:TIMED_INC:BLESSED
@@ -1952,7 +1970,7 @@ dice:d$S
 expr:S:PLAYER_LEVEL:* 3
 desc:Inflicts unresistable damage on each evil monster within line of sight.
 
-book:prayer book:dungeon:[Ethereal Openings]:5:light
+book:prayer book:dungeon:[Ethereal Openings]:5:divine
 
 spell:Blink:7:7:50:2
 effect:TELEPORT
@@ -1988,7 +2006,7 @@ desc: of recall again.
 desc:  This prayer has no effect when the option to restrict the use of
 desc: stairs and recall is set, unless Morgoth is dead.
 
-book:prayer book:dungeon:[Godly Insights]:4:light
+book:prayer book:dungeon:[Godly Insights]:4:divine
 
 spell:Detect Monsters:5:5:50:1
 effect:DETECT_VISIBLE_MONSTERS
@@ -1997,7 +2015,9 @@ desc:Detects all non-invisible monsters in the immediate area,
 desc: for one turn only.
 
 spell:Detection:15:15:80:12
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -2017,7 +2037,7 @@ desc:Probes each monster within line of sight, giving information on the
 desc: current hit points of the monster and many of its characteristics
 desc: and abilities.
 
-book:prayer book:dungeon:[Purifications and Healing]:3:light
+book:prayer book:dungeon:[Purifications and Healing]:3:divine
 
 spell:Cure Serious Wounds:9:4:50:25
 effect:HEAL_HP
@@ -2047,7 +2067,7 @@ effect:RESTORE_STAT:DEX
 effect:RESTORE_STAT:CON
 desc:Restores to maximum all stats that are currently below maximum.
 
-book:prayer book:dungeon:[Holy Infusions]:5:light
+book:prayer book:dungeon:[Holy Infusions]:5:divine
 
 spell:Unbarring Ways:10:16:50:20
 effect:TOUCH:KILL_DOOR
@@ -2083,7 +2103,7 @@ desc: to-dam bonus of the same weapon.
 desc:  The prayer has no effect if the weapon is an artifact or ego item,
 desc: is already branded, has a slay, is broken, or is cursed.
 
-book:prayer book:dungeon:[Wrath of God]:3:light
+book:prayer book:dungeon:[Wrath of God]:3:divine
 
 spell:Dispel Undead:20:13:70:20
 effect:PROJECT_LOS_AWARE:DISP_UNDEAD

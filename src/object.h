@@ -51,14 +51,30 @@ enum {
  */
 struct effect {
 	struct effect *next;
-	u16b index;		/**< The effect index */
+	uint16_t index;	/**< The effect index */
 	dice_t *dice;	/**< Dice expression used in the effect */
 	int y;			/**< Y coordinate or distance */
 	int x;			/**< X coordinate or distance */
 	int subtype;	/**< Projection type, timed effect type, etc. */
 	int radius;		/**< Radius of the effect (if it has one) */
 	int other;		/**< Extra parameter to be passed to the handler */
-	char *msg;		/**< Message for deth or whatever */
+	char *msg;		/**< Message for death or whatever */
+};
+
+/**
+ * Chests
+ */
+struct chest_trap {
+	struct chest_trap *next;
+	char *name;
+	char *code;
+	int level;
+	struct effect *effect;
+	int pval;
+	bool destroy;
+	bool magic;
+	char *msg;
+	char *msg_death;
 };
 
 /**
@@ -69,7 +85,9 @@ struct brand {
 	char *name;
 	char *verb;
 	int resist_flag;
+	int vuln_flag;
 	int multiplier;
+	int o_multiplier;
 	int power;
 	struct brand *next;
 };
@@ -85,6 +103,7 @@ struct slay {
 	char *range_verb;
 	int race_flag;
 	int multiplier;
+	int o_multiplier;
 	int power;
 	struct slay *next;
 };
@@ -112,7 +131,7 @@ enum {
  * Element info type
  */
 struct element_info {
-	s16b res_level;
+	int16_t res_level;
 	bitflag flags;
 };
 
@@ -124,6 +143,7 @@ struct activation {
 	char *name;
 	int index;
 	bool aim;
+	int level;
 	int power;
 	struct effect *effect;
 	char *message;
@@ -167,7 +187,7 @@ struct object_kind {
 	struct object_base *base;
 
 	struct object_kind *next;
-	u32b kidx;
+	uint32_t kidx;
 
 	int tval;					/**< General object type (see TV_ macros) */
 	int sval;					/**< Object sub-type  */
@@ -195,7 +215,7 @@ struct object_kind {
 	bool *slays;
 	int *curses;			/**< Array of curse powers */
 
-	byte d_attr;			/**< Default object attribute */
+	uint8_t d_attr;			/**< Default object attribute */
 	wchar_t d_char;			/**< Default object character */
 
 	int alloc_prob;			/**< Allocation: commonness */
@@ -207,6 +227,7 @@ struct object_kind {
 	struct effect *effect;	/**< Effect this item produces (effects.c) */
 	int power;				/**< Power of the item's effect */
 	char *effect_msg;
+	char *vis_msg;
 	random_value time;		/**< Recharge time (rods/activation) */
 	random_value charge;	/**< Number of charges (staves/wands) */
 
@@ -223,7 +244,7 @@ struct object_kind {
 	bool aware;		/**< Set if player is aware of the kind's effects */
 	bool tried;		/**< Set if kind has been tried */
 
-	byte ignore;  	/**< Ignore settings */
+	uint8_t ignore;  	/**< Ignore settings */
 	bool everseen; 	/**< Kind has been seen (to despoilify ignore menus) */
 };
 
@@ -234,18 +255,13 @@ extern struct object_kind *pile_kind;
 extern struct object_kind *curse_object_kind;
 
 /**
- * Information about artifacts.
- *
- * Note that ::cur_num is written to the savefile.
- *
- * TODO: Fix this max_num/cur_num crap and just have a big boolean array of
- * which artifacts have been created and haven't, so this can become read-only.
+ * Unchanging information about artifacts.
  */
 struct artifact {
 	char *name;
 	char *text;
 
-	u32b aidx;
+	uint32_t aidx;
 
 	struct artifact *next;
 
@@ -279,10 +295,6 @@ struct artifact {
 	int alloc_min;		/** Minimum depth (can appear earlier) */
 	int alloc_max;		/** Maximum depth (will NEVER appear deeper) */
 
-	bool created;		/**< Whether this artifact has been created */
-	bool seen;			/**< Whether this artifact has been seen this game */
-	bool everseen;		/**< Whether this artifact has ever been seen  */
-
 	struct activation *activation;	/**< Artifact activation */
 	char *alt_msg;
 
@@ -290,16 +302,28 @@ struct artifact {
 };
 
 /**
+ * Information about artifacts that changes during the course of play;
+ * except for aidx, saved to the save file
+ */
+struct artifact_upkeep {
+	uint32_t aidx;	/**< For cross-indexing with struct artifact */
+	bool created;	/**< Whether this artifact has been created */
+	bool seen;	/**< Whether this artifact has been seen this game */
+	bool everseen;	/**< Whether this artifact has ever been seen  */
+};
+
+/**
  * The artifact arrays
  */
 extern struct artifact *a_info;
+extern struct artifact_upkeep *aup_info;
 
 
 /**
  * Structure for possible object kinds for an ego item
  */
 struct poss_item {
-	u32b kidx;
+	uint32_t kidx;
 	struct poss_item *next;
 };
 
@@ -312,7 +336,7 @@ struct ego_item {
 	char *name;
 	char *text;
 
-	u32b eidx;
+	uint32_t eidx;
 
 	int cost;						/* Ego-item "cost" */
 
@@ -343,9 +367,8 @@ struct ego_item {
 	int min_to_d;			/* Minimum to-dam value */
 	int min_to_a;			/* Minimum to-ac value */
 
-	struct effect *effect;	/**< Effect this item produces (effects.c) */
-	char *effect_msg;
-	random_value time;		/**< Recharge time (rods/activation) */
+	struct activation *activation;	/**< Activation */
+	random_value time;		/**< Recharge time for activation */
 
 	bool everseen;			/* Do not spoil ignore menus */
 };
@@ -399,52 +422,52 @@ struct curse_data {
 struct object {
 	struct object_kind *kind;	/**< Kind of the object */
 	struct ego_item *ego;		/**< Ego item info of the object, if any */
-	struct artifact *artifact;	/**< Artifact info of the object, if any */
+	const struct artifact *artifact;	/**< Artifact info of the object, if any */
 
 	struct object *prev;	/**< Previous object in a pile */
 	struct object *next;	/**< Next object in a pile */
 	struct object *known;	/**< Known version of this object */
 
-	u16b oidx;				/**< Item list index, if any */
+	uint16_t oidx;		/**< Item list index, if any */
 
-	struct loc grid;		/**< position on map, or (0, 0) */
+	struct loc grid;	/**< position on map, or (0, 0) */
 
-	byte tval;				/**< Item type (from kind) */
-	byte sval;				/**< Item sub-type (from kind) */
+	uint8_t tval;		/**< Item type (from kind) */
+	uint8_t sval;		/**< Item sub-type (from kind) */
 
-	s16b pval;				/**< Item extra-parameter */
+	int16_t pval;		/**< Item extra-parameter */
 
-	s16b weight;			/**< Item weight */
+	int16_t weight;		/**< Item weight */
 
-	byte dd;				/**< Number of damage dice */
-	byte ds;				/**< Number of sides on each damage die */
-	s16b ac;				/**< Normal AC */
-	s16b to_a;				/**< Plusses to AC */
-	s16b to_h;				/**< Plusses to hit */
-	s16b to_d;				/**< Plusses to damage */
+	uint8_t dd;		/**< Number of damage dice */
+	uint8_t ds;		/**< Number of sides on each damage die */
+	int16_t ac;		/**< Normal AC */
+	int16_t to_a;		/**< Plusses to AC */
+	int16_t to_h;		/**< Plusses to hit */
+	int16_t to_d;		/**< Plusses to damage */
 
 	bitflag flags[OF_SIZE];	/**< Object flags */
-	s16b modifiers[OBJ_MOD_MAX];	/**< Object modifiers*/
+	int16_t modifiers[OBJ_MOD_MAX];	/**< Object modifiers*/
 	struct element_info el_info[ELEM_MAX];	/**< Object element info */
-	bool *brands;			/**< Array of brand structures */
-	bool *slays;			/**< Array of slay structures */
+	bool *brands;			/**< Flag absence/presence of each brand */
+	bool *slays;			/**< Flag absence/presence of each slay */
 	struct curse_data *curses;	/**< Array of curse powers and timeouts */
 
 	struct effect *effect;	/**< Effect this item produces (effects.c) */
 	char *effect_msg;		/**< Message on use */
 	struct activation *activation;	/**< Artifact activation, if applicable */
 	random_value time;		/**< Recharge time (rods/activation) */
-	s16b timeout;			/**< Timeout Counter */
+	int16_t timeout;		/**< Timeout Counter */
 
-	byte number;			/**< Number of items */
+	uint8_t number;			/**< Number of items */
 	bitflag notice;			/**< Attention paid to the object */
 
-	s16b held_m_idx;		/**< Monster holding us (if any) */
-	s16b mimicking_m_idx;	/**< Monster mimicking us (if any) */
+	int16_t held_m_idx;		/**< Monster holding us (if any) */
+	int16_t mimicking_m_idx;	/**< Monster mimicking us (if any) */
 
-	byte origin;			/**< How this item was found */
-	byte origin_depth;		/**< What depth the item was found at */
-	struct monster_race *origin_race;	/**< Monster race that dropped it */
+	uint8_t origin;			/**< How this item was found */
+	uint8_t origin_depth;		/**< What depth the item was found at */
+	const struct monster_race *origin_race;	/**< Monster race that dropped it */
 
 	quark_t note; 			/**< Inscription index */
 };
@@ -498,10 +521,10 @@ struct flavor
 	struct flavor *next;
 	unsigned int fidx;
 
-	byte tval;	  /* Associated object type */
-	byte sval;	  /* Associated object sub-type */
+	uint8_t tval;	/* Associated object type */
+	uint8_t sval;	/* Associated object sub-type */
 
-	byte d_attr;	/* Default flavor attribute */
+	uint8_t d_attr;	/* Default flavor attribute */
 	wchar_t d_char;	/* Default flavor character */
 };
 

@@ -122,11 +122,11 @@
 #define DEFAULT_X11_FONT_0		"10x20"
 #define DEFAULT_X11_FONT_1		"9x15"
 #define DEFAULT_X11_FONT_2		"9x15"
-#define DEFAULT_X11_FONT_3		"5x8"
-#define DEFAULT_X11_FONT_4		"5x8"
-#define DEFAULT_X11_FONT_5		"5x8"
-#define DEFAULT_X11_FONT_6		"5x8"
-#define DEFAULT_X11_FONT_7		"5x8"
+#define DEFAULT_X11_FONT_3		"7x13"
+#define DEFAULT_X11_FONT_4		"7x13"
+#define DEFAULT_X11_FONT_5		"7x13"
+#define DEFAULT_X11_FONT_6		"7x13"
+#define DEFAULT_X11_FONT_7		"7x13"
 
 
 #ifndef IsModifierKey
@@ -166,7 +166,7 @@
 
 
 /**
- * Hack -- avoid some compiler warnings
+ * Avoid some compiler warnings
  */
 #define IGNORE_UNUSED_FUNCTIONS
 
@@ -304,14 +304,14 @@ struct infowin
 	Window win;
 	long mask;
 
-	s16b ox, oy;
+	int16_t ox, oy;
 
-	s16b x, y;
-	s16b x_save, y_save;
-	s16b w, h;
-	u16b b;
+	int16_t x, y;
+	int16_t x_save, y_save;
+	int16_t w, h;
+	uint16_t b;
 
-	byte byte1;
+	uint8_t byte1;
 
 	unsigned int mapped:1;
 	unsigned int redraw:1;
@@ -378,12 +378,12 @@ struct infofnt
 
 	const char *name;
 
-	s16b wid;
-	s16b twid;
-	s16b hgt;
-	s16b asc;
+	int16_t wid;
+	int16_t twid;
+	int16_t hgt;
+	int16_t asc;
 
-	byte off;
+	uint8_t off;
 
 	unsigned int mono:1;
 	unsigned int nuke:1;
@@ -492,9 +492,10 @@ static int gamma_val = 0;
 
 
 /**
- * Hack -- Convert an RGB value to an X11 Pixel, or die.
+ * Convert an RGB value to an X11 Pixel, or die.
  */
-static u32b create_pixel(Display *dpy, byte red, byte green, byte blue)
+static uint32_t create_pixel(Display *dpy, uint8_t red, uint8_t green,
+		uint8_t blue)
 {
 	Colormap cmap = DefaultColormapOfScreen(DefaultScreenOfDisplay(dpy));
 
@@ -510,7 +511,7 @@ static u32b create_pixel(Display *dpy, byte red, byte green, byte blue)
 		if (gamma_val) build_gamma_table(gamma_val);
 	}
 
-	/* Hack -- Gamma Correction */
+	/* Gamma Correction */
 	if (gamma_val > 0) {
 		red = gamma_table[red];
 		green = gamma_table[green];
@@ -584,13 +585,19 @@ static unsigned int xkb_mask_modifier( XkbDescPtr xkb, const char *name )
 {
 	unsigned int mask=0;
 	
-	if (strcmp(name, "Caps Lock") == 0) return 2;
+	if (streq(name, "Caps Lock")) return 2;
 	
-	for (int i = 0; (!mask) && (i <= XkbNumVirtualMods); i++ ) {
-		char* modStr = XGetAtomName( xkb->dpy, xkb->names->vmods[i] );
+	for (int i = 0; (!mask) && (i < XkbNumVirtualMods); i++ ) {
+		char* modStr;
+
+		/* Avoid BadAtom errors:  skip elements with a null atom. */
+		if (xkb->names->vmods[i] == None) {
+		        continue;
+		}
+		modStr = XGetAtomName( xkb->dpy, xkb->names->vmods[i] );
 		if (modStr) {
-			if (!strcmp(name, modStr))
-				XkbVirtualModsToReal( xkb, 1 << i, &mask );
+			if (streq(name, modStr))
+				XkbVirtualModsToReal( xkb, 1U << i, &mask );
 
 			XFree(modStr);
 		}
@@ -1259,7 +1266,7 @@ static errr Infoclr_init_data(Pixell fg, Pixell bg, int op, int stip)
 	/* Assign the proper GC foreground */
 	gcv.foreground = fg;
 
-	/* Hack -- Handle XOR (xor is code 6) by hacking bg and fg */
+	/* Handle XOR (xor is code 6) by hacking bg and fg */
 	if (op == 6) gcv.background = 0;
 	if (op == 6) gcv.foreground = (bg ^ fg);
 
@@ -1320,6 +1327,33 @@ static errr Infoclr_change_fg(Pixell fg)
 
 	/* Change */
 	XSetForeground(Metadpy->dpy, iclr->gc, fg);
+
+	/* Success */
+	return (0);
+}
+
+
+
+/**
+ * Change the 'bg' for an infoclr
+ *
+ * Inputs:
+ *	bg:   The Pixell for the requested Background (see above)
+ */
+static errr Infoclr_change_bg(Pixell bg)
+{
+	infoclr *iclr = Infoclr;
+
+
+	/*** Simple error checking of opr and clr ***/
+
+	/* Check the 'Pixells' for realism */
+	if (bg > Metadpy->zg) return (-1);
+
+	/*** Change ***/
+
+	/* Change */
+	XSetBackground(Metadpy->dpy, iclr->gc, bg);
 
 	/* Success */
 	return (0);
@@ -1552,7 +1586,7 @@ static errr Infofnt_text_non(int x, int y, const wchar_t *str, int len)
 
 
 /**
- * Hack -- cursor color
+ * Cursor color
  */
 static infoclr *xor;
 
@@ -1560,7 +1594,7 @@ static infoclr *xor;
 /**
  * Color info (unused, red, green, blue).
  */
-static byte color_table_x11[MAX_COLORS][4];
+static uint8_t color_table_x11[MAX_COLORS][4];
 
 
 /**
@@ -1608,7 +1642,7 @@ static void react_keypress(XKeyEvent *ev)
 	int mx = (ev->state & m->super_mask) ? true : false;
 	int kp = false;
 
-	byte mods = (mo ? KC_MOD_ALT : 0) | (mx ? KC_MOD_META : 0);
+	uint8_t mods = (mo ? KC_MOD_ALT : 0) | (mx ? KC_MOD_META : 0);
 
 	/* Check for "normal" keypresses */
 	n = XLookupString(ev, buf, 125, &ks, NULL);
@@ -1768,10 +1802,10 @@ static errr CheckEvent(bool wait)
 	/* Unknown window */
 	if (!td || !iwin) return (0);
 
-	/* Hack -- activate the Term */
+	/* Activate the Term */
 	Term_activate(&td->t);
 
-	/* Hack -- activate the window */
+	/* Activate the window */
 	Infowin_set(iwin);
 
 	/* Switch on the Type */
@@ -1795,6 +1829,18 @@ static errr CheckEvent(bool wait)
 			else if (xev->xbutton.button == Button5) z = 5;
 			else z = 0;
 
+			/* Save a byte in ui-term/Term_mousepress for some reason */
+			uint32_t state = ((XButtonEvent*) xev)->state;
+			if(state & ShiftMask) {
+				z |= (KC_MOD_SHIFT << 4);
+			}
+			if(state & ControlMask) {
+				z |= (KC_MOD_CONTROL << 4);
+			}
+			if(state & Mod1Mask) {
+				z |= (KC_MOD_ALT << 4);
+			}
+
 			/* The co-ordinates are only used in Angband format. */
 			pixel_to_square(&x, &y, x, y);
 			if (press) Term_mousepress(x, y, z);
@@ -1804,7 +1850,7 @@ static errr CheckEvent(bool wait)
 
 		case KeyPress:
 		{
-			/* Hack -- use "old" term */
+			/* Use "old" term */
 			Term_activate(&old_td->t);
 
 			/* Process the key */
@@ -1862,7 +1908,7 @@ static errr CheckEvent(bool wait)
 			cols = ((Infowin->w - (ox + ox)) / td->tile_wid);
 			rows = ((Infowin->h - (oy + oy)) / td->tile_hgt);
 
-			/* Hack -- minimal size */
+			/* Minimal size */
 			if (cols < 1) cols = 1;
 			if (rows < 1) rows = 1;
 
@@ -1897,10 +1943,10 @@ static errr CheckEvent(bool wait)
 		}
 	}
 
-	/* Hack -- Activate the old term */
+	/* Activate the old term */
 	Term_activate(&old_td->t);
 
-	/* Hack -- Activate the proper window */
+	/* Activate the proper window */
 	Infowin_set(old_td->win);
 
 	/* Success */
@@ -1937,6 +1983,8 @@ static errr Term_xtra_x11_react(void)
 	int i;
 
 	if (Metadpy->color) {
+		XSetWindowAttributes xattr;
+
 		/* Check the colors */
 		for (i = 0; i < MAX_COLORS; i++) {
 			if ((color_table_x11[i][0] != angband_color_table[i][0]) ||
@@ -1960,7 +2008,56 @@ static errr Term_xtra_x11_react(void)
 				/* Change the foreground */
 				Infoclr_set(clr[i]);
 				Infoclr_change_fg(pixel);
+
+				if (i == COLOUR_DARK) {
+					int j;
+
+					Metadpy->bg = pixel;
+					/* Change the background */
+					for (j = 0; j < MAX_COLORS; ++j) {
+						Infoclr_set(clr[j]);
+						Infoclr_change_bg(pixel);
+					}
+				} else if (i == COLOUR_WHITE) {
+					Metadpy->fg = pixel;
+				} else if (i == COLOUR_SHADE) {
+					int j;
+
+					/*
+					 * For all colors, modify the variant
+					 * that uses COLOUR_SHADE as the
+					 * background.
+					 */
+					for (j = BG_DARK * MAX_COLORS;
+							j < (BG_DARK + 1)
+							* MAX_COLORS; ++j) {
+						Infoclr_set(clr[j]);
+						Infoclr_change_bg(pixel);
+					}
+				}
+
+				/*
+				 * Also modify the variants of this color
+				 * which uses the color itself as the
+				 * background or COLOUR_SHADE as the background.
+				 */
+				Infoclr_set(clr[i + BG_SAME * MAX_COLORS]);
+				Infoclr_change_fg(pixel);
+				Infoclr_change_bg(pixel);
+				Infoclr_set(clr[i + BG_DARK * MAX_COLORS]);
+				Infoclr_change_fg(pixel);
 			}
+		}
+
+		xattr.background_pixel = Metadpy->bg;
+		for (i = 0; i < ANGBAND_TERM_MAX; ++i) {
+			term_data *td;
+
+			if (!angband_term[i]) continue;
+			td = (term_data*)(angband_term[i]->data);
+			if (!td || !td->win) continue;
+			XChangeWindowAttributes(Metadpy->dpy, td->win->win,
+				CWBackPixel, &xattr);
 		}
 	}
 
@@ -2068,7 +2165,7 @@ static errr Term_wipe_x11(int x, int y, int n)
 static errr Term_text_x11(int x, int y, int n, int a, const wchar_t *s)
 {
 	/* Draw the text */
-	Infoclr_set(clr[a]);
+	Infoclr_set(clr[(a / MULT_BG) * MAX_COLORS + (a % MAX_COLORS)]);
 
 	/* Draw the text */
 	Infofnt_text_std(x, y, s, n);
@@ -2108,7 +2205,7 @@ static void save_prefs(void)
 		 * This doesn't seem to work under various WMs
 		 * since the decoration messes the position up
 		 *
-		 * Hack -- Use saved window positions.
+		 * Use saved window positions.
 		 * This means that we won't remember ingame repositioned
 		 * windows, but also means that WMs won't screw predefined
 		 * positions up. -CJN-
@@ -2183,13 +2280,13 @@ static errr term_data_init(term_data *td, int i)
 
 	XSizeHints *sh;
 
+	XWMHints *wmh;
+
 	ang_file *fff;
 
 	char buf[1024];
 	char cmd[40];
 	char font_name[256];
-
-	int line = 0;
 
 	/* Get default font for this term */
 	font = get_default_font(i);
@@ -2201,9 +2298,6 @@ static errr term_data_init(term_data *td, int i)
 	if (fff) {
 		/* Process the file */
 		while (file_getl(fff, buf, sizeof(buf))) {
-			/* Count lines */
-			line++;
-
 			/* Skip "empty" lines */
 			if (!buf[0]) continue;
 
@@ -2372,7 +2466,7 @@ static errr term_data_init(term_data *td, int i)
 	/* Don't allow bigtile mode - one day maybe NRM */
 	td->tile_wid2 = td->tile_wid;
 
-	/* Hack -- key buffer size */
+	/* Key buffer size */
 	num = ((i == 0) ? 1024 : 16);
 
 	/* Assume full size windows */
@@ -2450,6 +2544,23 @@ static errr term_data_init(term_data *td, int i)
 	/* Use the size hints */
 	XSetWMNormalHints(Metadpy->dpy, Infowin->win, sh);
 
+	/* WMHints */
+	wmh = XAllocWMHints();
+
+	if(wmh == NULL) quit("XAllocWMHints failed");
+
+	wmh->flags |= WindowGroupHint;
+
+	if(i == 0) {
+		// root points to itself
+		wmh->window_group = td->win->win;
+	} else {
+		// others point to root
+		wmh->window_group = data[0].win->win;
+	}
+	XSetWMHints(Metadpy->dpy, Infowin->win, wmh);
+	XFree(wmh);
+
 	/* Map the window */
 	Infowin_map();
 
@@ -2466,10 +2577,6 @@ static errr term_data_init(term_data *td, int i)
 
 	/* Use a "soft" cursor */
 	t->soft_cursor = true;
-
-	/* Erase with "white space" */
-	t->attr_blank = COLOUR_WHITE;
-	t->char_blank = ' ';
 
 	/* Differentiate between BS/^h, Tab/^i, etc. */
 	t->complex_input = true;
@@ -2560,7 +2667,6 @@ errr init_x11(int argc, char **argv)
 	char buf[1024];
 	const char *str;
 	int val;
-	int line = 0;
 
 	/* Parse args */
 	for (i = 1; i < argc; i++) {
@@ -2600,9 +2706,6 @@ errr init_x11(int argc, char **argv)
 		if (fff) {
 			/* Process the file */
 			while (file_getl(fff, buf, sizeof(buf))) {
-				/* Count lines */
-				line++;
-	
 				/* Skip "empty" lines */
 				if (!buf[0]) continue;
 	

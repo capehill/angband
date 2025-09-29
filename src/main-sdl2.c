@@ -20,10 +20,17 @@
 
 #ifdef USE_SDL2
 
-#include "SDL.h"
+#include "sdl2/pui-ctrl.h"
+#include "sdl2/pui-dlg.h"
+#include "sdl2/pui-misc.h"
+#include "sdl2/pui-win.h"
 #include "SDL_image.h"
-#include "SDL_ttf.h"
+#ifdef SOUND_SDL2
+#include "SDL_mixer.h"
+#endif
+#include "SDL_revision.h"
 
+#include "main.h"
 #include "init.h"
 #include "ui-term.h"
 #include "buildid.h"
@@ -38,16 +45,17 @@
 #include "ui-game.h"
 #include "ui-map.h"
 #include "parser.h"
+#ifdef SOUND_SDL2
+#include "sound.h"
+#endif
 
 #define MAX_SUBWINDOWS \
 	ANGBAND_TERM_MAX
 /* that should be plenty... */
 #define MAX_WINDOWS 4
-#define MAX_FONTS 128
-#define MAX_BUTTONS 32
 
 #define INIT_SDL_FLAGS \
-	(SDL_INIT_VIDEO)
+	(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER)
 #define INIT_IMG_FLAGS \
 	(IMG_INIT_PNG)
 
@@ -58,10 +66,6 @@
 /* size of the keypress queue (term->key_queue) */
 #define SUBWINDOW_KEYQ_SIZE(subwindow_ptr) \
 	((subwindow_ptr)->index == MAIN_SUBWINDOW ? 1024 : 32)
-
-#define DEFAULT_ATTR_BLANK \
-	COLOUR_WHITE
-#define DEFAULT_CHAR_BLANK ' '
 
 #define DEFAULT_DISPLAY 0
 
@@ -96,33 +100,18 @@
 	(DEFAULT_BORDER * 2)
 #define DEFAULT_VISIBLE_BORDER 2
 
-#define DEFAULT_FONT_SIZE 0
 /* XXX hack: the widest character present in a font
  * for determining font advance (width) */
 #define GLYPH_FOR_ADVANCE 'W'
-#define GLYPH_PADDING 1
 #define DEFAULT_VECTOR_FONT_SIZE 12
 
 #define DEFAULT_FONT "10x20x.fon"
-#define DEFAULT_FONT_W \
-	(10 + 2 * GLYPH_PADDING)
-#define DEFAULT_FONT_H \
-	(20 + 2 * GLYPH_PADDING)
 
-#define DEFAULT_STATUS_BAR_FONT "8x13x.fon"
-#define DEFAULT_STATUS_BAR_FONT_W \
-	(8 + 2 * GLYPH_PADDING)
-#define DEFAULT_STATUS_BAR_FONT_H \
-	(13 + 2 * GLYPH_PADDING)
+#define DEFAULT_DIALOG_FONT "8x13x.fon"
 
-#define MAX_VECTOR_FONT_SIZE 24
+#define MAX_VECTOR_FONT_SIZE 64
 #define MIN_VECTOR_FONT_SIZE 4
 
-#define DEFAULT_BUTTON_BORDER 8
-#define DEFAULT_LINE_HEIGHT(h) ((h) * 150 / 100)
-#define DEFAULT_MENU_LINE_HEIGHT(h) ((h) * 200 / 100)
-#define DEFAULT_MENU_LINE_WIDTH(w) \
-	((w) + DEFAULT_BUTTON_BORDER + DEFAULT_XTRA_BORDER)
 /* update period in window delays (160 milliseconds, assuming 60 fps) */
 #define DEFAULT_IDLE_UPDATE_PERIOD 10
 
@@ -132,45 +121,13 @@
 	COLOUR_DARK
 #define DEFAULT_SUBWINDOW_CURSOR_COLOR \
 	COLOUR_YELLOW
-#define DEFAULT_STATUS_BAR_BG_COLOR \
-	COLOUR_DARK
 #define DEFAULT_SHADE_COLOR \
 	COLOUR_SHADE
 #define DEFAULT_SUBWINDOW_BORDER_COLOR \
 	COLOUR_SHADE
-#define DEFAULT_STATUS_BAR_BUTTON_ACTIVE_COLOR \
-	COLOUR_WHITE
-#define DEFAULT_STATUS_BAR_BUTTON_INACTIVE_COLOR \
-	COLOUR_L_DARK
-
-#define DEFAULT_MENU_FG_ACTIVE_COLOR \
-	COLOUR_WHITE
-#define DEFAULT_MENU_FG_INACTIVE_COLOR \
-	COLOUR_WHITE
-#define DEFAULT_MENU_BG_ACTIVE_COLOR \
-	COLOUR_SHADE
-#define DEFAULT_MENU_BG_INACTIVE_COLOR \
-	COLOUR_DARK
-
-#define DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR \
-	COLOUR_WHITE
-#define DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR \
-	COLOUR_L_DARK
-
-#define DEFAULT_MENU_PANEL_OUTLINE_COLOR \
-	COLOUR_SHADE
 
 #define DEFAULT_ERROR_COLOR \
 	COLOUR_RED
-
-#define DEFAULT_ABOUT_BG_COLOR \
-	COLOUR_SHADE
-#define DEFAULT_ABOUT_BORDER_OUTER_COLOR \
-	COLOUR_L_DARK
-#define DEFAULT_ABOUT_BORDER_INNER_COLOR \
-	COLOUR_WHITE
-#define DEFAULT_ABOUT_TEXT_COLOR \
-	COLOUR_WHITE
 
 /* shockbolt's tiles are 64x64; dungeon is 198 tiles long;
  * 64 * 198 is 12672 which is bigger than any possible texture! */
@@ -190,18 +147,7 @@
 #define MIN_TILE_HEIGHT 1
 #define MAX_TILE_HEIGHT 9
 
-/* some random numbers */
-#define DEFAULT_WINDOW_MINIMUM_W 198
-#define DEFAULT_WINDOW_MINIMUM_H 66
-
-#define DEFAULT_SNAP_RANGE \
-	DEFAULT_FONT_W
-
-#define CHECK_BUTTON_GROUP_TYPE(button, button_group, data_type) \
-	do { \
-		assert((button)->info.group == (button_group)); \
-		assert((button)->info.type  == (data_type));  \
-	} while (0)
+#define DEFAULT_SNAP_RANGE(window) (window->app->def_font_w)
 
 enum wallpaper_mode {
 	/* so that we won't forget to actually set wallpaper */
@@ -212,44 +158,6 @@ enum wallpaper_mode {
 	WALLPAPER_SCALED
 };
 
-enum button_data_type {
-	BUTTON_DATA_INVALID = 0,
-	BUTTON_DATA_NONE,
-	BUTTON_DATA_IVAL,
-	BUTTON_DATA_UVAL,
-	BUTTON_DATA_SUBVAL,
-	BUTTON_DATA_FONTVAL,
-	BUTTON_DATA_TERMVAL,
-	BUTTON_DATA_ALPHAVAL
-};
-
-enum button_group {
-	BUTTON_GROUP_INVALID = 0,
-	BUTTON_GROUP_NONE,
-	BUTTON_GROUP_MOVESIZE,
-	BUTTON_GROUP_SUBWINDOWS,
-	BUTTON_GROUP_MENU
-};
-
-enum button_movesize {
-	BUTTON_MOVESIZE_INVALID = 0,
-	BUTTON_MOVESIZE_MOVING,
-	BUTTON_MOVESIZE_SIZING
-};
-
-enum button_tile_scale {
-	BUTTON_TILE_SIZE_INVALID = 0,
-	BUTTON_TILE_SIZE_WIDTH,
-	BUTTON_TILE_SIZE_HEIGHT
-};
-
-enum button_caption_position {
-	CAPTION_POSITION_INVALID = 0,
-	CAPTION_POSITION_CENTER,
-	CAPTION_POSITION_LEFT,
-	CAPTION_POSITION_RIGHT
-};
-
 enum font_type {
 	FONT_TYPE_INVALID = 0,
 	FONT_TYPE_RASTER,
@@ -258,27 +166,29 @@ enum font_type {
 
 struct ttf {
 	TTF_Font *handle;
-	/* this is not a real rect for glyphs;
-	 * x and y are offsets to add to coords of where glyph/string should be rendered;
-	 * f and h are glyph metrics but include glyph padding
-	 * (for calculating rows/cols, mostly) */
-	SDL_Rect glyph;
+	struct { int w; int h; } glyph;
 };
 
 /* the array of ascii chars was generated by this perl script:
  * my $ascii = join '', map /\p{Print}/ ? $_ : ' ', map chr, 0 .. 127; 
- * for (my $i = 0; $i < length($ascii); $i += 40) {
- *     my $s = substr $ascii, $i, 40;
+ * for (my $i = 0; $i < length($ascii); $i += 32) {
+ *     my $s = substr $ascii, $i, 32;
  *     $s =~ s#\\#\\\\#g;
  *     $s =~ s#"#\\"#g;
  *     print qq(\t"$s"\n);
  * }
+ * and then manually hacked to substitute the escape codes for the non-null
+ * control characters (0x01 to 0x1f, and 0x7f) so the graphics characters at
+ * those indices in Angband's packaged .fon files remain available, if the
+ * user wants to access them (those characters are likely the ones specified by
+ * code page 437, https://en.wikipedia.org/wiki/Code_page_437 ).
  */
 static const char g_ascii_codepoints_for_cache[] =
-	"                                 !\"#$%&'"
-	"()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO"
-	"PQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvw"
-	"xyz{|}~ ";
+	" \x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+	"\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
+	" !\"#$%&'()*+,-./0123456789:;<=>?"
+	"@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+	"`abcdefghijklmnopqrstuvwxyz{|}~\x7f";
 /* Simple font cache. Only for ascii (which is like 99.99% (?) of what the game
  * displays, anyway) */
 #define ASCII_CACHE_SIZE \
@@ -297,7 +207,7 @@ struct font {
 	char *name;
 	char *path;
 	int size;
-	/* index of font in g_font_info array */
+	/* index of font in the application's fonts array */
 	size_t index;
 
 	struct font_cache cache;
@@ -325,7 +235,7 @@ struct window_config {
 	int font_size;
 };
 
-/* struct subwindow is representation of angband's term */
+/** struct subwindow is representation of angband's term */
 struct subwindow {
 	bool inited;
 	bool loaded;
@@ -334,7 +244,7 @@ struct subwindow {
 
 	struct subwindow_config *config;
 
-	/* top in z-order */
+	/** top in z-order */
 	bool top;
 	bool always_top;
 
@@ -343,23 +253,33 @@ struct subwindow {
 	int rows;
 	int cols;
 
-	/* struct ttf also has this information; these members are
-	 * just for convinience */
+	/** struct ttf also has this information; these members are
+	 * just for convenience */
 	int font_width;
 	int font_height;
 
-	/* coordinates of full rect are relative to coordinates of window
+	/**
+	 * These are transiently used during font selection for the subwindow.
+	 * The font size must be >= min_font_size and < max_font_size to
+	 * match the constraints of the subwindow's miniumum number of columns
+	 * and rows and the size of the window containing the subwindow.
+	 */
+	int min_font_size, max_font_size;
+
+	/** coordinates of full rect are relative to coordinates of window
 	 * (basically, full rect is texture) */
 	SDL_Rect full_rect;
-	/* coordinates of inner rect are relative to that of full rect */
+	/** coordinates of inner rect are relative to that of full rect */
 	SDL_Rect inner_rect;
-	/* for use when resizing term */
+	/** for use when resizing term */
 	SDL_Rect sizing_rect;
-	/* a one pixel texture, mostly for displaying something when
+	/** version of full_rect for the opposite setting of fullscreen */
+	SDL_Rect stored_rect;
+	/** a one pixel texture, mostly for displaying something when
 	 * the player is resizing term */
 	SDL_Texture *aux_texture;
 
-	/* background color */
+	/** background color */
 	SDL_Color color;
 
 	struct subwindow_border borders;
@@ -368,118 +288,9 @@ struct subwindow {
 
 	struct font *font;
 
-	struct window *window;
+	struct sdlpui_window *window;
 	struct term *term;
-};
-
-struct button;
-
-struct button_bank {
-	struct button *buttons;
-	size_t size;
-	size_t number;
-};
-
-struct menu_panel {
-	SDL_Rect rect;
-	struct button_bank button_bank;
-	struct menu_panel *next;
-};
-
-typedef bool (*button_click)(struct window *window,
-		struct button *button);
-typedef void (*button_render)(const struct window *window,
-		struct button *button);
-typedef bool (*button_event)(struct window *window,
-		struct button *button, const SDL_Event *event);
-typedef void (*button_menu)(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel);
-
-struct fontval {
-	struct subwindow *subwindow;
-	/* index of font in g_font_info array */
-	size_t index;
-	bool size_ok;
-};
-
-struct termval {
-	struct subwindow *subwindow;
-	u32b value;
-};
-
-struct alphaval {
-	struct subwindow *subwindow;
-	int real_value;
-	int show_value;
-};
-
-struct button_info {
-	enum button_data_type type;
-	union {
-		int ival;
-		unsigned uval;
-		struct subwindow *subval;
-		struct fontval fontval;
-		struct termval termval;
-		struct alphaval alphaval;
-	} data;
-
-	enum button_group group;
-};
-
-struct menu_elem {
-	const char *caption;
-	struct button_info info;
-	button_render on_render;
-	button_menu on_menu;
-};
-
-struct button_callbacks {
-	/* this function should render the button;
-	 * otherwise, the button will be invisible */
-	button_render on_render;
-	/* optional custom event handler */
-	button_event on_event;
-	/* if there is no custon handler,
-	 * this function should do something when button is clicked
-	 * otherwise, the button will be useless */
-	button_click on_click;
-	/* for use only with menu; only custom events */
-	button_menu on_menu;
-};
-
-struct button {
-	/* selected means the user pointed at button and pressed
-	 * mouse button (but not released yet) */
-	bool selected;
-	/* highlighted means the user pointed at button but
-	 * not clicking yet */
-	bool highlighted;
-
-	char *caption;
-
-	SDL_Rect full_rect;
-	SDL_Rect inner_rect;
-
-	struct button_info info;
-	struct button_callbacks callbacks;
-};
-
-struct status_bar {
-	struct font *font;
-
-	struct button_bank button_bank;
-	struct menu_panel *menu_panel;
-
-	struct window *window;
-
-	SDL_Rect full_rect;
-	SDL_Rect inner_rect;
-	SDL_Color color;
-	SDL_Texture *texture;
-
-	bool in_menu;
+	struct my_app *app;
 };
 
 struct graphics {
@@ -524,55 +335,85 @@ struct wallpaper {
 	enum wallpaper_mode mode;
 };
 
-/* struct window is a real window on screen, it has one or more
+/** struct sdlpui_window is a real window on screen, it has one or more
  * subwindows (terms) in it */
-struct window {
+struct sdlpui_window {
 	bool inited;
 	bool loaded;
 
-	/* id is SDL's id, for use with events */
+	/** id is SDL's id, for use with events */
 	Uint32 id;
-	/* and this is our id, mostly for debugging */
+	/** and this is our id, mostly for debugging */
 	unsigned index;
+	/** index of transiently outlined subwindow */
+	unsigned outlined_subwindow;
 
 	struct window_config *config;
 
-	/* toggles visibility of cursor */
-	bool cursor;
-	/* does window have mouse focus? */
-	bool focus;
-	/* window has changed and must be redrawn */
+	/** window has changed and must be redrawn */
 	bool dirty;
 
-	/* limiter for frames */
+	/** limiter for frames */
 	Uint32 next_redraw;
-	/* from display mode */
+	/** from display mode */
 	int delay;
 
-	/* as reported by SDL_GetWindowFlags() */
+	/** as reported by SDL_GetWindowFlags() */
 	Uint32 flags;
 
-	/* position and size of window as it is on display */
+	/** position and size of window as it is on display */
 	SDL_Rect full_rect;
-	/* size of window without status bar, basically */
+	/** size of window without status bar, basically */
 	SDL_Rect inner_rect;
+	/** version of full_rect for the opposite setting of fullscreen */
+	SDL_Rect stored_rect;
 
 	SDL_Color color;
-	/* for making terms transparent while moving or sizing them */
+	/** for making terms transparent while moving or sizing them */
 	Uint8 alpha;
 
 	SDL_Window *window;
 	SDL_Renderer *renderer;
+	/** The font to use for this window's dialogs and menus */
+	struct font *dialog_font;
+	/** The status bar (i.e. menu bar) for the window */
+	struct sdlpui_dialog *status_bar;
+	/** The button in the status bar for moving the window */
+	struct sdlpui_control *move_button;
+	/** The button in the status bar for resizing the window */
+	struct sdlpui_control *size_button;
+	/** The about dialog; NULL if not currently displayed */
+	struct sdlpui_dialog *infod;
+	/** The keyboard shortcut dialog; NULL if not currently displayed */
+	struct sdlpui_dialog *shorte;
+	/** The SDL details dialog; NULL if not currently displayed */
+	struct sdlpui_dialog *detaild;
 
 	int pixelformat;
 
 	struct wallpaper wallpaper;
+	struct sdlpui_stipple stipple;
 	struct move_state move_state;
 	struct size_state size_state;
-	struct status_bar status_bar;
 	struct graphics graphics;
 
 	struct subwindow *subwindows[MAX_SUBWINDOWS];
+
+	/** Point back to the containing application */
+	struct my_app *app;
+
+	/**
+	 * These are the head and tail of the stack of menus/dialogs for this
+	 * window.  Both will be NULL if no menus/dialogs are active.
+	 */
+	struct sdlpui_dialog *d_head, *d_tail;
+
+	/**
+	 * These point to the dialog/menu that should receive mouse events or
+	 * keyboard events, respectively.  If NULL, events will be directed
+	 * to the game's core.
+	 */
+	struct sdlpui_dialog *d_mouse, *d_key;
 };
 
 struct font_info {
@@ -581,80 +422,360 @@ struct font_info {
 	int size;
 	size_t index;
 	enum font_type type;
-	bool loaded;
 };
 
-/* there are also global arrays of subwindows and windows
- * those are at the end of the file */
-const char help_sdl2[] = "SDL2 frontend";
-static SDL_Color g_colors[MAX_COLORS];
-static struct font_info g_font_info[MAX_FONTS];
+struct shortcut_editor_data {
+	struct sdlpui_control labels[MAX_WINDOWS];
+	struct sdlpui_control shortcut_displays[MAX_WINDOWS];
+	struct sdlpui_control change_buttons[MAX_WINDOWS];
+	struct sdlpui_control clear_buttons[MAX_WINDOWS];
+	struct sdlpui_control prompt_label;
+	struct sdlpui_control close_button;
+	struct sdlpui_control reset_button;
+	int changing_shortcut;
+};
+
+struct my_app {
+	/**
+	 * The string ANGBAND_DIR_USER is freed before calling quit_hook(),
+	 * so we need to save the path to the config file.
+	 */
+	char config_file[4096];
+	/** the game's color table translated into what SDL expects */
+	SDL_Color colors[MAX_COLORS];
+	/**
+	 * fonts from the game's lib/fonts directory that can be selected
+	 * directly from the menus
+	 */
+	struct font_info *fonts;
+	struct subwindow subwindows[MAX_SUBWINDOWS];
+	struct sdlpui_window windows[MAX_WINDOWS];
+	struct keypress menu_shortcuts[MAX_WINDOWS];
+	/**
+	 * point to the window that should receive mouse and key events,
+	 * respectively
+	 */
+	struct sdlpui_window *w_mouse;
+	struct sdlpui_window *w_key;
+	/** Number of entries stored in fonts */
+	int font_count;
+	/** Number of entries allocated in fonts */
+	int font_alloc;
+	/** Width and height on screen for the default font */
+	int def_font_w, def_font_h;
+	/**
+	 * true if KC_MOD_KEYPAD will be sent for numeric keypad keys at the
+	 * expense of not handling some keyboard layouts properly
+	 */
+	bool kp_as_mod;
+	/** true if details about the SDL environment are to be logged. */
+	bool print_sdl_details;
+
+	SDL_GameController *controller;
+};
 
 /* Forward declarations */
 
-static void init_globals(void);
-static void free_globals(void);
-static bool read_config_file(void);
-static void dump_config_file(void);
-static void init_colors(void);
-static void start_windows(void);
-static void start_window(struct window *window);
+static void init_globals(struct my_app *a);
+static void free_globals(struct my_app *a);
+static bool read_config_file(struct my_app *a);
+static void dump_config_file(const struct my_app *a);
+static void init_colors(struct my_app *a);
+static void start_windows(struct my_app *a);
+static void start_window(struct sdlpui_window *window);
 static void load_font(struct font *font);
 static bool reload_font(struct subwindow *subwindow,
 		const struct font_info *info);
 static void free_font(struct font *font);
-static const struct font_info *find_font_info(const char *name);
-static void get_string_metrics(struct font *font, const char *str, int *w, int *h);
-static struct window *get_new_window(unsigned index);
-static void wipe_window(struct window *window, int display);
+static const struct font_info *find_font_info(const struct font_info *fonts,
+		int nfonts, const char *name);
+static struct font *make_font(const struct sdlpui_window *window,
+		const char *name, int size);
+static struct sdlpui_window *get_new_window(struct my_app *a, unsigned index);
+static void wipe_window(struct sdlpui_window *window, int display);
 /* create default config for spawning a window via gui */
-static void wipe_window_aux_config(struct window *window);
-static void adjust_window_geometry(struct window *window);
-static void free_window(struct window *window);
-static struct window *get_window_by_id(Uint32 id);
-static struct window *get_window_direct(unsigned index);
-static bool has_visible_subwindow(const struct window *window, unsigned index);
-static void resize_window(struct window *window, int w, int h);
-static struct subwindow *get_new_subwindow(unsigned index);
-static void load_subwindow(struct window *window, struct subwindow *subwindow);
-static bool is_subwindow_loaded(unsigned index);
-static struct subwindow *transfer_subwindow(struct window *window, unsigned index);
-static struct subwindow *get_subwindow_by_xy(const struct window *window, int x, int y);
-static struct subwindow *get_subwindow_by_index(const struct window *window,
-		unsigned index, bool visible);
-static struct subwindow *get_subwindow_direct(unsigned index);
+static void wipe_window_aux_config(struct sdlpui_window *window);
+static void adjust_window_geometry(struct sdlpui_window *window);
+static void free_window(struct sdlpui_window *window);
+static struct sdlpui_window *get_window_by_id(struct my_app *a, Uint32 id);
+static struct sdlpui_window *get_window_direct(struct my_app *a,
+		unsigned index);
+static void resize_window(struct sdlpui_window *window, int w, int h);
+static void resize_subwindow(struct subwindow *subwindow);
+static struct subwindow *get_new_subwindow(struct my_app *a, unsigned index);
+static void load_subwindow(struct sdlpui_window *window,
+		struct subwindow *subwindow);
+static bool is_subwindow_loaded(struct my_app *a, unsigned index);
+static struct subwindow *transfer_subwindow(struct sdlpui_window *window,
+		unsigned index);
+static struct subwindow *get_subwindow_by_xy(const struct sdlpui_window *window,
+		int x, int y);
+static struct subwindow *get_subwindow_by_index(
+		const struct sdlpui_window *window, unsigned index,
+		bool visible);
+static struct subwindow *get_subwindow_direct(struct my_app *a, unsigned index);
 /* this function loads new subwindow if it's not already loaded */
-static struct subwindow *make_subwindow(struct window *window, unsigned index);
-static void sort_to_top(struct window *window);
-static void bring_to_top(struct window *window, struct subwindow *subwindow);
+static struct subwindow *make_subwindow(struct sdlpui_window *window,
+		unsigned index);
+static void sort_to_top(struct sdlpui_window *window);
+static void bring_to_top(struct sdlpui_window *window,
+		struct subwindow *subwindow);
 static void render_borders(struct subwindow *subwindow);
-static SDL_Texture *load_image(const struct window *window, const char *path);
-static void reload_all_graphics(graphics_mode *mode);
+static SDL_Texture *load_image(const struct sdlpui_window *window,
+		const char *path);
+static void reload_all_graphics(struct my_app *a, graphics_mode *mode);
 static void free_graphics(struct graphics *graphics);
-static void load_terms(void);
+static void load_terms(struct my_app *a);
 static void load_term(struct subwindow *subwindow);
 static void clear_pw_flag(struct subwindow *subwindow);
-static bool adjust_subwindow_geometry(const struct window *window,
+static bool adjust_subwindow_geometry(const struct sdlpui_window *window,
 		struct subwindow *subwindow);
 static bool is_ok_col_row(const struct subwindow *subwindow,
 		const SDL_Rect *rect, int cell_w, int cell_h);
 static void resize_rect(SDL_Rect *rect,
 		int left, int top, int right, int bottom);
+static void crop_rects(SDL_Rect *src, SDL_Rect *dst);
 static bool is_point_in_rect(int x, int y, const SDL_Rect *rect);
 static bool is_close_to(int a, int b, unsigned range);
-static bool is_over_status_bar(const struct status_bar *status_bar, int x, int y);
-static void make_button_bank(struct button_bank *bank);
-static void free_button_bank(struct button_bank *button_bank);
-static void free_menu_panel(struct menu_panel *menu_panel);
-static struct menu_panel *get_menu_panel_by_xy(struct menu_panel *menu_panel,
-		int x, int y);
-static void refresh_angband_terms(void);
+static void handle_window_closed(struct my_app *a,
+		struct sdlpui_window *window);
+static void refresh_angband_terms(struct my_app *a);
 static void handle_quit(void);
-static void wait_anykey(void);
+static void wait_anykey(struct my_app *a);
+static void keyboard_event_to_angband_key(const SDL_KeyboardEvent *key,
+		bool kp_as_mod, keycode_t *ch, uint8_t *mods);
+static void textinput_event_to_angband_key(const SDL_TextInputEvent *key,
+		bool kp_as_mod, keycode_t *ch, uint8_t *mods);
+static void recreate_textures(struct my_app *a, bool all);
+
+/* Global variables. */
+
+const char help_sdl2[] = "SDL2 frontend, subopts -v";
+static struct my_app g_app;
+static Uint32 SHORTCUT_EDITOR_CODE;
+
+/*
+ * Provide the hooks needed by primitive UI toolkit for SDL2.
+ */
+SDL_Renderer *sdlpui_get_renderer(struct sdlpui_window *w)
+{
+	return w->renderer;
+}
+
+TTF_Font *sdlpui_get_ttf(struct sdlpui_window *w)
+{
+	assert(w->dialog_font && w->dialog_font->ttf.handle);
+	return w->dialog_font->ttf.handle;
+}
+
+struct sdlpui_stipple *sdlpui_get_stipple(struct sdlpui_window *w)
+{
+	return &w->stipple;
+}
+
+const SDL_Color *sdlpui_get_color(struct sdlpui_window *w, int role)
+{
+	int idx;
+
+	switch (role) {
+	case SDLPUI_COLOR_MENU_BG:
+	case SDLPUI_COLOR_COUNTERSINK:
+		idx = COLOUR_DARK;
+		break;
+
+	case SDLPUI_COLOR_MENU_FG:
+	case SDLPUI_COLOR_DIALOG_FG:
+	case SDLPUI_COLOR_DIALOG_BORDER:
+		idx = COLOUR_WHITE;
+		break;
+
+	case SDLPUI_COLOR_MENU_BORDER:
+	case SDLPUI_COLOR_DIALOG_BG:
+		idx = COLOUR_SHADE;
+		break;
+
+	default:
+		/*
+		 * Should not happen; assign a safe index in case assertions
+		 * are optimized away.
+		 */
+		SDL_assert(0);
+		idx = 0;
+		break;
+	}
+
+	SDL_assert(idx >= 0 && idx < MAX_COLORS);
+	return &w->app->colors[idx];
+}
+
+void sdlpui_signal_redraw(struct sdlpui_window *w)
+{
+	w->dirty = true;
+}
+
+void sdlpui_dialog_push_to_top(struct sdlpui_window *w, struct sdlpui_dialog *d)
+{
+	bool redraw = true;
+
+	/* Unlink. */
+	if (d->next) {
+		d->next->prev = d->prev;
+	} else if (w->d_tail == d) {
+		w->d_tail = d->prev;
+	}
+	if (d->prev) {
+		d->prev->next = d->next;
+	} else if (w->d_head == d) {
+		redraw = false;
+		w->d_head = d->next;
+	}
+
+	/* Put at the top. */
+	d->prev = NULL;
+	d->next = w->d_head;
+	if (d->next) {
+		d->next->prev = d;
+	} else {
+		SDL_assert(!w->d_tail);
+		w->d_tail = d;
+	}
+	w->d_head = d;
+
+	if (redraw) {
+		sdlpui_signal_redraw(w);
+	}
+}
+
+void sdlpui_dialog_pop(struct sdlpui_window *w, struct sdlpui_dialog *d)
+{
+	if (w->d_mouse == d) {
+		w->d_mouse = NULL;
+	}
+	if (w->d_key == d) {
+		w->d_key = NULL;
+	}
+	if (d->next) {
+		d->next->prev = d->prev;
+	} else {
+		SDL_assert(w->d_tail == d);
+		w->d_tail = d->prev;
+	}
+	if (d->prev) {
+		d->prev->next = d->next;
+	} else {
+		SDL_assert(w->d_head == d);
+		w->d_head = d->next;
+	}
+	w->dirty = true;
+}
+
+void sdlpui_dialog_gain_key_focus(struct sdlpui_window *w,
+		struct sdlpui_dialog *d)
+{
+	w->d_key = d;
+}
+
+void sdlpui_dialog_yield_key_focus(struct sdlpui_window *w,
+		struct sdlpui_dialog *d)
+{
+	if (w->d_key == d) {
+		w->d_key = NULL;
+	}
+}
+
+void sdlpui_dialog_gain_mouse_focus(struct sdlpui_window *w,
+		struct sdlpui_dialog *d)
+{
+	w->d_mouse = d;
+}
+
+void sdlpui_dialog_yield_mouse_focus(struct sdlpui_window *w,
+		struct sdlpui_dialog *d)
+{
+	if (w->d_mouse == d) {
+		w->d_mouse = NULL;
+	}
+}
+
+struct sdlpui_dialog *sdlpui_dialog_with_key_focus(struct sdlpui_window *w)
+{
+	return w->d_key;
+}
+
+struct sdlpui_dialog *sdlpui_dialog_with_mouse_focus(struct sdlpui_window *w)
+{
+	return w->d_mouse;
+}
+
+void sdlpui_force_quit(void)
+{
+	quit("sdlpui failure");
+}
 
 /* Functions */
 
-static void render_clear(const struct window *window,
+static void log_window_details(int my_index, SDL_Window *w, SDL_Renderer *r)
+{
+	Uint32 flags = SDL_GetWindowFlags(w);
+	int wid, hgt, x, y, bt, bl, bb, br;
+	SDL_RendererInfo r_info;
+
+	SDL_Log("Window %d:", my_index);
+	SDL_Log("    Display index and ID: %d %lu",
+		SDL_GetWindowDisplayIndex(w),
+		(unsigned long)SDL_GetWindowID(w));
+	SDL_GetWindowPosition(w, &x, &y);
+	SDL_GetWindowSize(w, &wid, &hgt);
+	SDL_Log("    Geometry: (%d, %d) %d x %d", x, y, wid, hgt);
+	SDL_GetWindowBordersSize(w, &bt, &bl, &bb, &br);
+	SDL_Log("    Border sizes: %d %d %d %d", bt, bl, bb, br);
+	/* Skipping the more transient flags about focus and grabs. */
+	SDL_Log("    Flags:%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+		(flags & SDL_WINDOW_FULLSCREEN) ? " FULLSCREEN" : "",
+		(flags & SDL_WINDOW_OPENGL) ? " OPENGL" : "",
+		(flags & SDL_WINDOW_SHOWN) ? " SHOWN" : "",
+		(flags & SDL_WINDOW_HIDDEN) ? " HIDDEN" : "",
+		(flags & SDL_WINDOW_BORDERLESS) ? " BORDERLESS" : "",
+		(flags & SDL_WINDOW_RESIZABLE) ? " RESIZABLE" : "",
+		(flags & SDL_WINDOW_MINIMIZED) ? " MINIMIZED" : "",
+		(flags & SDL_WINDOW_MAXIMIZED) ? " MAXIMIZED" : "",
+		(flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
+		? " FULLSCREEN_DESKTOP" : "",
+		(flags & SDL_WINDOW_FOREIGN) ? " FOREIGN" : "",
+		(flags & SDL_WINDOW_ALLOW_HIGHDPI) ? " ALLOW_HIGHDPI" : "",
+		(flags & SDL_WINDOW_ALWAYS_ON_TOP) ? " ALWAYS_ON_TOP" : "",
+		(flags & SDL_WINDOW_SKIP_TASKBAR) ? " SKIP_TASKBAR" : "",
+		(flags & SDL_WINDOW_UTILITY) ? " UTILITY" : "",
+		(flags & SDL_WINDOW_POPUP_MENU) ? " POPUP_MENU" : "",
+		(flags & SDL_WINDOW_VULKAN) ? " VULKAN" : "",
+		(flags & SDL_WINDOW_METAL) ? " METAL" : "");
+
+	if (!r) return;
+	if (SDL_GetRendererInfo(r, &r_info)) {
+		SDL_Log("    Renderer: No details available: %s",
+			SDL_GetError());
+	} else {
+		SDL_Log("    Renderer: %s", r_info.name);
+		if (SDL_GetRendererOutputSize(r, &wid, &hgt)) {
+			SDL_Log("        Output size: %s", SDL_GetError());
+		} else {
+			SDL_Log("        Output size: %d x %d", wid, hgt);
+		}
+		SDL_Log("        Maximum texture size: %d x %d",
+			r_info.max_texture_width, r_info.max_texture_height);
+		SDL_Log("        Flags:%s%s%s%s",
+			(r_info.flags & SDL_RENDERER_SOFTWARE)
+			? " SOFTWARE" : "",
+			(r_info.flags & SDL_RENDERER_ACCELERATED)
+			? " ACCELERATED" : "",
+			(r_info.flags & SDL_RENDERER_PRESENTVSYNC)
+			? " PRESENTVSYNC" : "",
+			(r_info.flags & SDL_RENDERER_TARGETTEXTURE)
+			? " TARGETTEXTURE" : "");
+	}
+}
+
+static void render_clear(const struct sdlpui_window *window,
 		SDL_Texture *texture, const SDL_Color *color)
 {
 	SDL_SetRenderTarget(window->renderer, texture);
@@ -663,7 +784,7 @@ static void render_clear(const struct window *window,
 	SDL_RenderClear(window->renderer);
 }
 
-static void render_wallpaper_tiled(const struct window *window)
+static void render_wallpaper_tiled(const struct sdlpui_window *window)
 {
 	SDL_SetRenderTarget(window->renderer, NULL);
 
@@ -681,13 +802,13 @@ static void render_wallpaper_tiled(const struct window *window)
 	}
 }
 
-static void render_wallpaper_scaled(const struct window *window)
+static void render_wallpaper_scaled(const struct sdlpui_window *window)
 {
 	SDL_SetRenderTarget(window->renderer, NULL);
 	SDL_RenderCopy(window->renderer, window->wallpaper.texture, NULL, NULL);
 }
 
-static void render_wallpaper_centered(const struct window *window)
+static void render_wallpaper_centered(const struct sdlpui_window *window)
 {
 	SDL_Rect rect;
 
@@ -700,7 +821,7 @@ static void render_wallpaper_centered(const struct window *window)
 	SDL_RenderCopy(window->renderer, window->wallpaper.texture, NULL, &rect);
 }
 
-static void render_background(const struct window *window)
+static void render_background(const struct sdlpui_window *window)
 {
 	render_clear(window, NULL, &window->color);
 
@@ -723,36 +844,7 @@ static void render_background(const struct window *window)
 	}
 }
 
-static void render_all(const struct window *window)
-{
-	render_background(window);
-
-	SDL_RenderCopy(window->renderer,
-			window->status_bar.texture, NULL, &window->status_bar.full_rect);
-
-	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
-		struct subwindow *subwindow = window->subwindows[i];
-		if (subwindow != NULL && subwindow->visible) {
-			SDL_RenderCopy(window->renderer,
-					subwindow->texture,
-					NULL, &subwindow->full_rect);
-		}
-	}
-}
-
-static void render_status_bar(const struct window *window)
-{
-	render_clear(window, window->status_bar.texture, &window->status_bar.color);
-
-	for (size_t i = 0; i < window->status_bar.button_bank.number; i++) {
-		struct button *button = &window->status_bar.button_bank.buttons[i];
-		if (button->callbacks.on_render != NULL) {
-			button->callbacks.on_render(window, button);
-		}
-	}
-}
-
-static void render_outline_rect(const struct window *window,
+static void render_outline_rect(const struct sdlpui_window *window,
 		SDL_Texture *texture, const SDL_Rect *rect, const SDL_Color *color)
 {
 	SDL_SetRenderTarget(window->renderer, texture);
@@ -761,7 +853,7 @@ static void render_outline_rect(const struct window *window,
 	SDL_RenderDrawRect(window->renderer, rect);
 }
 
-static void render_outline_rect_width(const struct window *window,
+static void render_outline_rect_width(const struct sdlpui_window *window,
 		SDL_Texture *texture, const SDL_Rect *rect, const SDL_Color *color, int width)
 {
 	SDL_Rect dst = *rect;
@@ -772,7 +864,7 @@ static void render_outline_rect_width(const struct window *window,
 	}
 }
 
-static void render_fill_rect(const struct window *window,
+static void render_fill_rect(const struct sdlpui_window *window,
 		SDL_Texture *texture, const SDL_Rect *rect, const SDL_Color *color)
 {
 	SDL_SetRenderTarget(window->renderer, texture);
@@ -781,13 +873,65 @@ static void render_fill_rect(const struct window *window,
 	SDL_RenderFillRect(window->renderer, rect);
 }
 
-static void render_window_in_menu(const struct window *window)
+static void render_all(struct sdlpui_window *window)
 {
+	size_t i;
+	struct sdlpui_dialog *d;
+
+	render_background(window);
+
+	for (d = window->d_tail; d; d = d->prev) {
+		if (d->texture) {
+			SDL_RenderCopy(window->renderer, d->texture, NULL,
+				&d->rect);
+		} else if (d->ftb->render) {
+			(*d->ftb->render)(d, window);
+		}
+	}
+
+	for (i = 0; i < N_ELEMENTS(window->subwindows); i++) {
+		struct subwindow *subwindow = window->subwindows[i];
+
+		if (subwindow != NULL && subwindow->visible) {
+			SDL_RenderCopy(window->renderer,
+					subwindow->texture,
+					NULL, &subwindow->full_rect);
+		}
+	}
+}
+
+static void render_status_bar(struct sdlpui_window *window)
+{
+	struct sdlpui_dialog *d;
+
+	for (d = window->d_tail; d; d = d->prev) {
+		if (d->dirty) {
+			if (d->ftb->render) {
+				(*d->ftb->render)(d, window);
+			}
+			if (d->texture) {
+				SDL_RenderCopy(window->renderer, d->texture,
+					NULL, &d->rect);
+			}
+		} else if (d->texture) {
+			SDL_RenderCopy(window->renderer, d->texture, NULL,
+				&d->rect);
+		} else if (d->ftb->render) {
+			(*d->ftb->render)(d, window);
+		}
+	}
+}
+
+static void render_window_while_menu_active(struct sdlpui_window *window)
+{
+	size_t i;
+	struct sdlpui_dialog *d;
+
 	render_background(window);
 
 	SDL_SetRenderTarget(window->renderer, NULL);
 
-	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
+	for (i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
 		if (subwindow != NULL && subwindow->visible) {
 			if (subwindow->sizing_rect.w > 0 && subwindow->sizing_rect.h > 0) {
@@ -804,14 +948,40 @@ static void render_window_in_menu(const struct window *window)
 			SDL_RenderCopy(window->renderer,
 					subwindow->texture,
 					NULL, &subwindow->full_rect);
+			if (subwindow->index == window->outlined_subwindow) {
+				int outline_width = (subwindow->full_rect.w
+					- subwindow->inner_rect.w) / 2
+					- subwindow->borders.width;
+				SDL_Rect outline_rect = subwindow->full_rect;
+
+				resize_rect(&outline_rect,
+					subwindow->borders.width,
+					subwindow->borders.width,
+					-subwindow->borders.width,
+					-subwindow->borders.width);
+				render_outline_rect_width(window, NULL,
+					&outline_rect,
+					&subwindow->app->colors[DEFAULT_SUBWINDOW_BORDER_COLOR],
+					outline_width);
+			}
 		}
 	}
 
-	/* render it last to allow the menu to draw over subwindows */
-	render_status_bar(window);
-	SDL_SetRenderTarget(window->renderer, NULL);
-	SDL_RenderCopy(window->renderer,
-			window->status_bar.texture, NULL, &window->status_bar.full_rect);
+	/*
+	 * Render any dialogs or menus last, back to front, so they can draw
+	 * over subwindows.
+	 */
+	for (d = window->d_tail; d; d = d->prev) {
+		if (d->ftb->render && (d->dirty || !d->texture)) {
+			(*d->ftb->render)(d, window);
+		}
+		d->dirty = false;
+		if (d->texture) {
+			SDL_SetRenderTarget(window->renderer, NULL);
+			SDL_RenderCopy(window->renderer, d->texture, NULL,
+				&d->rect);
+		}
+	}
 }
 
 static void set_subwindow_alpha(struct subwindow *subwindow, int alpha)
@@ -820,7 +990,7 @@ static void set_subwindow_alpha(struct subwindow *subwindow, int alpha)
 	SDL_SetTextureAlphaMod(subwindow->aux_texture, alpha);
 }
 
-static void set_subwindows_alpha(const struct window *window, int alpha)
+static void set_subwindows_alpha(const struct sdlpui_window *window, int alpha)
 {
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
@@ -830,42 +1000,41 @@ static void set_subwindows_alpha(const struct window *window, int alpha)
 	}
 }
 
-/* this function allows to perform special things that are not
+/** this function allows to perform special things that are not
  * needed while playing the game, like moving terms */
-static void redraw_window_in_menu(struct window *window)
+static void redraw_window_while_menu_active(struct sdlpui_window *window)
 {
 	set_subwindows_alpha(window, window->alpha);
-	render_window_in_menu(window);
+	render_window_while_menu_active(window);
 	SDL_RenderPresent(window->renderer);
 	window->next_redraw = SDL_GetTicks() + window->delay;
 }
 
-/* this function is mostly used while normally playing the game */
-static void redraw_window(struct window *window)
+/** this function is mostly used while normally playing the game */
+static void redraw_window(struct sdlpui_window *window)
 {
-	if (window->status_bar.in_menu) {
-		/* we called (perhaps via refresh_angband_terms()) Term_fresh() in menu */
-		redraw_window_in_menu(window);
+	if (window->move_state.moving || window->size_state.sizing
+			|| window->d_mouse || window->d_key) {
+		redraw_window_while_menu_active(window);
 		return;
 	}
 
-	/* XXX XXX dont forget to prerender status bar in loader! */
 	render_all(window);
 	SDL_RenderPresent(window->renderer);
 	window->next_redraw = SDL_GetTicks() + window->delay;
 }
 
-static void try_redraw_window(struct window *window)
+static void try_redraw_window(struct sdlpui_window *window)
 {
 	if (window->next_redraw < SDL_GetTicks()) {
 		redraw_window(window);
 	}
 }
 
-static void redraw_all_windows(bool dirty)
+static void redraw_all_windows(struct my_app *a, bool dirty)
 {
 	for (unsigned i = 0; i < MAX_WINDOWS; i++) {
-		struct window *window = get_window_direct(i);
+		struct sdlpui_window *window = get_window_direct(a, i);
 		if (window != NULL && (dirty ? window->dirty : true)) {
 			render_status_bar(window);
 			redraw_window(window);
@@ -874,42 +1043,22 @@ static void redraw_all_windows(bool dirty)
 	}
 }
 
-static void render_utf8_string(const struct window *window,
-		const struct font *font, SDL_Texture *dst_texture,
-		SDL_Color fg, SDL_Rect rect, const char *utf8_string)
-{
-	SDL_Surface *surface = TTF_RenderUTF8_Blended(font->ttf.handle, utf8_string, fg);
-	SDL_Texture *src_texture = SDL_CreateTextureFromSurface(window->renderer, surface);
-	SDL_FreeSurface(surface);
-
-	rect.x += font->ttf.glyph.x;
-	rect.y += font->ttf.glyph.y;
-
-	SDL_SetRenderTarget(window->renderer, dst_texture);
-	SDL_RenderCopy(window->renderer, src_texture, NULL, &rect);
-
-	SDL_DestroyTexture(src_texture);
-}
-
-/* this function is typically called in a loop, so for efficiency it doesnt
+/** this function is typically called in a loop, so for efficiency it doesn't
  * SetRenderTarget; caller must do it (but it does SetTextureColorMod) */
-static void render_glyph_mono(const struct window *window,
+static void render_glyph_mono(const struct sdlpui_window *window,
 		const struct font *font, SDL_Texture *dst_texture,
 		int x, int y, const SDL_Color *fg, uint32_t codepoint)
 {
-	if (codepoint == DEFAULT_CHAR_BLANK) {
+	if (codepoint == ' ') {
 		return;
 	}
 
-	SDL_Rect dst = {
-		x + font->ttf.glyph.x,
-		y + font->ttf.glyph.y,
-		0, 0
-	};
+	SDL_Rect dst = {x, y, font->ttf.glyph.w, font->ttf.glyph.h};
 
 	if (IS_CACHED_ASCII_CODEPOINT(codepoint)) {
-		dst.w = font->cache.rects[codepoint].w;
-		dst.h = font->cache.rects[codepoint].h;
+		SDL_Rect src = font->cache.rects[codepoint];
+
+		crop_rects(&src, &dst);
 
 		SDL_SetTextureColorMod(font->cache.texture, fg->r, fg->g, fg->b);
 
@@ -922,17 +1071,12 @@ static void render_glyph_mono(const struct window *window,
 			return;
 		}
 
-		SDL_Rect src = {
-			0, 0,
-			MIN(surface->w, font->ttf.glyph.w - font->ttf.glyph.x),
-			MIN(surface->h, font->ttf.glyph.h - font->ttf.glyph.y)
-		};
-
-		dst.w = src.w;
-		dst.h = src.h;
-
 		SDL_Texture *texture = SDL_CreateTextureFromSurface(window->renderer, surface);
 		assert(texture != NULL);
+
+		SDL_Rect src = {0, 0, surface->w, surface->h};
+
+		crop_rects(&src, &dst);
 
 		SDL_RenderCopy(window->renderer, texture, &src, &dst);
 
@@ -944,11 +1088,7 @@ static void render_glyph_mono(const struct window *window,
 static void render_cursor(struct subwindow *subwindow, 
 		int col, int row, bool big)
 {
-	if (!subwindow->window->cursor) {
-		return;
-	}
-	
-	SDL_Color color = g_colors[DEFAULT_SUBWINDOW_CURSOR_COLOR];
+	SDL_Color color = subwindow->app->colors[DEFAULT_SUBWINDOW_CURSOR_COLOR];
 	SDL_Rect rect = {
 		subwindow->inner_rect.x + subwindow->font_width * col,
 		subwindow->inner_rect.y + subwindow->font_height * row,
@@ -974,10 +1114,10 @@ static void render_grid_cell_text(const struct subwindow *subwindow,
 	/* apparently either the same as a or obscured by a */
 	(void) tc;
 
-	SDL_Color fg = g_colors[a % MAX_COLORS];
+	SDL_Color fg = subwindow->app->colors[a % MAX_COLORS];
 	SDL_Color bg;
 
-	switch (ta / MAX_COLORS) {
+	switch (ta / MULT_BG) {
 		case BG_BLACK:
 			bg = subwindow->color;
 			break;
@@ -985,11 +1125,11 @@ static void render_grid_cell_text(const struct subwindow *subwindow,
 			bg = fg;
 			break;
 		case BG_DARK:
-			bg = g_colors[DEFAULT_SHADE_COLOR];
+			bg = subwindow->app->colors[DEFAULT_SHADE_COLOR];
 			break;
 		default:
 			/* debugging */
-			bg = g_colors[DEFAULT_ERROR_COLOR];
+			bg = subwindow->app->colors[DEFAULT_ERROR_COLOR];
 	}
 
 	SDL_Rect rect = {
@@ -1004,7 +1144,7 @@ static void render_grid_cell_text(const struct subwindow *subwindow,
 			subwindow->font, texture, rect.x, rect.y, &fg, (uint32_t) c);
 }
 
-/* does not SetRenderTarget */
+/** does not SetRenderTarget */
 static void render_tile_rect_scaled(const struct subwindow *subwindow,
 		int col, int row, SDL_Rect dst, int a, int c)
 {
@@ -1033,7 +1173,7 @@ static void render_tile_rect_scaled(const struct subwindow *subwindow,
 }
 
 static void render_tile_font_scaled(const struct subwindow *subwindow,
-		int col, int row, int a, int c, bool fill)
+		int col, int row, int a, int c, bool fill, int dhrclip)
 {
 	struct graphics *graphics = &subwindow->window->graphics;
 
@@ -1059,7 +1199,7 @@ static void render_tile_font_scaled(const struct subwindow *subwindow,
 	src.y = src_row * src.h;
 
 	if (graphics->overdraw_row != 0
-			&& row > 2
+			&& row > dhrclip
 			&& src_row >= graphics->overdraw_row
 			&& src_row <= graphics->overdraw_max)
 	{
@@ -1070,9 +1210,6 @@ static void render_tile_font_scaled(const struct subwindow *subwindow,
 
 		SDL_RenderCopy(subwindow->window->renderer,
 				graphics->texture, &src, &dst);
-
-		Term_mark(col, row - tile_height);
-		Term_mark(col, row);
 	} else {
 		SDL_RenderCopy(subwindow->window->renderer,
 				graphics->texture, &src, &dst);
@@ -1102,7 +1239,7 @@ static void render_grid_cell_tile(const struct subwindow *subwindow,
 	render_tile_rect_scaled(subwindow, x, y, tile, a, c);
 }
 
-static void clear_all_borders(struct window *window)
+static void clear_all_borders(struct sdlpui_window *window)
 {
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
@@ -1126,7 +1263,7 @@ static void render_borders(struct subwindow *subwindow)
 			color = &subwindow->color;
 		}
 	} else {
-		color = &g_colors[DEFAULT_ERROR_COLOR];
+		color = &subwindow->app->colors[DEFAULT_ERROR_COLOR];
 	}
 
 	render_outline_rect_width(subwindow->window,
@@ -1134,1558 +1271,2067 @@ static void render_borders(struct subwindow *subwindow)
 			subwindow->borders.width);
 }
 
-static SDL_Texture *make_subwindow_texture(const struct window *window, int w, int h)
+static SDL_Texture *make_subwindow_texture(const struct sdlpui_window *window,
+		int w, int h)
 {
 	SDL_Texture *texture = SDL_CreateTexture(window->renderer,
 			window->pixelformat, SDL_TEXTUREACCESS_TARGET, w, h);
 	if (texture == NULL) {
-		quit_fmt("cant create texture for subwindow in window %u: %s",
+		quit_fmt("cannot create texture for subwindow in window %u: %s",
 				window->index, SDL_GetError());
 	}
 
 	if (SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND) != 0) {
 		SDL_DestroyTexture(texture);
-		quit_fmt("cant set blend mode for texture in window %u: %s",
+		quit_fmt("cannot set blend mode for texture in window %u: %s",
 				window->index, SDL_GetError());
 	}
 
 	return texture;
 }
 
-static void render_menu_panel(const struct window *window, struct menu_panel *menu_panel)
+static void get_minimum_subwindow_size(bool is_main, int cell_w, int cell_h,
+		int *minw, int *minh)
 {
-	if (menu_panel == NULL) {
+	int min_cols, min_rows;
+
+	if (is_main) {
+		min_cols = MIN_COLS_MAIN;
+		min_rows = MIN_ROWS_MAIN;
+	} else {
+		min_cols = MIN_COLS_OTHER;
+		min_rows = MIN_ROWS_OTHER;
+	}
+	*minw = min_cols * cell_w + 2 * DEFAULT_BORDER;
+	*minh = min_rows * cell_h + 2 * DEFAULT_BORDER;
+}
+
+static void get_minimum_window_size(struct sdlpui_window *window,
+		int *minw, int *minh)
+{
+	int max_sub_w = 0, max_sub_h = 0;
+	bool have_sub = false;
+	int i;
+
+	if (window->status_bar->ftb->query_minimum_size) {
+		(*window->status_bar->ftb->query_minimum_size)(
+			window->status_bar, window, minw, minh);
+	} else {
+		(*window->status_bar->ftb->query_natural_size)(
+			window->status_bar, window, minw, minh);
+	}
+
+	for (i = 0; i < MAX_SUBWINDOWS; ++i) {
+		if (window->subwindows[i]) {
+			int this_min_w, this_min_h;
+
+			get_minimum_subwindow_size(
+				window->subwindows[i]->index == MAIN_SUBWINDOW,
+				window->subwindows[i]->font->ttf.glyph.w,
+				window->subwindows[i]->font->ttf.glyph.h,
+				&this_min_w, &this_min_h);
+			max_sub_w = MAX(max_sub_w, this_min_w);
+			max_sub_h = MAX(max_sub_h, this_min_h);
+			have_sub = true;
+		}
+	}
+
+	if (!have_sub) {
+		/*
+		 * There's no currently configured subwindows; leave room
+		 * for one.
+		 */
+		get_minimum_subwindow_size(false, window->app->def_font_w,
+			window->app->def_font_h, &max_sub_w, &max_sub_h);
+	}
+
+	*minw = MAX(*minw, max_sub_w);
+	*minh += max_sub_h;
+}
+
+/**
+ * Return true if the given font (face and size) can be used for a subwindow.
+ *
+ * \param font is the font of interest.
+ * \param subwindow is the subwindow of the interest.
+ * \param sizing_rect will, if not NULL and the return value is true, be
+ * dereferenced and the sizes set to the dimensions of the bounding rectangle
+ * for the subwindow when using the given font.
+ */
+static bool is_usable_font_for_subwindow(const struct font *font,
+		const struct subwindow *subwindow, SDL_Rect *sizing_rect)
+{
+	SDL_Rect bounds = subwindow->full_rect;
+
+	if (!is_ok_col_row(subwindow, &bounds, font->ttf.glyph.w,
+			font->ttf.glyph.h)) {
+		get_minimum_subwindow_size(subwindow->index == MAIN_SUBWINDOW,
+			font->ttf.glyph.w, font->ttf.glyph.h,
+			&bounds.w, &bounds.h);
+	}
+
+	if (bounds.w > subwindow->window->inner_rect.w
+			|| bounds.h > subwindow->window->inner_rect.h)
+	{
+		return false;
+	}
+
+	if (sizing_rect) {
+		*sizing_rect = bounds;
+	}
+	return true;
+}
+
+/**
+ * Calculate the range of font sizes that can be used for a subwindow.
+ *
+ * \param subwindow is the subwindow to use.
+ * \param font is the font of interest.  If NULL, the current font for the
+ * subwindow is used.
+ * \param min_size is set to the minimum point size that can be used.  If
+ * the font is not a vector font, this will be set to zero.
+ * \param max_size is set to one past the maximum point size that can be used.
+ * If no size works, *max_size will be the same as *min_size when the function
+ * returns.  If the font is not a vector font and the subwindow can use the
+ * font, *max_size will be one.
+ */
+static void calculate_subwindow_font_size_bounds(struct subwindow *subwindow,
+		const struct font_info *font, int *min_size, int *max_size)
+{
+	struct font *trial_font;
+	int lo, hi;
+
+	if (!font) {
+		assert(subwindow->font);
+		font = &subwindow->app->fonts[subwindow->font->index];
+	}
+
+	if (font->type != FONT_TYPE_VECTOR) {
+		*min_size = 0;
+		trial_font = make_font(subwindow->window, font->name, 0);
+		if (is_usable_font_for_subwindow(trial_font, subwindow, NULL)) {
+			*max_size = 1;
+		} else {
+			*max_size = 0;
+		}
+		free_font(trial_font);
 		return;
 	}
 
-	for (size_t i = 0; i < menu_panel->button_bank.number; i++) {
-		struct button *button = &menu_panel->button_bank.buttons[i];
-
-		assert(button->callbacks.on_render != NULL);
-		button->callbacks.on_render(window, button);
-	}
-	render_outline_rect(window,
-			NULL, &menu_panel->rect, &g_colors[DEFAULT_MENU_PANEL_OUTLINE_COLOR]);
-
-	/* recurse */
-	render_menu_panel(window, menu_panel->next);
-}
-
-static SDL_Rect get_button_caption_rect(const struct button *button)
-{
-	SDL_Rect rect = {
-		button->full_rect.x + button->inner_rect.x,
-		button->full_rect.y + button->inner_rect.y,
-		button->inner_rect.w,
-		button->inner_rect.h
-	};
-
-	return rect;
-}
-
-static void render_button_menu(const struct window *window,
-		struct button *button, const SDL_Color *fg, const SDL_Color *bg)
-{
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_fill_rect(window,
-			NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			*fg, rect, button->caption);
-}
-
-static void render_button_menu_toggle(const struct window *window,
-		struct button *button, bool active)
-{
-	SDL_Color *bg;
-	SDL_Color *fg;
-
-	if (active) {
-		fg = &g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = &g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	render_button_menu(window, button, fg, bg);
-}
-
-static void render_button_menu_simple(const struct window *window, struct button *button)
-{
-	SDL_Color *fg;
-	SDL_Color *bg;
-
-	if (button->highlighted) {
-		fg = &g_colors[DEFAULT_MENU_FG_ACTIVE_COLOR];
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		fg = &g_colors[DEFAULT_MENU_FG_INACTIVE_COLOR];
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	render_button_menu(window, button, fg, bg);
-}
-
-static void render_button_menu_cursor(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	render_button_menu_toggle(window, button, window->cursor);
-}
-
-static void render_button_menu_pw(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_TERMVAL);
-
-	struct subwindow *subwindow = button->info.data.termval.subwindow;
-	u32b value = button->info.data.termval.value;
-
-	assert(subwindow->index != MAIN_SUBWINDOW);
-	assert(subwindow->index < N_ELEMENTS(window_flag));
-
-	render_button_menu_toggle(window,
-			button,
-			(window_flag[subwindow->index] & value) == value);
-}
-
-static void render_button_menu_terms(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	if (button->highlighted) {
-		/* draw a border around subwindow, so that it would be easy to see
-		 * which subwindow corresponds to that button */
-		struct subwindow *subwindow = button->info.data.subval;
-		int outline_width = (subwindow->full_rect.w - subwindow->inner_rect.w) / 2
-				- subwindow->borders.width;
-		SDL_Rect outline_rect = subwindow->full_rect;
-		resize_rect(&outline_rect,
-				subwindow->borders.width, subwindow->borders.width,
-				-subwindow->borders.width, -subwindow->borders.width);
-		render_outline_rect_width(window,
-				NULL,
-				&outline_rect,
-				&g_colors[DEFAULT_SUBWINDOW_BORDER_COLOR],
-				outline_width);
-	}
-
-	render_button_menu_simple(window, button);
-}
-
-static void render_button_menu_borders(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	struct subwindow *subwindow = button->info.data.subval;
-
-	render_button_menu_toggle(window, button, subwindow->borders.visible);
-}
-
-static void render_button_menu_alpha(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_ALPHAVAL);
-
-	struct subwindow *subwindow = button->info.data.alphaval.subwindow;
-	int alpha = button->info.data.alphaval.real_value;
-
-	SDL_Color fg;
-	SDL_Color *bg;
-
-	if (is_close_to(alpha, subwindow->color.a, DEFAULT_ALPHA_STEP / 2)) {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_fill_rect(window,
-			NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			fg, rect, format(button->caption, button->info.data.alphaval.show_value));
-}
-
-static void render_button_menu_top(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	struct subwindow *subwindow = button->info.data.subval;
-
-	render_button_menu_toggle(window, button, subwindow->always_top);
-}
-
-static void render_button_menu_tile_size(const struct window *window,
-		struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_IVAL);
-
-	assert(button->info.data.ival == BUTTON_TILE_SIZE_WIDTH
-			|| button->info.data.ival == BUTTON_TILE_SIZE_HEIGHT);
-
-	SDL_Color fg;
-	SDL_Color *bg;
-
-	if (window->graphics.id != GRAPHICS_NONE) {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	int scale = 0;
-	if (button->info.data.ival == BUTTON_TILE_SIZE_WIDTH) {
-		scale = tile_width;
-	} else if (button->info.data.ival == BUTTON_TILE_SIZE_HEIGHT) {
-		scale = tile_height;
-	}
-
-	render_fill_rect(window,
-			NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			fg, rect, format(button->caption, scale));
-}
-
-static void render_button_menu_tile_set(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_IVAL);
-
-	render_button_menu_toggle(window,
-			button, button->info.data.ival == current_graphics_mode->grafID);
-}
-
-static void render_button_menu_font_size(const struct window *window,
-		struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_FONTVAL);
-
-	SDL_Color fg;
-	SDL_Color *bg;
-
-	struct fontval fontval = button->info.data.fontval;
-
-	if (!button->info.data.fontval.size_ok) {
-		fg = g_colors[DEFAULT_ERROR_COLOR];
-	} else if (g_font_info[fontval.index].type == FONT_TYPE_VECTOR) {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_fill_rect(window,
-			NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			fg, rect, format(button->caption, fontval.subwindow->font->size));
-}
-
-static void render_button_menu_font_name(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_FONTVAL);
-
-	SDL_Color fg;
-	SDL_Color *bg;
-
-	struct subwindow *subwindow = button->info.data.fontval.subwindow;
-	size_t index = button->info.data.fontval.index;
-
-	if (!button->info.data.fontval.size_ok) {
-		fg = g_colors[DEFAULT_ERROR_COLOR];
-	} else if (subwindow->font->index == index) {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_fill_rect(window,
-			NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			fg, rect, button->caption);
-}
-
-static void render_button_menu_window(const struct window *window,
-		struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_UVAL);
-
-	struct window *w = get_window_direct(button->info.data.uval);
-
-	SDL_Color fg;
-	SDL_Color *bg;
-
-	if (w != NULL) {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_ACTIVE_COLOR];
-	} else {
-		fg = g_colors[DEFAULT_MENU_TOGGLE_FG_INACTIVE_COLOR];
-	}
-	if (button->highlighted) {
-		bg = &g_colors[DEFAULT_MENU_BG_ACTIVE_COLOR];
-	} else {
-		bg = &g_colors[DEFAULT_MENU_BG_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_fill_rect(window, NULL, &button->full_rect, bg);
-	render_utf8_string(window, window->status_bar.font, NULL, 
-			fg, rect, format(button->caption, button->info.data.uval));
-}
-
-static void render_button_menu_fullscreen(const struct window *window,
-		struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
-
-	render_button_menu_toggle(window, button,
-			window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
-}
-
-/* the menu proper is rendered via this callback, used by the "Menu" button */
-static void render_menu_button(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
-
-	SDL_Color color;
-	if (button->highlighted) {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_ACTIVE_COLOR];
-	} else {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_utf8_string(window, window->status_bar.font, window->status_bar.texture, 
-			color, rect, button->caption);
-
-	if (button->highlighted) {
-		render_menu_panel(window, window->status_bar.menu_panel);
-	}
-}
-
-static void render_button_subwindows(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_SUBWINDOWS, BUTTON_DATA_UVAL);
-
-	SDL_Color color;
-	if (has_visible_subwindow(window, button->info.data.uval)
-			|| button->highlighted) {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_ACTIVE_COLOR];
-	} else {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_INACTIVE_COLOR];
-	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_utf8_string(window, window->status_bar.font, window->status_bar.texture, 
-			color, rect, button->caption);
-}
-
-static void render_button_movesize(const struct window *window, struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MOVESIZE, BUTTON_DATA_IVAL);
-
-	bool active = false;
-	switch (button->info.data.ival) {
-		case BUTTON_MOVESIZE_MOVING:
-			active = window->move_state.active;
+	/* Find the smallest size that works. */
+	lo = MIN_VECTOR_FONT_SIZE;
+	while (1) {
+		if (lo > MAX_VECTOR_FONT_SIZE) {
+			/* No size works */
+			*min_size = DEFAULT_VECTOR_FONT_SIZE;
+			*max_size = DEFAULT_VECTOR_FONT_SIZE;
+			return;
+		}
+		trial_font = make_font(subwindow->window, font->name, lo);
+		if (is_usable_font_for_subwindow(trial_font, subwindow, NULL)) {
+			free_font(trial_font);
+			*min_size = lo;
 			break;
-		case BUTTON_MOVESIZE_SIZING:
-			active = window->size_state.active;
-			break;
-		default:
-			quit_fmt("button '%s' has wrong ival %d",
-					button->caption, button->info.data.ival);
-			break;
+		}
+		free_font(trial_font);
+		++lo;
 	}
 
-	SDL_Color color;
-	if (active || button->highlighted) {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_ACTIVE_COLOR];
+	/* Find the largest size that works using a binary search. */
+	lo = *min_size;
+	hi = MAX_VECTOR_FONT_SIZE + 1;
+	while (1) {
+		int try;
+
+		if (lo == hi - 1) {
+			*max_size = hi;
+			return;
+		}
+		try = (lo + hi) / 2;
+		trial_font = make_font(subwindow->window, font->name, try);
+		if (is_usable_font_for_subwindow(trial_font, subwindow, NULL)) {
+			lo = try;
+		} else {
+			hi = try;
+		}
+		free_font(trial_font);
+	}
+}
+
+static bool handle_shortcut_editor_key(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, const struct SDL_KeyboardEvent *e)
+{
+	struct shortcut_editor_data *pse;
+	keycode_t ch;
+	uint8_t mods;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	if (pse->changing_shortcut == -1) {
+		return sdlpui_dialog_handle_key(d, w, e);
+	}
+	keyboard_event_to_angband_key(e, w->app->kp_as_mod, &ch, &mods);
+	if (ch) {
+		char keypress_desc[40];
+
+		SDL_assert(pse->changing_shortcut >= 0
+			&& pse->changing_shortcut < MAX_WINDOWS);
+		w->app->menu_shortcuts[pse->changing_shortcut].type = EVT_KBRD;
+		w->app->menu_shortcuts[pse->changing_shortcut].code = ch;
+		w->app->menu_shortcuts[pse->changing_shortcut].mods = mods;
+		keypress_to_text(keypress_desc, sizeof(keypress_desc),
+			&w->app->menu_shortcuts[pse->changing_shortcut], true);
+		sdlpui_change_caption(
+			&pse->shortcut_displays[pse->changing_shortcut],
+			d, w, keypress_desc);
+		pse->changing_shortcut = -1;
+		sdlpui_change_caption(&pse->prompt_label, d, w, " ");
+		return true;
+	}
+	return false;
+}
+
+static bool handle_shortcut_editor_textin(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, const struct SDL_TextInputEvent *e)
+{
+	struct shortcut_editor_data *pse;
+	keycode_t ch;
+	uint8_t mods;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	if (pse->changing_shortcut == -1) {
+		return sdlpui_dialog_handle_textin(d, w, e);
+	}
+	textinput_event_to_angband_key(e, w->app->kp_as_mod, &ch, &mods);
+	if (ch) {
+		char keypress_desc[40];
+
+		SDL_assert(pse->changing_shortcut >= 0
+			&& pse->changing_shortcut < MAX_WINDOWS);
+		w->app->menu_shortcuts[pse->changing_shortcut].type = EVT_KBRD;
+		w->app->menu_shortcuts[pse->changing_shortcut].code = ch;
+		w->app->menu_shortcuts[pse->changing_shortcut].mods = mods;
+		keypress_to_text(keypress_desc, sizeof(keypress_desc),
+			&w->app->menu_shortcuts[pse->changing_shortcut], true);
+		sdlpui_change_caption(
+			&pse->shortcut_displays[pse->changing_shortcut],
+			d, w, keypress_desc);
+		pse->changing_shortcut = -1;
+		sdlpui_change_caption(&pse->prompt_label, d, w, " ");
+		return true;
+	}
+	return false;
+}
+
+static void render_shortcut_editor(struct sdlpui_dialog *d,
+		struct sdlpui_window *w)
+{
+	struct SDL_Renderer *r = sdlpui_get_renderer(w);
+	SDL_Rect dst_r = d->rect;
+	struct shortcut_editor_data *pse;
+	const SDL_Color *color;
+	int i;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	SDLPUI_RENDER_TRACER("shortcut editor", d, "(not extracted)", d->rect,
+		d->rect, d->texture);
+
+	SDL_SetRenderTarget(r, d->texture);
+	color = sdlpui_get_color(w, SDLPUI_COLOR_DIALOG_BG);
+	SDL_SetRenderDrawColor(r, color->r, color->g, color->b, color->a);
+	if (d->texture) {
+		dst_r.x = 0;
+		dst_r.y = 0;
+		SDL_RenderClear(r);
 	} else {
-		color = g_colors[DEFAULT_STATUS_BAR_BUTTON_INACTIVE_COLOR];
+		SDL_RenderFillRect(r, &dst_r);
 	}
-
-	SDL_Rect rect = get_button_caption_rect(button);
-
-	render_utf8_string(window, window->status_bar.font, window->status_bar.texture, 
-			color, rect, button->caption);
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		if (pse->labels[i].ftb->render) {
+			(*pse->labels[i].ftb->render)(&pse->labels[i], d, w, r);
+		}
+		if (pse->shortcut_displays[i].ftb->render) {
+			(*pse->shortcut_displays[i].ftb->render)(
+				&pse->shortcut_displays[i], d, w, r);
+		}
+		if (pse->change_buttons[i].ftb->render) {
+			(*pse->change_buttons[i].ftb->render)(
+				&pse->change_buttons[i], d, w, r);
+		}
+		if (pse->clear_buttons[i].ftb->render) {
+			(*pse->clear_buttons[i].ftb->render)(
+				&pse->clear_buttons[i], d, w, r);
+		}
+	}
+	if (pse->prompt_label.ftb->render) {
+		(*pse->prompt_label.ftb->render)(&pse->prompt_label, d, w, r);
+	}
+	if (pse->close_button.ftb->render) {
+		(*pse->close_button.ftb->render)(&pse->close_button, d, w, r);
+	}
+	if (pse->reset_button.ftb->render) {
+		(*pse->reset_button.ftb->render)(&pse->reset_button, d, w, r);
+	}
+	d->dirty = false;
 }
 
-static void show_about(const struct window *window)
+static void goto_shortcut_editor_first_control(struct sdlpui_dialog *d,
+		struct sdlpui_window *w)
 {
-	const char *about_text[] = {
-		buildid,
-		"See http://www.rephial.org",
-		"Visit our forum at http://angband.oook.cz/forum"
-	};
+	struct shortcut_editor_data *pse;
 
-	struct { SDL_Rect rect; const char *text; } elems[N_ELEMENTS(about_text)];
-	for (size_t i = 0; i < N_ELEMENTS(elems); i++) {
-		elems[i].text = about_text[i];
-	}
-
-	char path[4096];
-	path_build(path, sizeof(path), DEFAULT_ABOUT_ICON_DIR, DEFAULT_ABOUT_ICON);
-
-	SDL_Texture *texture = load_image(window, path);
-	SDL_Rect texture_rect = {0};
-	SDL_QueryTexture(texture, NULL, NULL, &texture_rect.w, &texture_rect.h);
-
-	SDL_Rect total = {
-		0, 0,
-		2 * DEFAULT_XTRA_BORDER + texture_rect.w,
-		/* the default icon just looks better without bottom border */
-		DEFAULT_XTRA_BORDER + texture_rect.h
-	};
-
-	for (size_t i = 0; i < N_ELEMENTS(elems); i++) {
-		int w;
-		int h;
-		get_string_metrics(window->status_bar.font,
-				elems[i].text, &w, &h);
-
-		elems[i].rect.h = h;
-		elems[i].rect.w = w;
-		elems[i].rect.y = total.h + (DEFAULT_LINE_HEIGHT(h) - h) / 2;
-
-		total.w = MAX(w + 2 * DEFAULT_XTRA_BORDER, total.w);
-		total.h += DEFAULT_LINE_HEIGHT(h);
-	}
-	total.h += DEFAULT_XTRA_BORDER;
-
-	total.x = window->full_rect.w / 2 - total.w / 2;
-	total.y = window->full_rect.h / 2 - total.h / 2;
-
-	render_window_in_menu(window);
-
-	render_fill_rect(window, NULL, &total, &g_colors[DEFAULT_ABOUT_BG_COLOR]);
-	render_outline_rect_width(window, NULL, &total,
-			&g_colors[DEFAULT_ABOUT_BORDER_OUTER_COLOR], DEFAULT_VISIBLE_BORDER);
-	resize_rect(&total,
-			DEFAULT_VISIBLE_BORDER, DEFAULT_VISIBLE_BORDER,
-			-DEFAULT_VISIBLE_BORDER, -DEFAULT_VISIBLE_BORDER);
-	render_outline_rect_width(window, NULL, &total,
-			&g_colors[DEFAULT_ABOUT_BORDER_INNER_COLOR], DEFAULT_VISIBLE_BORDER);
-
-	for (size_t i = 0; i < N_ELEMENTS(elems); i++) {
-		/* center the string in total rect */
-		elems[i].rect.x = total.x + (total.w - elems[i].rect.w) / 2;
-		/* make the y coord of string absolute (was relative to total rect) */
-		elems[i].rect.y += total.y;
-
-		render_utf8_string(window, window->status_bar.font,
-			NULL, g_colors[DEFAULT_ABOUT_TEXT_COLOR],
-			elems[i].rect, elems[i].text);
-	}
-
-	texture_rect.x = total.x + (total.w - texture_rect.w) / 2;
-	texture_rect.y = total.y + DEFAULT_XTRA_BORDER;
-
-	SDL_SetRenderTarget(window->renderer, NULL);
-	SDL_RenderCopy(window->renderer, texture, NULL, &texture_rect);
-	SDL_RenderPresent(window->renderer);
-
-	wait_anykey();
-
-	SDL_DestroyTexture(texture);
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	SDL_assert(pse->change_buttons[0].ftb->gain_key);
+	SDL_assert(!d->c_key || d->c_key == &pse->change_buttons[0]);
+	(*pse->change_buttons[0].ftb->gain_key)(
+		&pse->change_buttons[0], d, w, 0);
+	d->c_key = &pse->change_buttons[0];
+	sdlpui_dialog_gain_key_focus(w, d);
 }
 
-static void signal_move_state(struct window *window)
+static void step_shortcut_editor_control(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, struct sdlpui_control *c, bool forward)
 {
-	assert(!window->size_state.active);
+	struct shortcut_editor_data *pse;
+	int i = 0;
+	struct sdlpui_control *new_c = NULL;
 
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	while (1) {
+		if (i >= MAX_WINDOWS) {
+			if (c == &pse->close_button) {
+				new_c = (forward) ?
+					&pse->reset_button :
+					&pse->clear_buttons[MAX_WINDOWS - 1];
+			} else if (c == &pse->reset_button) {
+				new_c = (forward) ?
+					&pse->change_buttons[0] :
+					&pse->close_button;
+			} else {
+				/*
+				 * c is not a button in the dialog.  Just go
+				 * to the first button.
+				 */
+				new_c = &pse->change_buttons[0];
+			}
+			break;
+		}
+		if (c == &pse->change_buttons[i]) {
+			new_c = (forward) ? &pse->clear_buttons[i] :
+				((i > 0) ? &pse->clear_buttons[i - 1] :
+				&pse->close_button);
+			break;
+		} else if (c == &pse->clear_buttons[i]) {
+			new_c = (forward) ? ((i < MAX_WINDOWS - 1) ?
+				&pse->change_buttons[i + 1] :
+				&pse->close_button) : &pse->change_buttons[i];
+			break;
+		}
+		++i;
+	}
+	if (d->c_key && d->c_key != new_c &&
+			d->c_key->ftb->lose_key) {
+		(*d->c_key->ftb->lose_key)(d->c_key, d, w, new_c, d);
+	}
+	SDL_assert(new_c->ftb->gain_key);
+	(*new_c->ftb->gain_key)(new_c, d, w, 0);
+	d->c_key = new_c;
+}
+
+static struct sdlpui_control *find_shortcut_editor_control_containing(
+		struct sdlpui_dialog* d, struct sdlpui_window *w, Sint32 x,
+		Sint32 y, int *comp_ind)
+{
+	struct shortcut_editor_data *pse;
+	struct sdlpui_control *c = NULL;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+
+	/* Make the coordinates relative to the dialog. */
+	x -= d->rect.x;
+	y -= d->rect.y;
+
+	*comp_ind = 0;
+	if (y < pse->close_button.rect.y) {
+		if (y >= pse->change_buttons[0].rect.y) {
+			int i = (y - pse->change_buttons[0].rect.y) /
+				(pse->change_buttons[1].rect.y
+					- pse->change_buttons[0].rect.y);
+
+			if (i < MAX_WINDOWS && i >= 0
+					&& y >= pse->change_buttons[i].rect.y
+					&& y < pse->change_buttons[i].rect.y
+					+ pse->change_buttons[i].rect.h) {
+				if (x >= pse->change_buttons[i].rect.x
+						&& x < pse->change_buttons[i].rect.x
+						+ pse->change_buttons[i].rect.w) {
+					c = &pse->change_buttons[i];
+				} else if (x >= pse->clear_buttons[i].rect.x
+						&& x < pse->clear_buttons[i].rect.x
+						+ pse->clear_buttons[i].rect.w) {
+					c = &pse->clear_buttons[i];
+				}
+			}
+		}
+	} else if (y < pse->close_button.rect.y + pse->close_button.rect.h) {
+		if (x >= pse->close_button.rect.x
+				&& x < pse->close_button.rect.x
+					+ pse->close_button.rect.w) {
+			c = &pse->close_button;
+		} else if (x >= pse->reset_button.rect.x
+				&& x < pse->reset_button.rect.x
+					+ pse->reset_button.rect.w) {
+			c = &pse->reset_button;
+		}
+	}
+	return c;
+}
+
+static void query_shortcut_editor_natural_size(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, int *width, int *height)
+{
+	struct shortcut_editor_data *pse;
+	int dw = 0, dh = 0, cw, ch, roww, rowh;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	(*pse->labels[0].ftb->query_natural_size)(&pse->labels[0],
+		d, w, &roww, &rowh);
+	/*
+	 * The shortcut display will be three times the width of the label that
+	 * precedes it.
+	 */
+	roww *= 3;
+	(*pse->change_buttons[0].ftb->query_natural_size)(
+		&pse->change_buttons[0], d, w, &cw, &ch);
+	/*
+	 * Leave 1/8 of the width (rounded up) as space between the change and
+	 * clear buttons.
+	 */
+	roww += (9 * cw + 7) / 8;
+	rowh = MAX(rowh, ch);
+	(*pse->clear_buttons[0].ftb->query_natural_size)(&pse->clear_buttons[0],
+		d, w, &cw, &ch);
+	roww += cw;
+	rowh = MAX(rowh, ch);
+	dw = MAX(dw, roww);
+	dh += MAX_WINDOWS * rowh;
+	(*pse->close_button.ftb->query_natural_size)(&pse->close_button,
+		d, w, &roww, &rowh);
+	(*pse->reset_button.ftb->query_natural_size)(&pse->reset_button,
+		d, w, &cw, &ch);
+	roww = 4 * MAX(roww, cw);
+	rowh = MAX(rowh, ch);
+	dw = MAX(dw, roww);
+	/*
+	 * Leave space between the buttons at the bottom of the dialog and the
+	 * rest.
+	 */
+	dh += 3 * rowh;
+	*width = dw;
+	*height = dh;
+}
+
+static void resize_shortcut_editor(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, int width, int height)
+{
+	struct shortcut_editor_data *pse;
+	int i, x, y, cw, ch, rowh;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+#ifndef NDEBUG
+	{
+		int dw, dh;
+
+		query_shortcut_editor_natural_size(d, w, &dw, &dh);
+		SDL_assert(width >= dw && height >= dh);
+	}
+#endif
+
+	y = 0;
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		x = 0;
+		rowh = 0;
+		(*pse->labels[i].ftb->query_natural_size)(&pse->labels[i], d, w,
+			&cw, &ch);
+		if (pse->labels[i].ftb->resize) {
+			(*pse->labels[i].ftb->resize)(&pse->labels[i], d, w,
+				cw, ch);
+		} else {
+			pse->labels[i].rect.w = cw;
+			pse->labels[i].rect.h = ch;
+		}
+		pse->labels[i].rect.x = x;
+		pse->labels[i].rect.y = y;
+		x += cw;
+		rowh = MAX(rowh, ch);
+
+		if (pse->shortcut_displays[i].ftb->resize) {
+			(*pse->shortcut_displays[i].ftb->resize)(
+				&pse->shortcut_displays[i], d, w, cw * 2, ch);
+		} else {
+			pse->shortcut_displays[i].rect.w = cw * 2;
+			pse->shortcut_displays[i].rect.h = ch;
+		}
+		pse->shortcut_displays[i].rect.x = x;
+		pse->shortcut_displays[i].rect.y = y;
+		x += cw * 2;
+
+		(*pse->change_buttons[i].ftb->query_natural_size)(
+			&pse->change_buttons[i], d, w, &cw, &ch);
+		if (pse->change_buttons[i].ftb->resize) {
+			(*pse->change_buttons[i].ftb->resize)(
+				&pse->change_buttons[i], d, w, cw, ch);
+		} else {
+			pse->change_buttons[i].rect.w = cw;
+			pse->change_buttons[i].rect.h = ch;
+		}
+		pse->change_buttons[i].rect.x = x;
+		pse->change_buttons[i].rect.y = y;
+		/*
+		 * Leave 1/8 of the width as space between the change and clear
+		 * buttons.
+		 */
+		x += (9 * cw + 7) / 8;
+		rowh = MAX(rowh, ch);
+
+		(*pse->clear_buttons[i].ftb->query_natural_size)(
+			&pse->clear_buttons[i], d, w, &cw, &ch);
+		if (pse->clear_buttons[i].ftb->resize) {
+			(*pse->clear_buttons[i].ftb->resize)(
+				&pse->clear_buttons[i], d, w, cw, ch);
+		} else {
+			pse->clear_buttons[i].rect.w = cw;
+			pse->clear_buttons[i].rect.h = ch;
+		}
+		pse->clear_buttons[i].rect.x = x;
+		pse->clear_buttons[i].rect.y = y;
+		x += cw;
+		rowh = MAX(rowh, ch);
+
+		y += rowh;
+	}
+
+	(*pse->prompt_label.ftb->query_natural_size)(&pse->prompt_label, d, w,
+		&cw, &ch);
+	SDL_assert(width >= cw);
+	if (pse->prompt_label.ftb->resize) {
+		(*pse->prompt_label.ftb->resize)(&pse->prompt_label, d, w,
+			width, ch);
+	} else {
+		pse->prompt_label.rect.w = width;
+		pse->prompt_label.rect.h = ch;
+	}
+	pse->prompt_label.rect.x = 0;
+	pse->prompt_label.rect.y = y;
+	y += ch;
+
+	x = width / 8;
+	rowh = 0;
+	(*pse->close_button.ftb->query_natural_size)(&pse->close_button, d, w,
+		&cw, &ch);
+	SDL_assert(width >= cw * 4);
+	cw = MAX(cw, width / 4);
+	rowh = MAX(rowh, ch);
+	if (pse->close_button.ftb->resize) {
+		(*pse->close_button.ftb->resize)(
+			&pse->close_button, d, w, cw, ch);
+	} else {
+		pse->close_button.rect.w = cw;
+		pse->close_button.rect.h = ch;
+	}
+	pse->close_button.rect.x = x;
+	x += cw + width / 4;
+	(*pse->reset_button.ftb->query_natural_size)(&pse->reset_button, d, w,
+		&cw, &ch);
+	SDL_assert(width >= cw * 4);
+	cw = MAX(cw, width / 4);
+	rowh = MAX(rowh, ch);
+	if (pse->reset_button.ftb->resize) {
+		(*pse->reset_button.ftb->resize)(
+			&pse->reset_button, d, w, cw, ch);
+	} else {
+		pse->reset_button.rect.w = cw;
+		pse->reset_button.rect.h = ch;
+	}
+	pse->reset_button.rect.x = x;
+	SDL_assert(y + rowh <= height);
+	pse->close_button.rect.y = height - rowh;
+	pse->reset_button.rect.y = height - rowh;
+
+	d->rect.w = width;
+	d->rect.h = height;
+}
+
+static void cleanup_shortcut_editor(struct sdlpui_dialog *d)
+{
+	struct shortcut_editor_data *pse;
+	int i;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		if (pse->labels[i].ftb->cleanup) {
+			(*pse->labels[i].ftb->cleanup)(&pse->labels[i]);
+		}
+		if (pse->shortcut_displays[i].ftb->cleanup) {
+			(*pse->shortcut_displays[i].ftb->cleanup)(
+				&pse->shortcut_displays[i]);
+		}
+		if (pse->change_buttons[i].ftb->cleanup) {
+			(*pse->change_buttons[i].ftb->cleanup)(
+				&pse->change_buttons[i]);
+		}
+		if (pse->clear_buttons[i].ftb->cleanup) {
+			(*pse->clear_buttons[i].ftb->cleanup)(
+				&pse->clear_buttons[i]);
+		}
+	}
+	if (pse->prompt_label.ftb->cleanup) {
+		(*pse->prompt_label.ftb->cleanup)(&pse->prompt_label);
+	}
+	if (pse->close_button.ftb->cleanup) {
+		(*pse->close_button.ftb->cleanup)(&pse->close_button);
+	}
+	if (pse->reset_button.ftb->cleanup) {
+		(*pse->reset_button.ftb->cleanup)(&pse->reset_button);
+	}
+	SDL_free(pse);
+}
+
+static void handle_shortcut_change(struct sdlpui_control *c,
+		struct sdlpui_dialog *d, struct sdlpui_window *w)
+{
+	struct shortcut_editor_data *pse;
+	int tag = sdlpui_get_tag(c);
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	SDL_assert(tag >= 0 && tag < MAX_WINDOWS);
+	pse->changing_shortcut = tag;
+	sdlpui_change_caption(&pse->prompt_label, d, w,
+		format("Press key combination for window %d's new shortcut",
+		tag + 1));
+}
+
+static void handle_shortcut_clear(struct sdlpui_control *c,
+		struct sdlpui_dialog *d, struct sdlpui_window *w)
+{
+	struct shortcut_editor_data *pse;
+	int tag = sdlpui_get_tag(c);
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	SDL_assert(tag >= 0 && tag < MAX_WINDOWS);
+	if (w->app->menu_shortcuts[tag].type != EVT_NONE) {
+		w->app->menu_shortcuts[tag].type = EVT_NONE;
+		w->app->menu_shortcuts[tag].code = 0;
+		w->app->menu_shortcuts[tag].mods = 0;
+		sdlpui_change_caption(&pse->shortcut_displays[tag], d, w,
+			"None");
+	}
+	if (pse->changing_shortcut != -1) {
+		/* Reset to no prompt for a keystroke. */
+		pse->changing_shortcut = -1;
+		sdlpui_change_caption(&pse->prompt_label, d, w, " ");
+	}
+}
+
+static void handle_shortcut_editor_close(struct sdlpui_control *c,
+		struct sdlpui_dialog *d, struct sdlpui_window *w)
+{
+	sdlpui_popdown_dialog(d, w, false);
+}
+
+static void handle_shortcut_editor_reset(struct sdlpui_control *c,
+		struct sdlpui_dialog *d, struct sdlpui_window *w)
+{
+	struct shortcut_editor_data *pse;
+	int i;
+
+	SDL_assert(d->type_code == SHORTCUT_EDITOR_CODE && d->priv);
+	pse = d->priv;
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		if (w->app->menu_shortcuts[i].type == EVT_NONE) {
+			continue;
+		}
+		w->app->menu_shortcuts[i].type = EVT_NONE;
+		w->app->menu_shortcuts[i].code = 0;
+		w->app->menu_shortcuts[i].mods = 0;
+		sdlpui_change_caption(&pse->shortcut_displays[i], d, w, "None");
+	}
+	if (pse->changing_shortcut != -1) {
+		/* Reset to no prompt for a keystroke. */
+		pse->changing_shortcut = -1;
+		sdlpui_change_caption(&pse->prompt_label, d, w, " ");
+	}
+}
+
+static void hide_shortcut_editor(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, bool up)
+{
+	if (!up) {
+		SDL_assert(w->shorte == d);
+		w->shorte = NULL;
+	}
+}
+
+static void show_shortcut_editor(struct sdlpui_window *w, int x, int y)
+{
+	static const struct sdlpui_dialog_funcs shortcut_editor_funcs = {
+		handle_shortcut_editor_key,
+		handle_shortcut_editor_textin,
+		NULL,
+		sdlpui_dialog_handle_mouseclick,
+		sdlpui_dialog_handle_mousemove,
+		sdlpui_dialog_handle_mousewheel,
+		sdlpui_dialog_handle_loses_mouse,
+		sdlpui_dialog_handle_loses_key,
+		sdlpui_dialog_handle_window_loses_mouse,
+		sdlpui_dialog_handle_window_loses_key,
+		render_shortcut_editor,
+		NULL,
+		goto_shortcut_editor_first_control,
+		step_shortcut_editor_control,
+		find_shortcut_editor_control_containing,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		resize_shortcut_editor,
+		query_shortcut_editor_natural_size,
+		NULL,
+		cleanup_shortcut_editor
+	};
+	struct shortcut_editor_data *pse;
+	int i;
+	int dw, dh;
+
+	if (w->shorte) {
+		sdlpui_popup_dialog(w->shorte, w, true);
+		return;
+	}
+	w->shorte = SDL_malloc(sizeof(*w->shorte));
+	pse = SDL_malloc(sizeof(*pse));
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		char keypress_desc[40];
+
+		sdlpui_create_label(&pse->labels[i],
+			format("Window %d menu", i + 1),  SDLPUI_HOR_LEFT);
+		if (w->app->menu_shortcuts[i].type == EVT_KBRD) {
+			keypress_to_text(keypress_desc, sizeof(keypress_desc),
+				&w->app->menu_shortcuts[i], true);
+		} else {
+			(void)my_strcpy(keypress_desc, "None",
+				sizeof(keypress_desc));
+		}
+		sdlpui_create_label(&pse->shortcut_displays[i], keypress_desc,
+			SDLPUI_HOR_LEFT);
+		sdlpui_create_push_button(&pse->change_buttons[i],
+			"Change", SDLPUI_HOR_CENTER, handle_shortcut_change,
+			i, false);
+		sdlpui_create_push_button(&pse->clear_buttons[i],
+			"Clear", SDLPUI_HOR_CENTER, handle_shortcut_clear,
+			i, false);
+	}
+	sdlpui_create_label(&pse->prompt_label, "", SDLPUI_HOR_CENTER);
+	sdlpui_create_push_button(&pse->close_button, "Close",
+		SDLPUI_HOR_CENTER, handle_shortcut_editor_close, 0, false);
+	sdlpui_create_push_button(&pse->reset_button, "Reset",
+		SDLPUI_HOR_CENTER, handle_shortcut_editor_reset, 0,
+		false);
+	pse->changing_shortcut = -1;
+
+	w->shorte->ftb = &shortcut_editor_funcs;
+	w->shorte->pop_callback = hide_shortcut_editor;
+	w->shorte->recreate_textures_callback = NULL;
+	w->shorte->next = NULL;
+	w->shorte->prev = NULL;
+	w->shorte->texture = NULL;
+	w->shorte->c_mouse = NULL;
+	w->shorte->c_key = NULL;
+	w->shorte->priv = pse;
+	w->shorte->type_code = SHORTCUT_EDITOR_CODE;
+	w->shorte->tag = 0;
+	w->shorte->pinned = false;
+	w->shorte->dirty = true;
+
+	(*w->shorte->ftb->query_natural_size)(w->shorte, w, &dw, &dh);
+	if (w->shorte->ftb->resize) {
+		(*w->shorte->ftb->resize)(w->shorte, w, dw, dh);
+	} else {
+		w->shorte->rect.w = dw;
+		w->shorte->rect.h = dh;
+	}
+	w->shorte->rect.x = x;
+	w->shorte->rect.y = y;
+	sdlpui_popup_dialog(w->shorte, w, true);
+}
+
+static void hide_about(struct sdlpui_dialog *d, struct sdlpui_window *w,
+		bool up)
+{
+	if (!up) {
+		SDL_assert(w->infod == d);
+		w->infod = NULL;
+	}
+}
+
+static void recreate_about_dialog_textures(struct sdlpui_dialog *d,
+		struct sdlpui_window *w, bool all)
+{
+	struct sdlpui_simple_info *psi;
+	int i;
+
+	if (!all) {
+		return;
+	}
+
+	SDL_assert(d->type_code == SDLPUI_DIALOG_SIMPLE_INFO);
+	psi = (struct sdlpui_simple_info*)d->priv;
+
+	/* Recreate the static texture for the one image in the dialog. */
+	for (i = 0; i < psi->number; ++i) {
+		if (psi->labels[i].type_code == SDLPUI_CTRL_IMAGE) {
+			char path[4096];
+			struct sdlpui_image *pi =
+				(struct sdlpui_image*)psi->labels[i].priv;
+
+			if (pi->image) {
+				SDL_DestroyTexture(pi->image);
+			}
+			path_build(path, sizeof(path), DEFAULT_ABOUT_ICON_DIR,
+				DEFAULT_ABOUT_ICON);
+			pi->image = load_image(w, path);
+
+			d->dirty = true;
+			sdlpui_signal_redraw(w);
+			break;
+		}
+	}
+}
+
+static void show_about(struct sdlpui_window *window, int x, int y)
+{
+	if (!window->infod) {
+		char path[4096];
+		SDL_Texture *texture;
+
+		window->infod = sdlpui_start_simple_info("Ok", NULL,
+			recreate_about_dialog_textures, 0);
+		path_build(path, sizeof(path), DEFAULT_ABOUT_ICON_DIR,
+			DEFAULT_ABOUT_ICON);
+		texture = load_image(window, path);
+		sdlpui_simple_info_add_image(window->infod, texture,
+			SDLPUI_HOR_CENTER, DEFAULT_XTRA_BORDER, 0,
+			DEFAULT_XTRA_BORDER, DEFAULT_XTRA_BORDER);
+		sdlpui_simple_info_add_label(window->infod, buildid,
+			SDLPUI_HOR_CENTER);
+		sdlpui_simple_info_add_label(window->infod,
+			"See http://www.rephial.org", SDLPUI_HOR_CENTER);
+		sdlpui_simple_info_add_label(window->infod,
+			"Visit our forum at https://angband.live/forums/",
+			SDLPUI_HOR_CENTER);
+		sdlpui_complete_simple_info(window->infod, window);
+		window->infod->pop_callback = hide_about;
+		window->infod->rect.x = x;
+		window->infod->rect.y = y;
+	}
+	sdlpui_popup_dialog(window->infod, window, true);
+}
+
+static void hide_sdl_details(struct sdlpui_dialog *d, struct sdlpui_window *w,
+		bool up)
+{
+	if (!up) {
+		SDL_assert(w->detaild == d);
+		w->detaild = NULL;
+	}
+}
+
+static void show_sdl_details(struct sdlpui_window *window, int x, int y)
+{
+	if (!window->detaild) {
+		char *label;
+		int wid, hgt, wx, wy, bt, bl, bb, br;
+		Uint32 flags;
+
+		window->detaild = sdlpui_start_simple_info("Ok", NULL, NULL, 0);
+
+		if (window->index == MAIN_WINDOW) {
+			const char *driver_name;
+			const SDL_version *pvr;
+			SDL_version vr, vc;
+			int num_displays, i;
+
+			SDL_GetVersion(&vr);
+			SDL_VERSION(&vc);
+			label = format("SDL version: %u.%u.%u (runtime; %s) "
+				"%u.%u.%u (compiled; %s)", vr.major, vr.minor,
+				vr.patch, SDL_GetRevision(),
+				vc.major, vc.minor, vc.patch, SDL_REVISION);
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+			pvr = IMG_Linked_Version();
+			SDL_IMAGE_VERSION(&vc);
+			label = format("SDL_image version; %u.%u.%u (runtime) "
+				"%u.%u.%u (compiled)",
+				pvr->major, pvr->minor, pvr->patch,
+				vc.major, vr.minor, vc.patch);
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+			pvr = TTF_Linked_Version();
+			SDL_TTF_VERSION(&vc);
+			label = format("SDL_ttf version; %u.%u.%u (runtime) "
+				"%u.%u.%u (compiled)",
+				pvr->major, pvr->minor, pvr->patch,
+				vc.major, vr.minor, vc.patch);
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+#ifdef SOUND_SDL2
+			if (is_sound_inited()) {
+				pvr = Mix_Linked_Version();
+				SDL_MIXER_VERSION(&vc);
+				label = format("SDL_mixer version: %u.%u.%u "
+					"(runtime) %u.%u.%u (compiled)",
+					pvr->major, pvr->minor, pvr->patch,
+					vc.major, vc.minor, vc.patch);
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+			}
+#endif
+			driver_name = SDL_GetCurrentVideoDriver();
+			label = format("Platform and video driver: \"%s\" "
+				"\"%s\"", SDL_GetPlatform(), (driver_name) ?
+				driver_name : "Not initialized");
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+			num_displays = SDL_GetNumVideoDisplays();
+			if (num_displays < 0) {
+				label = format("No available displays: %s",
+					SDL_GetError());
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+			}
+			for (i = 0; i < num_displays; ++i) {
+				const char *name = SDL_GetDisplayName(i);
+
+				if (name) {
+					SDL_DisplayMode mode;
+
+					label = format("Display %d: %s:", i,
+						name);
+					sdlpui_simple_info_add_label(
+						window->detaild, label,
+						SDLPUI_HOR_LEFT);
+					if (SDL_GetCurrentDisplayMode(i,
+							&mode)) {
+						label = format("    Mode "
+							"unavailable: %s",
+							SDL_GetError());
+						sdlpui_simple_info_add_label(
+							window->detaild, label,
+							SDLPUI_HOR_LEFT);
+					} else {
+						label = format("    Size: %d x "
+							"%d", mode.w, mode.h);
+						sdlpui_simple_info_add_label(
+							window->detaild, label,
+							SDLPUI_HOR_LEFT);
+						label = format("    Refresh "
+							"rate and pixel "
+							"format: %d %lu",
+							mode.refresh_rate,
+							(unsigned long)mode.format);
+						sdlpui_simple_info_add_label(
+							window->detaild, label,
+							SDLPUI_HOR_LEFT);
+					}
+				} else {
+					label = format("Display %d: no name: "
+						"%s", i, SDL_GetError());
+					sdlpui_simple_info_add_label(
+						window->detaild, label,
+						SDLPUI_HOR_LEFT);
+				}
+			}
+		}
+		label = format("Window %u:", window->index);
+		sdlpui_simple_info_add_label(window->detaild, label,
+			SDLPUI_HOR_LEFT);
+		label = format("    Display index and ID: %d %lu",
+			SDL_GetWindowDisplayIndex(window->window),
+			(unsigned long)SDL_GetWindowID(window->window));
+		sdlpui_simple_info_add_label(window->detaild, label,
+			SDLPUI_HOR_LEFT);
+		SDL_GetWindowPosition(window->window, &wx, &wy);
+		SDL_GetWindowSize(window->window, &wid, &hgt);
+		label = format("    Geometry: (%d, %d) %d x %d", wx, wy, wid,
+			hgt);
+		sdlpui_simple_info_add_label(window->detaild, label,
+			SDLPUI_HOR_LEFT);
+		SDL_GetWindowBordersSize(window->window, &bt, &bl, &bb, &br);
+		label = format("    Border sizes: %d %d %d %d", bt, bl, bb, br);
+		sdlpui_simple_info_add_label(window->detaild, label,
+			SDLPUI_HOR_LEFT);
+		flags = SDL_GetWindowFlags(window->window);
+		label = format("    Flags:%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+			(flags & SDL_WINDOW_FULLSCREEN) ? " FULLSCREEN" : "",
+			(flags & SDL_WINDOW_OPENGL) ? " OPENGL" : "",
+			(flags & SDL_WINDOW_SHOWN) ? " SHOWN" : "",
+			(flags & SDL_WINDOW_HIDDEN) ? " HIDDEN" : "",
+			(flags & SDL_WINDOW_BORDERLESS) ?  " BORDERLESS" : "",
+			(flags & SDL_WINDOW_RESIZABLE) ? " RESIZABLE" : "",
+			(flags & SDL_WINDOW_MINIMIZED) ? " MINIMIZED" : "",
+			(flags & SDL_WINDOW_MAXIMIZED) ? " MAXIMIZED" : "",
+			(flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
+			? " FULLSCREEN_DESKTOP" : "",
+			(flags & SDL_WINDOW_FOREIGN) ? " FOREIGN" : "",
+			(flags & SDL_WINDOW_ALLOW_HIGHDPI)
+			? " ALLOW_HIGHDPI" : "",
+			(flags & SDL_WINDOW_ALWAYS_ON_TOP)
+			? "ALWAYS_ON_TOP" : "",
+			(flags & SDL_WINDOW_SKIP_TASKBAR)
+			? " SKIP_TASKBAR" : "",
+			(flags & SDL_WINDOW_UTILITY) ? " UTILITY" : "",
+			(flags & SDL_WINDOW_POPUP_MENU) ? " POPUP_MENU" : "",
+			(flags & SDL_WINDOW_VULKAN) ? " VULKAN" : "",
+			(flags & SDL_WINDOW_METAL) ? " METAL" : "");
+		sdlpui_simple_info_add_label(window->detaild, label,
+			SDLPUI_HOR_LEFT);
+		if (window->renderer) {
+			SDL_RendererInfo r_info;
+
+			if (SDL_GetRendererInfo(window->renderer, &r_info)) {
+				label = format("    Renderer: No details "
+					"available: %s", SDL_GetError());
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+			} else {
+				label = format("    Renderer: %s", r_info.name);
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+				if (SDL_GetRendererOutputSize(window->renderer,
+						&wid, &hgt)) {
+					label = format("        Output size: "
+						"%s", SDL_GetError());
+				} else {
+					label = format("        Output size: "
+						"%d x %d", wid, hgt);
+				}
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+				label = format("        Maximum texture size: "
+					"%d x %d", r_info.max_texture_width,
+					r_info.max_texture_height);
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+				label = format("        Flags:%s%s%s%s",
+					(r_info.flags & SDL_RENDERER_SOFTWARE)
+					? " SOFTWARE" : "",
+					(r_info.flags & SDL_RENDERER_ACCELERATED)
+					? " ACCELERATED" : "",
+					(r_info.flags & SDL_RENDERER_PRESENTVSYNC)
+					? " PRESENTVSYNC" : "",
+					(r_info.flags & SDL_RENDERER_TARGETTEXTURE)
+					? " TARGETTEXTURE" : "");
+				sdlpui_simple_info_add_label(window->detaild,
+					label, SDLPUI_HOR_LEFT);
+			}
+		}
+#ifdef SOUND_SDL2
+		if (window->index == MAIN_WINDOW && is_sound_inited()) {
+			const char *driver_name;
+			int freq, n_chan;
+			Uint16 fmt;
+
+			driver_name = SDL_GetCurrentAudioDriver();
+			label = format("Audio driver: %s", (driver_name)
+				? driver_name : "Not initialized");
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+			if (Mix_QuerySpec(&freq, &fmt, &n_chan)) {
+				label = format("Mixer channels, frequency, and "
+					"format: %d %d %lu", n_chan, freq,
+					(unsigned long)fmt);
+			} else {
+				label = format("Mixer channels, frequency, and "
+					"format: %s", SDL_GetError());
+			}
+			sdlpui_simple_info_add_label(window->detaild, label,
+				SDLPUI_HOR_LEFT);
+		}
+#endif
+		sdlpui_complete_simple_info(window->detaild, window);
+		window->detaild->pop_callback = hide_sdl_details;
+		window->detaild->rect.x = x;
+		window->detaild->rect.y = y;
+	}
+	sdlpui_popup_dialog(window->detaild, window, true);
+}
+
+static void signal_move_state(struct sdlpui_window *window)
+{
 	bool was_active = window->move_state.active;
 
+	SDL_assert(!window->size_state.active);
+	window->alpha = was_active ? DEFAULT_ALPHA_FULL : DEFAULT_ALPHA_LOW;
 	if (was_active) {
 		window->move_state.active = false;
 		window->move_state.moving = false;
 		window->move_state.subwindow = NULL;
+		set_subwindows_alpha(window, window->alpha);
 	} else {
 		window->move_state.active = true;
 	}
+	if (window->move_button) {
+		struct sdlpui_menu_button *mb;
 
-	SDL_SetWindowGrab(window->window,
-			was_active ? SDL_FALSE : SDL_TRUE);
-	window->alpha = was_active ? DEFAULT_ALPHA_FULL : DEFAULT_ALPHA_LOW;
+		SDL_assert(window->move_button->type_code
+			== SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)window->move_button->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = window->move_state.active;
+		window->status_bar->dirty = true;
+	}
+
+	SDL_SetWindowGrab(window->window, was_active ? SDL_FALSE : SDL_TRUE);
 }
 
-static void signal_size_state(struct window *window)
+static void signal_size_state(struct sdlpui_window *window)
 {
-	assert(!window->move_state.active);
-
 	bool was_active = window->size_state.active;
 
+	SDL_assert(!window->move_state.active);
+	window->alpha = was_active ? DEFAULT_ALPHA_FULL : DEFAULT_ALPHA_LOW;
 	if (was_active) {
 		window->size_state.active = false;
 		window->size_state.sizing = false;
 		if (window->size_state.subwindow != NULL) {
-			memset(&window->size_state.subwindow->sizing_rect,
-					0, sizeof(window->size_state.subwindow->sizing_rect));
+			memset(&window->size_state.subwindow->sizing_rect, 0,
+				sizeof(window->size_state.subwindow->sizing_rect));
 			window->size_state.subwindow = NULL;
 		}
+		set_subwindows_alpha(window, window->alpha);
 	} else {
 		window->size_state.active = true;
 	}
+	if (window->size_button) {
+		struct sdlpui_menu_button *mb;
 
-	SDL_SetWindowGrab(window->window,
-			was_active ? SDL_FALSE : SDL_TRUE);
-	window->alpha = was_active ? DEFAULT_ALPHA_FULL : DEFAULT_ALPHA_LOW;
+		SDL_assert(window->size_button->type_code
+			== SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)window->size_button->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = window->size_state.active;
+		window->status_bar->dirty = true;
+	}
+
+	SDL_SetWindowGrab(window->window, was_active ? SDL_FALSE : SDL_TRUE);
 }
 
-static bool do_button_movesize(struct window *window,
-		struct button *button)
+static void handle_button_movesize(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MOVESIZE, BUTTON_DATA_IVAL);
-
-	switch (button->info.data.ival) {
-		case BUTTON_MOVESIZE_MOVING:
-			if (window->size_state.active) {
-				/* toggle size button */
-				signal_size_state(window);
-			}
-			signal_move_state(window);
-			break;
-		case BUTTON_MOVESIZE_SIZING:
-			if (window->move_state.active) {
-				/* toggle move button */
-				signal_move_state(window);
-			}
+	SDL_assert(ctrl->ftb->get_tag);
+	if ((*ctrl->ftb->get_tag)(ctrl) == 0) {
+		if (window->size_state.active) {
+			/* toggle size button */
 			signal_size_state(window);
-			break;
-	}
-
-	return true;
-}
-
-static void push_button(struct button_bank *bank, struct font *font,
-		const char *caption, struct button_info info, struct button_callbacks callbacks,
-		const SDL_Rect *rect, enum button_caption_position position)
-{
-	assert(bank->number < bank->size);
-
-	struct button *button = &bank->buttons[bank->number];
-
-	int w;
-	int h;
-	get_string_metrics(font, caption, &w, &h);
-
-	int x = 0;
-	switch (position) {
-		case CAPTION_POSITION_CENTER:
-			x = (rect->w - w) / 2;
-			break;
-		case CAPTION_POSITION_LEFT:
-			x = DEFAULT_BUTTON_BORDER;
-			break;
-		case CAPTION_POSITION_RIGHT:
-			x = rect->w - DEFAULT_BUTTON_BORDER - w;
-			break;
-		default:
-			quit_fmt("bad caption position %d in button '%s'",
-					position, button->caption);
-			break;
-	}
-
-	button->inner_rect.x = x;
-	button->inner_rect.y = (rect->h - h) / 2;
-	button->inner_rect.w = w;
-	button->inner_rect.h = h;
-
-	button->full_rect = *rect;
-
-	assert(button->full_rect.w >= button->inner_rect.w
-			&& button->full_rect.h >= button->inner_rect.h);
-
-	button->caption = string_make(caption);
-
-	button->callbacks = callbacks;
-	button->info = info;
-	button->highlighted = false;
-	button->selected = false;
-
-	bank->number++;
-}
-
-static struct menu_panel *new_menu_panel(void)
-{
-	struct menu_panel *menu = mem_zalloc(sizeof(*menu));
-
-	make_button_bank(&menu->button_bank);
-	menu->next = NULL;
-
-	return menu;
-}
-
-/* if caption of some button is NULL, the button is not included in menu (skipped) */
-static struct menu_panel *make_menu_panel(const struct button *origin,
-		struct font *font, size_t n_elems, struct menu_elem *elems)
-{
-	int maxlen = 0;
-
-	for (size_t i = 0; i < n_elems; i++) {
-		if (elems[i].caption == NULL) {
-			continue;
 		}
-		int w;
-		get_string_metrics(font, elems[i].caption, &w, NULL);
-		maxlen = MAX(maxlen, w);
-	}
-
-	struct menu_panel *menu_panel = new_menu_panel();
-	if (menu_panel == NULL) {
-		return NULL;
-	}
-
-	SDL_Rect rect = {
-		origin->full_rect.x + origin->full_rect.w,
-		origin->full_rect.y,
-		DEFAULT_MENU_LINE_WIDTH(maxlen),
-		DEFAULT_MENU_LINE_HEIGHT(font->ttf.glyph.h)
-	};
-
-	menu_panel->rect = rect;
-	menu_panel->rect.h = 0;
-
-	for (size_t i = 0; i < n_elems; i++) {
-		if (elems[i].caption == NULL) {
-			continue;
-		}
-
-		struct button_callbacks callbacks = {
-			elems[i].on_render, NULL, NULL, elems[i].on_menu
-		};
-		push_button(&menu_panel->button_bank,
-				font,
-				elems[i].caption,
-				elems[i].info,
-				callbacks,
-				&rect,
-				CAPTION_POSITION_LEFT);
-
-		rect.y += rect.h;
-		menu_panel->rect.h += rect.h;
-	}
-
-	return menu_panel;
-}
-
-static void load_next_menu_panel(const struct window *window,
-		struct menu_panel *menu_panel, const struct button *origin,
-		size_t n_elems, struct menu_elem *elems)
-{
-	assert(menu_panel->next == NULL);
-	menu_panel->next = make_menu_panel(origin,
-			window->status_bar.font, n_elems, elems);
-}
-
-static void do_menu_cleanup(struct button *button,
-		struct menu_panel *menu_panel, const SDL_Event *event)
-{
-	switch (event->type) {
-		case SDL_MOUSEMOTION:     /* fallthru */
-		case SDL_MOUSEBUTTONDOWN: /* fallthru */
-		case SDL_MOUSEBUTTONUP:
-			if (menu_panel->next != NULL) {
-				free_menu_panel(menu_panel->next);
-				menu_panel->next = NULL;
-			}
-			break;
-		default:
-			quit_fmt("non mouse event %d for button '%s'",
-					event->type, button->caption);
-			break;
-	}
-}
-
-static bool select_menu_button(struct button *button,
-		struct menu_panel *menu_panel, const SDL_Event *event)
-{
-	if (button->selected) {
-		return false;
+		signal_move_state(window);
 	} else {
-		do_menu_cleanup(button, menu_panel, event);
-		button->selected = true;
-
-		return true;
+		if (window->move_state.active) {
+			/* toggle move button */
+			signal_move_state(window);
+		}
+		signal_size_state(window);
 	}
 }
 
-static bool click_menu_button(struct button *button,
-		struct menu_panel *menu_panel, const SDL_Event *event)
+static void handle_menu_shortcuts(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	/* any event on that button removes the existing panel submenus
-	 * (and clickable buttons should not have their own submenus) */
-	do_menu_cleanup(button, menu_panel, event);
+	int x = ctrl->rect.x, y = ctrl->rect.y;
 
-	switch (event->type) {
-		case SDL_MOUSEBUTTONDOWN:
-			button->selected = true;
-			return false;
-		case SDL_MOUSEBUTTONUP:
-			if (button->selected) {
-				button->selected = false;
-				/* click the button */
-				return true;
-			} else {
-				return false;
-			}
-		default:
-			return false;
-	}
+	sdlpui_popdown_dialog(dlg, window, true);
+	show_shortcut_editor(window, x, y);
 }
 
-static void handle_menu_cursor(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_window(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	int tag;
+	struct sdlpui_window *other;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	window->cursor = !window->cursor;
-}
-
-static void handle_menu_window(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_UVAL);
-
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct window *other = get_window_direct(button->info.data.uval);
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	sdlpui_popdown_dialog(dlg, window, true);
+	other = get_window_direct(window->app, (unsigned int)tag);
 	if (other == NULL) {
-		other = get_new_window(button->info.data.uval);
-		assert(other != NULL);
+		other = get_new_window(window->app, (unsigned int)tag);
+		SDL_assert(other != NULL);
 		wipe_window_aux_config(other);
 		start_window(other);
-	}
-}
-
-static void handle_menu_windows(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
-
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct menu_elem elems[MAX_WINDOWS];
-
-	for (unsigned i = 0; i < MAX_WINDOWS; i++) {
-		elems[i].caption = "Window-%u";
-		elems[i].info.type = BUTTON_DATA_UVAL;
-		elems[i].info.data.uval = i;
-		elems[i].info.group = BUTTON_GROUP_MENU;
-		elems[i].on_render = render_button_menu_window;
-		elems[i].on_menu = handle_menu_window;
-	}
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
-}
-
-static void handle_menu_fullscreen(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
-
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	if (window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
-		SDL_SetWindowFullscreen(window->window, 0);
-		SDL_SetWindowMinimumSize(window->window,
-				DEFAULT_WINDOW_MINIMUM_W, DEFAULT_WINDOW_MINIMUM_H);
 	} else {
-		SDL_SetWindowFullscreen(window->window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+		/* Previous versions didn't close.  Is that better? */
+		handle_window_closed(window->app, other);
 	}
-
-	window->flags = SDL_GetWindowFlags(window->window);
 }
 
-static void handle_menu_about(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static struct sdlpui_dialog *handle_menu_windows(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
+	struct sdlpui_dialog *result = sdlpui_start_simple_menu(
+		dlg, ctrl, MAX_WINDOWS, true, false, NULL, NULL, 0);
+	unsigned int i;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
+	for (i = 1; i < MAX_WINDOWS; ++i) {
+		struct sdlpui_control *c = sdlpui_get_simple_menu_next_unused(
+			result, SDLPUI_MFLG_NONE);
+
+		sdlpui_create_menu_toggle(c, format("Window-%u", i),
+			SDLPUI_HOR_LEFT, handle_menu_window, i, false,
+			get_window_direct(window->app, i) != NULL);
 	}
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	show_about(window);
+	return result;
 }
 
-static void handle_menu_quit(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_fullscreen(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
+	bool was_fullscreen = (window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
+	SDL_Rect tmp_rect;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
+	sdlpui_popdown_dialog(dlg, window, true);
+
+	SDL_GetWindowSize(window->window, &tmp_rect.w, &tmp_rect.h);
+	SDL_GetWindowPosition(window->window, &tmp_rect.x, &tmp_rect.y);
+	if (!SDL_SetWindowFullscreen(window->window, (was_fullscreen) ?
+			0 : SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+		/* Succeeded.  Swap cached sizes. */
+		size_t i;
+
+		window->full_rect = window->stored_rect;
+		window->stored_rect = tmp_rect;
+		for (i = 0; i < N_ELEMENTS(window->subwindows); ++i) {
+			struct subwindow *subwindow = window->subwindows[i];
+
+			if (subwindow != NULL) {
+				tmp_rect = subwindow->stored_rect;
+				subwindow->stored_rect = subwindow->full_rect;
+				subwindow->full_rect = tmp_rect;
+				if (!subwindow->full_rect.w
+						|| !subwindow->full_rect.h) {
+					/*
+					 * Nothing configured so far for this
+					 * mode, so use the configuration from
+					 * the other mode.
+					 */
+					subwindow->full_rect =
+						subwindow->stored_rect;
+				} else if (subwindow->full_rect.w
+						!= subwindow->stored_rect.w
+						|| subwindow->full_rect.h
+						!= subwindow->stored_rect.h) {
+					subwindow->sizing_rect =
+						subwindow->full_rect;
+					resize_subwindow(subwindow);
+				}
+			}
+		}
+
+		if (was_fullscreen) {
+			int minw, minh;
+
+			get_minimum_window_size(window, &minw, &minh);
+			SDL_SetWindowMinimumSize(window->window, minw, minh);
+			/*
+			 * If there is a previously configured size, use it.
+			 * Otherwise, rely on SDL's default behavior.
+			 */
+			if (window->full_rect.w && window->full_rect.h) {
+				SDL_SetWindowSize(window->window,
+					window->full_rect.w,
+					window->full_rect.h);
+				resize_window(window, window->full_rect.w,
+					window->full_rect.h);
+				SDL_SetWindowPosition(window->window,
+					window->full_rect.x,
+					window->full_rect.y);
+			}
+		}
+		window->flags = SDL_GetWindowFlags(window->window);
+	} else {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+			"Fullscreen failure",
+			format("Could not change fullscreen setting:\n%s",
+			SDL_GetError()), window->window);
 	}
+}
 
+static void handle_menu_kp_mod(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+{
+	sdlpui_popdown_dialog(dlg, window, true);
+	window->app->kp_as_mod = !window->app->kp_as_mod;
+}
+
+static void handle_menu_about(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+{
+	int x = ctrl->rect.x, y = ctrl->rect.y;
+
+	sdlpui_popdown_dialog(dlg, window, true);
+	show_about(window, x, y);
+}
+
+static void handle_menu_sdl_details(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+{
+	int x = ctrl->rect.x, y = ctrl->rect.y;
+
+	sdlpui_popdown_dialog(dlg, window, true);
+	show_sdl_details(window, x, y);
+}
+
+static void handle_menu_quit(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+{
+	sdlpui_popdown_dialog(dlg, window, true);
 	handle_quit();
 }
 
-static void handle_menu_tile_set(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_tile_set(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_IVAL);
+	int new_id;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-	
-	graphics_mode *mode = get_graphics_mode(button->info.data.ival);
-	assert(mode != NULL);
+	SDL_assert(ctrl->ftb->get_tag);
+	new_id = (*ctrl->ftb->get_tag)(ctrl);
+	if (new_id == current_graphics_mode->grafID) {
+		/*
+		 * There's no change from the current graphics mode.
+		 * Leave that button toggled on.
+		 */
+		struct sdlpui_menu_button *mb;
 
-	reload_all_graphics(mode);
-
-	refresh_angband_terms();
-}
-
-static void handle_menu_tile_size(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_IVAL);
-
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-	if (window->graphics.id == GRAPHICS_NONE) {
-		return;
-	}
-
-	int increment =
-		(event->button.x - button->full_rect.x < button->full_rect.w / 2) ? -1 : +1;
-
-	if (button->info.data.ival == BUTTON_TILE_SIZE_WIDTH) {
-		tile_width += increment;
-		if (tile_width < MIN_TILE_WIDTH) {
-			tile_width = MAX_TILE_WIDTH;
-		} else if (tile_width > MAX_TILE_WIDTH) {
-			tile_width = MIN_TILE_WIDTH;
-		}
-	} else if (button->info.data.ival == BUTTON_TILE_SIZE_HEIGHT) {
-		tile_height += increment;
-		if (tile_height < MIN_TILE_HEIGHT) {
-			tile_height = MAX_TILE_HEIGHT;
-		} else if (tile_height > MAX_TILE_HEIGHT) {
-			tile_height = MIN_TILE_HEIGHT;
-		}
+		SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)ctrl->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = true;
+		dlg->dirty = true;
 	} else {
-		quit_fmt("bad ival in button '%s'", button->caption);
-	}
+		/* Change the graphics mode.  Toggle off the old mode. */
+		int old_id = current_graphics_mode->grafID;
+		graphics_mode *mode = get_graphics_mode(new_id);
+		struct sdlpui_simple_menu *sm;
+		int i;
 
-	refresh_angband_terms();
-}
+		SDL_assert(mode);
+		SDL_assert(dlg->type_code == SDLPUI_DIALOG_SIMPLE_MENU);
+		sm = (struct sdlpui_simple_menu*)dlg->priv;
+		for (i = 0; i < sm->number; ++i) {
+			struct sdlpui_menu_button *mb;
 
-static void handle_menu_tile_sizes(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct menu_elem elems[] = {
-		{
-			"< Tile width  %d >",
-			{
-				BUTTON_DATA_IVAL,
-				{.ival = BUTTON_TILE_SIZE_WIDTH},
-				BUTTON_GROUP_MENU
-			},
-			render_button_menu_tile_size,
-			handle_menu_tile_size
-		},
-		{
-			"< Tile height %d >",
-			{
-				BUTTON_DATA_IVAL,
-				{.ival = BUTTON_TILE_SIZE_HEIGHT},
-				BUTTON_GROUP_MENU
-			},
-			render_button_menu_tile_size,
-			handle_menu_tile_size
+			SDL_assert(sm->controls[i].type_code
+				== SDLPUI_CTRL_MENU_BUTTON);
+			mb = (struct sdlpui_menu_button*)sm->controls[i].priv;
+			SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+			if (mb->tag == old_id) {
+				mb->v.toggled = false;
+				dlg->dirty = true;
+				break;
+			}
 		}
-	};
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
+		reload_all_graphics(window->app, mode);
+		refresh_angband_terms(window->app);
+	}
 }
 
-static void handle_menu_tile_sets(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_tile_size(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	struct sdlpui_menu_button *mb;
+	int tag;
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
+	SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+	mb = (struct sdlpui_menu_button*)ctrl->priv;
+	SDL_assert(mb->subtype_code == SDLPUI_MB_RANGED_INT);
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	if (tag) {
+		tile_height = mb->v.ranged_int.curr;
+	} else {
+		tile_width = mb->v.ranged_int.curr;
 	}
+	refresh_angband_terms(window->app);
+}
 
-	size_t num_elems = 0;
+static struct sdlpui_dialog *handle_menu_tile_sizes(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
+{
+	/*
+	 * Disable the menu entries to change the tile multipliers if not
+	 * using tiles or if not at a command prompt in game (the latter
+	 * avoids multiplier changes causing blank screens in in-game menus
+	 * or display artifacts when the in-game menu is dismissed sometime
+	 * after the multiplier change).
+	 */
+	bool disabled = (window->graphics.id == GRAPHICS_NONE
+		|| !character_generated || !inkey_flag);
+	struct sdlpui_dialog *result = sdlpui_start_simple_menu(dlg, ctrl, 2,
+		true, false, NULL, NULL, 0);
+	struct sdlpui_control *c;
 
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_ranged_int(c, "- Tile width  %d +",
+		SDLPUI_HOR_LEFT, handle_menu_tile_size, 0, disabled,
+		tile_width, MIN_TILE_WIDTH, MAX_TILE_WIDTH);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_ranged_int(c, "- Tile height %d +",
+		SDLPUI_HOR_LEFT, handle_menu_tile_size, 1, disabled,
+		tile_height, MIN_TILE_HEIGHT, MAX_TILE_HEIGHT);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
+
+	return result;
+}
+
+static struct sdlpui_dialog *handle_menu_tile_sets(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
+{
+	/*
+	 * Only allow changes to the graphics mode when at a command prompt
+	 * in game.  Could also allow while at the splash screen, but that
+	 * isn't possible to test for with character_generated and
+	 * character_dungeon.  In other situations, the saved screens for
+	 * overlayed menus could have tile references that become outdated
+	 * when the graphics mode is changed.
+	 */
+	bool disabled = !character_generated || !inkey_flag;
+	struct sdlpui_dialog *result = sdlpui_start_simple_menu(dlg, ctrl,
+		0, true, false, NULL, NULL, 0);
 	graphics_mode *mode = graphics_modes;
-	while (mode != NULL) {
-		num_elems++;
+
+	while (mode) {
+		struct sdlpui_control *c = sdlpui_get_simple_menu_next_unused(
+			result, SDLPUI_MFLG_NONE);
+
+		sdlpui_create_menu_toggle(c, mode->menuname, SDLPUI_HOR_LEFT,
+			handle_menu_tile_set, mode->grafID, disabled,
+			current_graphics_mode->grafID == mode->grafID);
 		mode = mode->pNext;
 	}
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	struct menu_elem elems[num_elems];
-
-	mode = graphics_modes;
-	for (size_t i = 0; i < num_elems; i++) {
-		elems[i].caption = mode->menuname;
-		elems[i].info.type = BUTTON_DATA_IVAL;
-		elems[i].info.data.ival = mode->grafID;
-		elems[i].info.group = BUTTON_GROUP_MENU;
-		elems[i].on_render = render_button_menu_tile_set;
-		elems[i].on_menu = handle_menu_tile_set;
-
-		mode = mode->pNext;
-	}
-
-	load_next_menu_panel(window, menu_panel, button, num_elems, elems);
+	return result;
 }
 
-static void handle_menu_tiles(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static struct sdlpui_dialog *handle_menu_tiles(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	struct sdlpui_dialog *result = sdlpui_start_simple_menu(dlg, ctrl, 2,
+		true, false, NULL, NULL, 0);
+	struct sdlpui_control *c;
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Set", SDLPUI_HOR_LEFT,
+		handle_menu_tile_sets, SDLPUI_CHILD_MENU_RIGHT, 0, false);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Size", SDLPUI_HOR_LEFT,
+		handle_menu_tile_sizes, SDLPUI_CHILD_MENU_RIGHT, 0, false);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	struct button_info info = {
-		BUTTON_DATA_SUBVAL, {.subval = button->info.data.subval}, BUTTON_GROUP_MENU
-	};
-
-	struct menu_elem elems[] = {
-		{"Set", info, render_button_menu_simple, handle_menu_tile_sets},
-		{"Size", info, render_button_menu_simple, handle_menu_tile_sizes}
-	};
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
+	return result;
 }
 
-static void handle_menu_pw(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_pw(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_TERMVAL);
+	int tag, subw_idx, flag_idx;
+	struct sdlpui_menu_button *mb;
+	uint32_t *new_flags;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subw_idx = tag / (int)N_ELEMENTS(window_flag_desc);
+	SDL_assert(subw_idx >= 0 && subw_idx != MAIN_SUBWINDOW
+		&& subw_idx < (int)N_ELEMENTS(window_flag));
+	flag_idx = tag % (int)N_ELEMENTS(window_flag_desc);
+	SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+	mb = (struct sdlpui_menu_button*)ctrl->priv;
+	SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+	new_flags = mem_alloc(N_ELEMENTS(window_flag) * sizeof(*new_flags));
+	memcpy(new_flags, window_flag, N_ELEMENTS(window_flag)
+		* sizeof(*new_flags));
+	if (mb->v.toggled) {
+		new_flags[subw_idx] |= (uint32_t)1 << flag_idx;
+	} else {
+		new_flags[subw_idx] &= ~((uint32_t)1 << flag_idx);
 	}
-
-	u32b new_flags[N_ELEMENTS(window_flag)];
-	assert(sizeof(new_flags) == sizeof(window_flag));
-	memcpy(new_flags, window_flag, sizeof(new_flags));
-
-	struct subwindow *subwindow = button->info.data.termval.subwindow;
-
-	assert(subwindow->index != MAIN_SUBWINDOW);
-	assert(subwindow->index < N_ELEMENTS(window_flag));
-
-	uint32_t value = button->info.data.termval.value;
-
-	new_flags[subwindow->index] = value;
-	subwindows_set_flags(new_flags, N_ELEMENTS(new_flags));
-
-	refresh_angband_terms();
+	subwindows_set_flags(new_flags, N_ELEMENTS(window_flag));
+	mem_free(new_flags);
+	refresh_angband_terms(window->app);
 }
 
-static void handle_menu_font_name(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_font_name(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_FONTVAL);
+	int tag, index, old_index;
+	struct subwindow *subwindow;
+	const struct font_info *font_info;
 
-	if (!click_menu_button(button, menu_panel, event)) {
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	subwindow = get_subwindow_by_index(window,
+		(unsigned int)(tag / (2 * window->app->font_count) - 1), false);
+	SDL_assert(subwindow);
+	index = (unsigned int)tag
+		% (unsigned int)(2 * window->app->font_count);
+	old_index = subwindow->font->index;
+	font_info = &window->app->fonts[index];
+
+	if (old_index == index) {
+		/*
+		 * Already selected; pushing the button doesn't toggle it off.
+		 */
+		struct sdlpui_menu_button *mb;
+
+		SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)ctrl->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = true;
+		dlg->dirty = true;
 		return;
 	}
-
-	assert(button->info.data.fontval.index < N_ELEMENTS(g_font_info));
-
-	unsigned index = button->info.data.fontval.index;
-	struct subwindow *subwindow = button->info.data.fontval.subwindow;
-
-	const struct font_info *font_info = &g_font_info[index];
-	assert(font_info->loaded);
-
-	if (subwindow->font->index == index) {
-		/* already loaded */
-		return;
-	} 
 
 	if (reload_font(subwindow, font_info)) {
-		button->info.data.fontval.size_ok = true;
+		/* Set the previous selected font in the menu to off. */
+		int target_tag = tag
+			- (tag % (2 * window->app->font_count))
+			+ old_index;
+		bool searching = true;
+		int minw, minh;
+
+		while (searching) {
+			struct sdlpui_simple_menu *sm;
+			struct sdlpui_control *pc;
+			int i;
+
+			SDL_assert(dlg->type_code == SDLPUI_DIALOG_SIMPLE_MENU);
+			sm = (struct sdlpui_simple_menu*)dlg->priv;
+			for (i = 0; i < sm->number; ++i) {
+				struct sdlpui_menu_button *mb;
+
+				SDL_assert(sm->controls[i].type_code
+					== SDLPUI_CTRL_MENU_BUTTON);
+				mb = (struct sdlpui_menu_button*)sm->controls[i].priv;
+				if (mb->tag == target_tag) {
+					mb->v.toggled = false;
+					dlg->dirty = true;
+					searching = false;
+					break;
+				}
+			}
+
+			pc = sdlpui_get_dialog_parent_ctrl(dlg);
+			if (pc) {
+				struct sdlpui_menu_button *mbp;
+
+				SDL_assert(pc->type_code
+					== SDLPUI_CTRL_MENU_BUTTON);
+				mbp = pc->priv;
+				if (streq(mbp->caption, "More")) {
+					dlg = sdlpui_get_dialog_parent(dlg);
+					SDL_assert(dlg);
+				} else {
+					searching = false;
+				}
+			} else {
+				searching = false;
+			}
+		}
+
+		/*
+		 * With a font change, the minimum window size can be different.
+		 */
+		get_minimum_window_size(window, &minw, &minh);
+		SDL_SetWindowMinimumSize(window->window, minw, minh);
 	} else {
-		button->info.data.fontval.size_ok = false;
+		/*
+		 * Subwindow can't be resized to accommodate the font so
+		 * disable it.
+		 */
+		struct sdlpui_menu_button *mb;
+
+		SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)ctrl->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->disabled = true;
+		mb->v.toggled = false;
+		dlg->dirty = true;
 	}
 }
 
-static void handle_menu_font_size(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_font_size(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_FONTVAL);
+	int tag;
+	struct subwindow *subwindow;
+	struct sdlpui_menu_button *mb;
+	struct font_info *info;
 
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow && subwindow->font);
+	info = &window->app->fonts[subwindow->font->index];
+	SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+	mb = (struct sdlpui_menu_button*)ctrl->priv;
+	SDL_assert(mb->subtype_code == SDLPUI_MB_RANGED_INT);
+	info->size = mb->v.ranged_int.curr;
+	if (reload_font(subwindow, info)) {
+		int minw, minh;
+
+		/* A change to the font can change the minimum window size. */
+		get_minimum_window_size(window, &minw, &minh);
+		SDL_SetWindowMinimumSize(window->window, minw, minh);
+	} else {
+		/*
+		 * The range of sizes was limited in handle_menu_font_sizes(),
+		 * so the call to reload_font() should have worked.
+		 */
+		SDL_assert(0);
 	}
-	if (!button->info.data.fontval.size_ok) {
-		return;
+}
+
+static struct sdlpui_dialog *handle_menu_font_sizes(
+		struct sdlpui_control *ctrl, struct sdlpui_dialog *dlg,
+		struct sdlpui_window *window, int ul_x_win, int ul_y_win)
+{
+	int tag;
+	struct subwindow *subwindow;
+	bool is_vector_font;
+	struct sdlpui_dialog *result;
+	struct sdlpui_control *c;
+
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow);
+	is_vector_font = window->app->fonts[subwindow->font->index].type
+		== FONT_TYPE_VECTOR;
+	calculate_subwindow_font_size_bounds(subwindow, NULL,
+		&subwindow->min_font_size, &subwindow->max_font_size);
+	SDL_assert(subwindow);
+	result = sdlpui_start_simple_menu(dlg, ctrl, 2, true, false, NULL,
+		NULL, 0);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_ranged_int(c, "- %2d points +", SDLPUI_HOR_LEFT,
+		handle_menu_font_size, tag, !is_vector_font
+		|| subwindow->min_font_size >= subwindow->max_font_size,
+		subwindow->font->size, subwindow->min_font_size,
+		(subwindow->min_font_size < subwindow->max_font_size) ?
+		subwindow->max_font_size - 1 : subwindow->min_font_size);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
+
+	return result;
+}
+
+static struct sdlpui_dialog *handle_menu_font_names(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
+{
+	int tag;
+	SDL_Renderer *renderer;
+	struct subwindow *subwindow;
+	struct sdlpui_dialog *result;
+	struct sdlpui_control *c;
+	bool more_nesting = false;
+	int win_w, win_h, start, count, i;
+
+	renderer = sdlpui_get_renderer(window);
+	SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	if (tag < 2 * window->app->font_count) {
+		/* At the top level */
+		subwindow = get_subwindow_by_index(window, tag, false);
+		tag = (tag + 1) * 2 * window->app->font_count;
+		start = 0;
+	} else {
+		/* Nested */
+		subwindow = get_subwindow_by_index(window,
+			tag / (2 * window->app->font_count) - 1, false);
+		start = tag % (2 * window->app->font_count)
+			- window->app->font_count;
+		assert(start >= 0);
+		tag -= start + window->app->font_count;
 	}
-
-	unsigned index = button->info.data.fontval.index;
-	assert(index < N_ELEMENTS(g_font_info));
-
-	struct font_info *info = &g_font_info[index];
-
-	if (info->type == FONT_TYPE_RASTER) {
-		return;
+	SDL_assert(subwindow);
+	SDL_assert(start <= window->app->font_count);
+	/*
+	 * Figure out how many entries can fit.  Use the size of the parent
+	 * control as a proxy for the size of the individual menu elements.
+	 */
+	SDL_assert(ctrl->rect.h > 0);
+	count = (win_h - ul_y_win) / ctrl->rect.h;
+	if (count < window->app->font_count - start
+			&& count > 2
+			&& win_w - ul_x_win >= (ctrl->rect.w + 1) / 2) {
+		--count;
+		more_nesting = true;
+	} else if (count > window->app->font_count - start) {
+		count = window->app->font_count - start;
 	}
+	result = sdlpui_start_simple_menu(dlg, ctrl,
+		count + ((more_nesting) ? 1 : 0), true, false, NULL, NULL, 0);
+	if (more_nesting) {
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, "More", SDLPUI_HOR_LEFT,
+			handle_menu_font_names, SDLPUI_CHILD_MENU_RIGHT,
+			tag + window->app->font_count + start + count, false);
+	}
+	for (i = start; i < start + count; ++i) {
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		/*
+		 * Optimistically assume that it'll be possible to resize
+		 * the subwindow for this font.
+		 */
+		sdlpui_create_menu_toggle(c, window->app->fonts[i].name,				SDLPUI_HOR_LEFT, handle_menu_font_name, tag + i,
+			false, subwindow->font->index == (unsigned int)i);
+	}
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	struct subwindow *subwindow = button->info.data.fontval.subwindow; 
+	return result;
+}
 
-	int size = subwindow->font->size;
+static struct sdlpui_dialog *handle_menu_purpose(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
+{
+	int i = 0, subw_idx;
+	struct sdlpui_dialog *result;
 
-	int increment =
-		(event->button.x - button->full_rect.x < button->full_rect.w / 2) ? -1 : +1;
+	SDL_assert(ctrl->ftb->get_tag);
+	subw_idx = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(subw_idx >= 0 && subw_idx != MAIN_SUBWINDOW);
+	result = sdlpui_start_simple_menu(dlg, ctrl,
+		(int)N_ELEMENTS(window_flag_desc), true, false, NULL, NULL, 0);
+	while (i < (int)N_ELEMENTS(window_flag_desc)) {
+		if (window_flag_desc[i]) {
+			struct sdlpui_control *c =
+				sdlpui_get_simple_menu_next_unused(result,
+				SDLPUI_MFLG_NONE);
 
-	for (size_t i = 0; i < MAX_VECTOR_FONT_SIZE - MIN_VECTOR_FONT_SIZE; i++) {
-		size += increment;
-		if (size > MAX_VECTOR_FONT_SIZE) {
-			size = MIN_VECTOR_FONT_SIZE;
-		} else if (size < MIN_VECTOR_FONT_SIZE) {
-			size = MAX_VECTOR_FONT_SIZE;
+			sdlpui_create_menu_toggle(c, window_flag_desc[i],
+				SDLPUI_HOR_LEFT, handle_menu_pw, subw_idx *
+				(int)N_ELEMENTS(window_flag_desc) + i, false,
+				window_flag[subw_idx] & ((uint32_t)1 << i));
 		}
-		info->size = size;
-		if (reload_font(subwindow, info)) {
-			return;
-		}
+		++i;
 	}
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	button->info.data.fontval.size_ok = false;
+	return result;
 }
 
-static void handle_menu_font_sizes(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static struct sdlpui_dialog *handle_menu_font(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	int tag;
+	struct sdlpui_dialog *result;
+	struct sdlpui_control *c;
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	result = sdlpui_start_simple_menu(dlg, ctrl, 2, true, false, NULL,
+		NULL, 0);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Name", SDLPUI_HOR_LEFT,
+		handle_menu_font_names, SDLPUI_CHILD_MENU_RIGHT, tag, false);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Size", SDLPUI_HOR_LEFT,
+		handle_menu_font_sizes, SDLPUI_CHILD_MENU_RIGHT, tag, false);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	struct subwindow *subwindow = button->info.data.subval;
-
-	struct button_info info = {
-		BUTTON_DATA_FONTVAL,
-		{.fontval =
-			{.subwindow = subwindow,.index = subwindow->font->index, .size_ok = true}},
-		BUTTON_GROUP_MENU
-	};
-	struct menu_elem elems[] = {
-		{"< %2d points >", info, render_button_menu_font_size, handle_menu_font_size}
-	};
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
+	return result;
 }
 
-static void handle_menu_font_names(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_borders(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	int tag;
+	struct subwindow *subwindow;
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct menu_elem elems[N_ELEMENTS(g_font_info)];
-
-	size_t num_elems = 0;
-	for (size_t i = 0; i < N_ELEMENTS(g_font_info); i++) {
-		if (g_font_info[i].loaded) {
-			elems[num_elems].caption = g_font_info[i].name;
-			elems[num_elems].info.type = BUTTON_DATA_FONTVAL;
-			elems[num_elems].info.data.fontval.subwindow = button->info.data.subval;
-			elems[num_elems].info.data.fontval.size_ok = true;
-			elems[num_elems].info.data.fontval.index = i;
-			elems[num_elems].info.group = BUTTON_GROUP_MENU;
-			elems[num_elems].on_render = render_button_menu_font_name;
-			elems[num_elems].on_menu = handle_menu_font_name;
-			num_elems++;
-		}
-	}
-
-	load_next_menu_panel(window, menu_panel, button, num_elems, elems);
-}
-
-static void handle_menu_purpose(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	struct subwindow *subwindow = button->info.data.subval;
-	assert(subwindow->index != MAIN_SUBWINDOW);
-
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct menu_elem elems[N_ELEMENTS(window_flag_desc)];
-
-	size_t num_elems = 0;
-	while (num_elems < N_ELEMENTS(elems)
-			&& window_flag_desc[num_elems] != NULL)
-	{
-		elems[num_elems].caption = window_flag_desc[num_elems];
-		elems[num_elems].info.group = BUTTON_GROUP_MENU;
-		elems[num_elems].info.data.termval.subwindow = subwindow;
-		elems[num_elems].info.data.termval.value = 1L << num_elems;
-		elems[num_elems].info.type = BUTTON_DATA_TERMVAL;
-		elems[num_elems].on_render = render_button_menu_pw;
-		elems[num_elems].on_menu = handle_menu_pw;
-		num_elems++;
-	}
-
-	load_next_menu_panel(window, menu_panel, button, num_elems, elems);
-}
-
-static void handle_menu_font(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct button_info info = {
-		BUTTON_DATA_SUBVAL, {.subval = button->info.data.subval}, BUTTON_GROUP_MENU
-	};
-
-	struct menu_elem elems[] = {
-		{"Name", info, render_button_menu_simple, handle_menu_font_names},
-		{"Size", info, render_button_menu_simple, handle_menu_font_sizes}
-	};
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
-}
-
-static void handle_menu_borders(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct subwindow *subwindow = button->info.data.subval;
-
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow);
 	subwindow->borders.visible = !subwindow->borders.visible;
 	render_borders(subwindow);
 }
 
-static void handle_menu_subwindow_alpha(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_subwindow_alpha(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_ALPHAVAL);
+	int tag;
+	struct subwindow *subwindow;
+	struct sdlpui_simple_menu *sm;
+	int new_alpha, i;
 
-	if (!click_menu_button(button, menu_panel, event)) {
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag / 101,
+		false);
+	SDL_assert(subwindow);
+	new_alpha = ALPHA_PERCENT((tag % 101));
+	if (is_close_to(new_alpha, subwindow->color.a,
+			DEFAULT_ALPHA_STEP / 2)) {
+		/*
+		 * Already selected; pushing the button doesn't toggle it off.
+		 */
+		struct sdlpui_menu_button *mb;
+
+		SDL_assert(ctrl->type_code == SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)ctrl->priv;
+		SDL_assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = true;
+		dlg->dirty = true;
 		return;
 	}
+	/* Toggle off the previous setting. */
+	SDL_assert(dlg->type_code == SDLPUI_DIALOG_SIMPLE_MENU);
+	sm = (struct sdlpui_simple_menu*)dlg->priv;
+	for (i = 0; i < sm->number; ++i) {
+		struct sdlpui_menu_button *mb;
+		int alpha;
 
-	struct subwindow *subwindow = button->info.data.alphaval.subwindow;
-	subwindow->color.a = button->info.data.alphaval.real_value;
-
+		SDL_assert(sm->controls[i].type_code
+			== SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)sm->controls[i].priv;
+		alpha = ALPHA_PERCENT((mb->tag % 101));
+		if (is_close_to(alpha, subwindow->color.a,
+				DEFAULT_ALPHA_STEP / 2)) {
+			mb->v.toggled = false;
+			dlg->dirty = true;
+			break;
+		}
+	}
+	/* Change to the new setting. */
+	subwindow->color.a = new_alpha;
 	render_clear(subwindow->window, subwindow->texture, &subwindow->color);
 	render_borders(subwindow);
-
-	refresh_angband_terms();
+	refresh_angband_terms(subwindow->app);
 }
 
-static void handle_menu_alpha(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static struct sdlpui_dialog *handle_menu_alpha(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	int tag, nstep, i;
+	struct subwindow *subwindow;
+	struct sdlpui_dialog *result;
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow);
+	nstep = 1 + ((100 - DEFAULT_ALPHA_LOWEST + (DEFAULT_ALPHA_STEP - 1))
+		/ DEFAULT_ALPHA_STEP);
+	result = sdlpui_start_simple_menu(dlg, ctrl, nstep, true, false,
+		NULL, NULL, 0);
+	for (i = 0; i < nstep; ++i) {
+		int alpha_pct = MIN(100,
+			DEFAULT_ALPHA_LOWEST + i * DEFAULT_ALPHA_STEP);
+		int alpha = ALPHA_PERCENT(alpha_pct);
+		struct sdlpui_control *c = sdlpui_get_simple_menu_next_unused(
+			result, SDLPUI_MFLG_NONE);
+
+		sdlpui_create_menu_toggle(c, format(" %3d%% ", alpha_pct),
+			SDLPUI_HOR_LEFT, handle_menu_subwindow_alpha,
+			101 * tag + alpha_pct, false,
+			is_close_to(alpha, subwindow->color.a,
+			DEFAULT_ALPHA_STEP / 2));
 	}
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	struct subwindow *subwindow = button->info.data.subval;
-
-	struct menu_elem elems[(100 - DEFAULT_ALPHA_LOWEST) / DEFAULT_ALPHA_STEP +
-		1 + ((100 - DEFAULT_ALPHA_LOWEST) % DEFAULT_ALPHA_STEP == 0 ? 0 : 1)];
-
-	for (size_t i = 0; i < N_ELEMENTS(elems); i++) {
-		int alpha = ALPHA_PERCENT(DEFAULT_ALPHA_LOWEST + i * DEFAULT_ALPHA_STEP);
-
-		elems[i].caption = " %3d%% ";
-		elems[i].info.type = BUTTON_DATA_ALPHAVAL;
-		elems[i].info.data.alphaval.subwindow = subwindow;
-		elems[i].info.data.alphaval.real_value = alpha;
-		elems[i].info.data.alphaval.show_value = i * DEFAULT_ALPHA_STEP;
-		elems[i].info.group = BUTTON_GROUP_MENU;
-		elems[i].on_render = render_button_menu_alpha;
-		elems[i].on_menu = handle_menu_subwindow_alpha;
-	}
-	elems[N_ELEMENTS(elems) - 1].info.data.alphaval.real_value =
-		DEFAULT_ALPHA_FULL;
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
+	return result;
 }
 
-static void handle_menu_top(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_top(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
-	
-	if (!click_menu_button(button, menu_panel, event)) {
-		return;
-	}
+	int tag;
+	struct subwindow *subwindow;
 
-	struct subwindow *subwindow = button->info.data.subval;
-
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow);
 	subwindow->always_top = !subwindow->always_top;
-
 	sort_to_top(subwindow->window);
 }
 
-static void handle_menu_terms(struct window *window,
-		struct button *button, const SDL_Event *event,
-		struct menu_panel *menu_panel)
+static void handle_menu_term_pop(struct sdlpui_dialog *dlg,
+		struct sdlpui_window *window, bool up)
 {
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_SUBVAL);
+	struct subwindow *subwindow = get_subwindow_by_index(window,
+		(unsigned int)dlg->tag, false);
 
-	if (!select_menu_button(button, menu_panel, event)) {
-		return;
-	}
-
-	struct subwindow *subwindow = button->info.data.subval;
-
-	struct button_info info = {
-		BUTTON_DATA_SUBVAL, {.subval = subwindow}, BUTTON_GROUP_MENU
-	};
-
-	struct menu_elem elems[] = {
-		{
-			"Font", info, render_button_menu_simple, handle_menu_font
-		},
-		{
-			subwindow->index == MAIN_SUBWINDOW ? "Tiles" : NULL,
-			info, render_button_menu_simple, handle_menu_tiles
-		},
-		{
-			subwindow->index == MAIN_SUBWINDOW ? NULL: "Purpose",
-			info, render_button_menu_simple, handle_menu_purpose
-		},
-		{
-			subwindow->index == MAIN_SUBWINDOW ? NULL : "Alpha",
-			info, render_button_menu_simple, handle_menu_alpha
-		},
-		{
-			"Borders", info, render_button_menu_borders, handle_menu_borders
-		},
-		{
-			subwindow->index == MAIN_SUBWINDOW ? "Cursor" : NULL,
-			info, render_button_menu_cursor, handle_menu_cursor
-		},
-		{
-			"Top", info, render_button_menu_top, handle_menu_top
-		}
-	};
-
-	load_next_menu_panel(window, menu_panel, button, N_ELEMENTS(elems), elems);
+	/*
+	 * When the menu is visible, signal that the subwindow should have a
+	 * pronounced border so it is easy to see where the changes will be
+	 * made.
+	 */
+	window->outlined_subwindow = (up) ? subwindow->index : (unsigned)-1;
 }
 
-static void load_main_menu_panel(struct status_bar *status_bar)
+static struct sdlpui_dialog *handle_menu_terms(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
 {
-	assert(N_ELEMENTS(angband_term_name) == MAX_SUBWINDOWS);
+	int tag;
+	struct subwindow *subwindow;
+	struct sdlpui_dialog *result;
+	struct sdlpui_control *c;
 
-	struct menu_elem term_elems[N_ELEMENTS(angband_term_name)];
-	size_t n_terms = 0;
+	SDL_assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	SDL_assert(tag >= 0);
+	subwindow = get_subwindow_by_index(window, (unsigned int)tag, false);
+	SDL_assert(subwindow);
+	result = sdlpui_start_simple_menu(dlg, ctrl,
+		(subwindow->index == MAIN_SUBWINDOW) ? 4 : 5, true, false,
+		handle_menu_term_pop, NULL, tag);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Font", SDLPUI_HOR_LEFT,
+		handle_menu_font, SDLPUI_CHILD_MENU_RIGHT, tag, false);
+	if (subwindow->index == MAIN_SUBWINDOW) {
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, "Tiles", SDLPUI_HOR_LEFT,
+			handle_menu_tiles, SDLPUI_CHILD_MENU_RIGHT, 0, false);
+	} else {
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, "Purpose", SDLPUI_HOR_LEFT,
+			handle_menu_purpose, SDLPUI_CHILD_MENU_RIGHT, tag,
+			false);
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, "Alpha", SDLPUI_HOR_LEFT,
+			handle_menu_alpha, SDLPUI_CHILD_MENU_RIGHT, tag, false);
+	}
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_toggle(c, "Borders", SDLPUI_HOR_LEFT,
+		handle_menu_borders, tag, false, subwindow->borders.visible);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_toggle(c, "Top", SDLPUI_HOR_LEFT,
+		handle_menu_top, tag, false, subwindow->always_top);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	for (size_t i = 0; i < N_ELEMENTS(angband_term_name); i++) {
+	return result;
+}
+
+static struct sdlpui_dialog *handle_menu_button(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *parent, struct sdlpui_window *window,
+		int ul_x_win, int ul_y_win)
+{
+	struct sdlpui_dialog *result = sdlpui_start_simple_menu(
+		parent, ctrl, 3 + (int)N_ELEMENTS(angband_term_name)
+		+ ((window->index == MAIN_WINDOW) ? 2 : 0), true, false,
+		NULL, NULL, 0);
+	unsigned int i;
+	struct sdlpui_control *c;
+
+	for (i = 0; i < (unsigned int)N_ELEMENTS(angband_term_name); ++i) {
 		struct subwindow *subwindow =
-			get_subwindow_by_index(status_bar->window, i, true);
-		if (subwindow == NULL) {
+			get_subwindow_by_index(window, i, true);
+
+		if (!subwindow) {
 			continue;
 		}
-
-		term_elems[n_terms].caption = angband_term_name[i];
-		term_elems[n_terms].info.type = BUTTON_DATA_SUBVAL;
-		term_elems[n_terms].info.data.subval = subwindow;
-		term_elems[n_terms].info.group = BUTTON_GROUP_MENU;
-		term_elems[n_terms].on_render = render_button_menu_terms;
-		term_elems[n_terms].on_menu = handle_menu_terms;
-		n_terms++;
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, angband_term_name[i],
+			SDLPUI_HOR_LEFT, handle_menu_terms,
+			SDLPUI_CHILD_MENU_RIGHT, (int)i, false);
 	}
-
-	struct button_info info = {BUTTON_DATA_NONE, {0}, BUTTON_GROUP_MENU};
-	struct menu_elem other_elems[] = {
-		{
-			"Fullscreen",
-			info, render_button_menu_fullscreen, handle_menu_fullscreen
-		},
-		{
-			status_bar->window->index == MAIN_WINDOW ? "Windows" : NULL,
-			info, render_button_menu_simple, handle_menu_windows
-		},
-		{
-			"About",
-			info, render_button_menu_simple, handle_menu_about
-		},
-		{
-			"Quit", 
-			info, render_button_menu_simple, handle_menu_quit
-		}
-	};
-
-	struct menu_elem elems[N_ELEMENTS(term_elems) + N_ELEMENTS(other_elems)];
-
-	memcpy(elems, term_elems, n_terms * sizeof(term_elems[0]));
-	memcpy(elems + n_terms, other_elems, sizeof(other_elems));
-
-	struct button dummy = {0};
-	dummy.full_rect.x = status_bar->full_rect.x;
-	dummy.full_rect.y = status_bar->full_rect.y + status_bar->full_rect.h;
-
-	status_bar->menu_panel = make_menu_panel(&dummy, status_bar->font,
-			n_terms + N_ELEMENTS(other_elems), elems);
-}
-
-static void unselect_menu_buttons(struct menu_panel *menu_panel)
-{
-	if (menu_panel == NULL) {
-		return;
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_toggle(c, "Fullscreen", SDLPUI_HOR_LEFT,
+		handle_menu_fullscreen, 0, false,
+		window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
+	if (window->index == MAIN_WINDOW) {
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_menu_toggle(c, "Send Keypad Modifier",
+			SDLPUI_HOR_LEFT, handle_menu_kp_mod, 0, false,
+			window->app->kp_as_mod);
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_menu_button(c, "Menu Shortcuts...",
+			SDLPUI_HOR_LEFT, handle_menu_shortcuts, 0, false);
+		c = sdlpui_get_simple_menu_next_unused(result,
+			SDLPUI_MFLG_NONE);
+		sdlpui_create_submenu_button(c, "Windows", SDLPUI_HOR_LEFT,
+			handle_menu_windows, SDLPUI_CHILD_MENU_RIGHT, 0, false);
 	}
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_button(c, "About...", SDLPUI_HOR_LEFT,
+		handle_menu_about, 0, false);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_button(c, "SDL Details...", SDLPUI_HOR_LEFT,
+		handle_menu_sdl_details, 0, false);
+	c = sdlpui_get_simple_menu_next_unused(result, SDLPUI_MFLG_NONE);
+	sdlpui_create_menu_button(c, "Quit", SDLPUI_HOR_LEFT,
+		handle_menu_quit, 0, false);
+	sdlpui_complete_simple_menu(result, window);
+	result->rect.x = ul_x_win;
+	result->rect.y = ul_y_win;
 
-	for (size_t i = 0; i < menu_panel->button_bank.number; i++) {
-		menu_panel->button_bank.buttons[i].selected = false;
-		menu_panel->button_bank.buttons[i].highlighted = false;
-	}
-
-	unselect_menu_buttons(menu_panel->next);
-}
-
-static bool handle_menu_button_mousemotion(struct window *window,
-		const SDL_Event *event)
-{
-	assert(event->type == SDL_MOUSEMOTION);
-
-	bool handled = false;
-
-	struct menu_panel *menu_panel = get_menu_panel_by_xy(window->status_bar.menu_panel,
-				event->motion.x, event->motion.y);
-	if (menu_panel == NULL) {
-		return handled;
-	}
-
-	for (size_t i = 0; i < menu_panel->button_bank.number; i++) {
-		struct button *button = &menu_panel->button_bank.buttons[i];
-		if (is_point_in_rect(event->motion.x, event->motion.y,
-					&button->full_rect))
-		{
-			/* note that the buttons themselves set "selected" */
-			button->highlighted = true;
-
-			assert(button->callbacks.on_menu != NULL);
-			button->callbacks.on_menu(window, button, event, menu_panel);
-
-			handled = true;
-
-		} else {
-			button->highlighted = false;
-			/* but we do unset selected */
-			button->selected = false;
-		}
-	}
-	unselect_menu_buttons(menu_panel->next);
-
-	return handled;
-}
-
-static bool handle_menu_button_click(struct window *window,
-		const SDL_Event *event)
-{
-	assert(event->type == SDL_MOUSEBUTTONDOWN
-			|| event->type == SDL_MOUSEBUTTONUP);
-
-	bool handled = false;
-
-	struct menu_panel *menu_panel = get_menu_panel_by_xy(window->status_bar.menu_panel,
-				event->button.x, event->button.y);
-	if (menu_panel == NULL) {
-		return handled;
-	}
-
-	for (size_t i = 0; i < menu_panel->button_bank.number; i++) {
-		struct button *button = &menu_panel->button_bank.buttons[i];
-		if (is_point_in_rect(event->motion.x, event->motion.y,
-					&button->full_rect))
-		{
-			assert(button->callbacks.on_menu != NULL);
-			button->callbacks.on_menu(window, button, event, menu_panel);
-
-			handled = true;
-		}
-	}
-
-	return handled;
-}
-
-static bool handle_menu_event(struct window *window, const SDL_Event *event)
-{
-	switch (event->type) {
-		case SDL_MOUSEMOTION:
-			return handle_menu_button_mousemotion(window, event);
-		case SDL_MOUSEBUTTONDOWN: /* fallthru */
-		case SDL_MOUSEBUTTONUP:
-			return handle_menu_button_click(window, event);
-		default:
-			return false;
-	}
-}
-
-static bool is_menu_button_mouse_click(const struct button *button,
-		const SDL_Event *event)
-{
-	if ((event->type == SDL_MOUSEBUTTONDOWN || event->type == SDL_MOUSEBUTTONUP)
-			&& is_point_in_rect(event->button.x, event->button.y, &button->full_rect))
-	{
-		return true;
-	}
-
-	return false;
-}
-
-static bool handle_menu_button(struct window *window,
-		struct button *button, const SDL_Event *event)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_MENU, BUTTON_DATA_NONE);
-
-	switch (event->type) {
-		case SDL_MOUSEMOTION:
-			if (is_point_in_rect(event->motion.x, event->motion.y, &button->full_rect)) {
-				/* create menu on mouseover */
-				if (window->status_bar.menu_panel == NULL) {
-					load_main_menu_panel(&window->status_bar);
-				}
-				button->highlighted = true;
-				return true;
-			} else if (handle_menu_event(window, event)) {
-				return true;
-			} else if (button->highlighted) {
-				/* the menu sticks around so that it is not horrible to use */
-				return true;
-			}
-			return false;
-		default:
-			if (handle_menu_event(window, event)) {
-				return true;
-			} else if (is_menu_button_mouse_click(button, event)) {
-				/* menu button just eats mouse clicks */
-				return true;
-			}
-
-			if (window->status_bar.menu_panel != NULL) {
-				free_menu_panel(window->status_bar.menu_panel);
-				window->status_bar.menu_panel = NULL;
-			}
-			button->highlighted = false;
-			return false;
-	}
-}
-
-static bool do_button(struct window *window,
-		struct button *button, const SDL_Event *event)
-{
-	switch (event->type) {
-		case SDL_MOUSEBUTTONDOWN:
-			if (is_point_in_rect(event->button.x, event->button.y, &button->full_rect)) {
-				button->selected = true;
-				return true;
-			}
-			break;
-		case SDL_MOUSEBUTTONUP:
-			if (is_point_in_rect(event->button.x, event->button.y, &button->full_rect)
-					&& button->selected)
-			{
-				assert(button->callbacks.on_click != NULL);
-				button->callbacks.on_click(window, button);
-				button->selected = false;
-				return true;
-			}
-			break;
-		case SDL_MOUSEMOTION:
-			if (is_point_in_rect(event->button.x, event->button.y, &button->full_rect)) {
-				button->highlighted = true;
-				return true;
-			}
-			break;
-	}
-
-	button->highlighted = false;
-	button->selected = false;
-
-	return false;
+	return result;
 }
 
 static bool is_close_to(int a, int b, unsigned range)
@@ -2765,6 +3411,43 @@ static void fit_rect_in_rect_proportional(SDL_Rect *small, const SDL_Rect *big)
 	}
 }
 
+/**
+ * Like fit_rect_in_rect_by_xy() but allow changing the size as well as position
+ * of small.  If not possible to fit one dimension of small in big while leaving
+ * the size at least the minimum size specified, leave the size in that
+ * dimension as it is.
+ */
+static void coerce_rect_in_rect(SDL_Rect *small, const SDL_Rect *big,
+		int min_w, int min_h)
+{
+	if (small->x < big->x) {
+		small->x = big->x;
+	}
+	if (small->y < big->y) {
+		small->y = big->y;
+	}
+	if (small->x + small->w > big->x + big->w) {
+		if (small->w <= big->w) {
+			small->x = big->x + big->w - small->w;
+		} else {
+			small->x = big->x;
+			if (min_w <= big->w) {
+				small->w = big->w;
+			}
+		}
+	}
+	if (small->y + small->h > big->y + big->h) {
+		if (small->h <= big->h) {
+			small->y = big->y + big->h - small->h;
+		} else {
+			small->y = big->y;
+			if (min_h <= big->h) {
+				small->h = big->h;
+			}
+		}
+	}
+}
+
 static void resize_rect(SDL_Rect *rect,
 		int left, int top, int right, int bottom)
 {
@@ -2783,9 +3466,34 @@ static void resize_rect(SDL_Rect *rect,
 	rect->h += bottom;
 }
 
-/* tries to snap to other term in such a way so that their
+static void crop_rects(SDL_Rect *src, SDL_Rect *dst)
+{
+	if (src->w == dst->w) {
+		/* most common case - do nothing */
+	} else if (src->w > dst->w) {
+		/* second most common case - font glyph is too large */
+		src->x += (src->w - dst->w) / 2;
+		src->w = dst->w;
+	} else {
+		/* uncommon case - font glyph is too small */ 
+		dst->x += (dst->w - src->w) / 2;
+		dst->w = src->w;
+	}
+
+	if (src->h == dst->h) {
+		;
+	} else if (src->h > dst->h) {
+		src->y += (src->h - dst->h) / 2;
+		src->h = dst->h;
+	} else  {
+		dst->y += (dst->h - src->h) / 2;
+		dst->h = src->h;
+	}
+}
+
+/** tries to snap to other term in such a way so that their
  * (visible) borders overlap */
-static void try_snap(struct window *window,
+static void try_snap(struct sdlpui_window *window,
 		struct subwindow *subwindow, SDL_Rect *rect)
 {
 	for (size_t i = N_ELEMENTS(window->subwindows); i > 0; i--) {
@@ -2803,25 +3511,25 @@ static void try_snap(struct window *window,
 		int oh = other->full_rect.h;
 
 		if (oy < rect->y + rect->h && rect->y < oy + oh) {
-			if (is_close_to(rect->x, ox + ow, DEFAULT_SNAP_RANGE)) {
+			if (is_close_to(rect->x, ox + ow, DEFAULT_SNAP_RANGE(window))) {
 				rect->x = ox + ow - DEFAULT_VISIBLE_BORDER;
 			}
-			if (is_close_to(rect->x + rect->w, ox, DEFAULT_SNAP_RANGE)) {
+			if (is_close_to(rect->x + rect->w, ox, DEFAULT_SNAP_RANGE(window))) {
 				rect->x = ox - rect->w + DEFAULT_VISIBLE_BORDER;
 			}
 		}
 		if (ox < rect->x + rect->w && rect->x < ox + ow) {
-			if (is_close_to(rect->y, oy + oh, DEFAULT_SNAP_RANGE)) {
+			if (is_close_to(rect->y, oy + oh, DEFAULT_SNAP_RANGE(window))) {
 				rect->y = oy + oh - DEFAULT_VISIBLE_BORDER;
 			}
-			if (is_close_to(rect->y + rect->h, oy, DEFAULT_SNAP_RANGE)) {
+			if (is_close_to(rect->y + rect->h, oy, DEFAULT_SNAP_RANGE(window))) {
 				rect->y = oy - rect->h + DEFAULT_VISIBLE_BORDER;
 			}
 		}
 	}
 }
 
-static void start_moving(struct window *window,
+static void start_moving(struct sdlpui_window *window,
 		struct subwindow *subwindow, const SDL_MouseButtonEvent *mouse)
 {
 	assert(!window->size_state.active);
@@ -2835,7 +3543,7 @@ static void start_moving(struct window *window,
 	window->move_state.moving = true;
 }
 
-static void start_sizing(struct window *window,
+static void start_sizing(struct sdlpui_window *window,
 		struct subwindow *subwindow, const SDL_MouseButtonEvent *mouse)
 {
 	assert(!window->move_state.active);
@@ -2857,31 +3565,8 @@ static void start_sizing(struct window *window,
 	window->size_state.sizing = true;
 }
 
-static bool handle_menu_mousebuttondown(struct window *window,
-		const SDL_MouseButtonEvent *mouse)
+static void handle_window_closed(struct my_app *a, struct sdlpui_window *window)
 {
-	if (window->move_state.active || window->size_state.active) {
-		struct subwindow *subwindow = get_subwindow_by_xy(window, mouse->x, mouse->y);
-		if (subwindow != NULL
-				&& is_rect_in_rect(&subwindow->full_rect, &window->inner_rect))
-		{
-			if (window->move_state.active && !window->move_state.moving) {
-				start_moving(window, subwindow, mouse);
-			} else if (window->size_state.active && !window->size_state.sizing) {
-				start_sizing(window, subwindow, mouse);
-			}
-		}
-		return true;
-	} else if (is_over_status_bar(&window->status_bar, mouse->x, mouse->y)) {
-		return true;
-	} else {
-		return false;
-	}
-}
-
-static void handle_window_closed(const SDL_WindowEvent *event)
-{
-	struct window *window = get_window_by_id(event->windowID);
 	assert(window != NULL);
 
 	if (window->index == MAIN_WINDOW) {
@@ -2894,32 +3579,81 @@ static void handle_window_closed(const SDL_WindowEvent *event)
 			}
 		}
 		free_window(window);
+		if (a->w_mouse == window) {
+			a->w_mouse = NULL;
+		}
+		if (a->w_key == window) {
+			a->w_key = NULL;
+		}
 	}
 }
 
-static void handle_window_focus(const SDL_WindowEvent *event)
+static void handle_window_focus(struct my_app *a, const SDL_WindowEvent *event)
 {
-	assert(event->event == SDL_WINDOWEVENT_FOCUS_GAINED
-			|| event->event == SDL_WINDOWEVENT_FOCUS_LOST);
+	struct sdlpui_window *new_w;
 
-	struct window *window = get_window_by_id(event->windowID);
-	if (window == NULL) {
-		/* when window is closed, it sends FOCUS_LOST event */
-		assert(event->event == SDL_WINDOWEVENT_FOCUS_LOST);
-		return;
-	}
-	
 	switch (event->event) {
+		case SDL_WINDOWEVENT_ENTER:
+			new_w = get_window_by_id(a, event->windowID);
+			SDLPUI_EVENT_TRACER("window", new_w,
+				"(not extracted)", "mouse entered");
+			if (a->w_mouse && a->w_mouse != new_w
+					&& a->w_mouse->d_mouse) {
+				if (a->w_mouse->d_mouse->ftb->handle_window_loses_mouse) {
+					(*a->w_mouse->d_mouse->ftb->handle_window_loses_mouse)(
+						a->w_mouse->d_mouse,
+						a->w_mouse);
+				}
+				a->w_mouse->d_mouse = NULL;
+			}
+			a->w_mouse = new_w;
+			break;
+		case SDL_WINDOWEVENT_LEAVE:
+			SDLPUI_EVENT_TRACER("window", a->w_mouse,
+				"(not extracted)", "mouse left");
+			if (a->w_mouse && a->w_mouse->d_mouse) {
+				if (a->w_mouse->d_mouse->ftb->handle_window_loses_mouse) {
+					(*a->w_mouse->d_mouse->ftb->handle_window_loses_mouse)(
+						a->w_mouse->d_mouse,
+						a->w_mouse);
+				}
+				a->w_mouse->d_mouse = NULL;
+			}
+			a->w_mouse = NULL;
+			break;
 		case SDL_WINDOWEVENT_FOCUS_GAINED:
-			window->focus = true;
+			new_w = get_window_by_id(a, event->windowID);
+			SDLPUI_EVENT_TRACER("window", new_w,
+				"(not extracted)", "gained key focus");
+			if (a->w_key && a->w_key != new_w
+					&& a->w_key->d_key) {
+				if (a->w_key->d_key->ftb->handle_window_loses_key) {
+					(*a->w_key->d_key->ftb->handle_window_loses_key)(
+						a->w_key->d_key, a->w_key);
+				}
+				a->w_key->d_key = NULL;
+			}
+			a->w_key = new_w;
 			break;
 		case SDL_WINDOWEVENT_FOCUS_LOST:
-			window->focus = false;
+			SDLPUI_EVENT_TRACER("window", a->w_key,
+				"(not extracted)", "lost key focus");
+			if (a->w_key && a->w_key->d_key) {
+				if (a->w_key->d_key->ftb->handle_window_loses_key) {
+					(*a->w_key->d_key->ftb->handle_window_loses_key)(
+						a->w_key->d_key, a->w_key);
+				}
+				a->w_key->d_key = NULL;
+			}
+			a->w_key = NULL;
 			break;
+		default:
+			assert(0);
 	}
 }
 
-static void handle_last_resize_event(int num_events, const SDL_Event *events)
+static void handle_last_resize_event(struct my_app *a, int num_events,
+		const SDL_Event *events)
 {
 	assert(num_events > 0);
 
@@ -2927,7 +3661,8 @@ static void handle_last_resize_event(int num_events, const SDL_Event *events)
 		if (events[i].window.event == SDL_WINDOWEVENT_RESIZED) {
 			const SDL_WindowEvent event = events[i].window;
 
-			struct window *window = get_window_by_id(event.windowID);
+			struct sdlpui_window *window =
+				get_window_by_id(a, event.windowID);
 			assert(window != NULL);
 			resize_window(window, event.data1, event.data2);
 
@@ -2936,7 +3671,7 @@ static void handle_last_resize_event(int num_events, const SDL_Event *events)
 	}
 }
 
-static void handle_windowevent(const SDL_WindowEvent *event)
+static void handle_windowevent(struct my_app *a, const SDL_WindowEvent *event)
 {
 	SDL_Event events[128];
 	events[0].window = *event;
@@ -2947,26 +3682,39 @@ static void handle_windowevent(const SDL_WindowEvent *event)
 	bool resize = false;
 
 	for (int i = 0; i < num_events; i++) {
+		struct sdlpui_window *window;
+
+		window = get_window_by_id(a, events[i].window.windowID);
+		if (!window) {
+			continue;
+		}
+		if (window->move_state.active) {
+			signal_move_state(window);
+		} else if (window->size_state.active) {
+			signal_size_state(window);
+		}
 		switch (events[i].window.event) {
 			case SDL_WINDOWEVENT_RESIZED:
 				/* just for efficiency */
 				resize = true;
 				break;
 			case SDL_WINDOWEVENT_CLOSE:
-				handle_window_closed(&events[i].window);
+				handle_window_closed(a, window);
 				break;
-			case SDL_WINDOWEVENT_FOCUS_GAINED: /* fallthru */
+			case SDL_WINDOWEVENT_ENTER: /* fallthrough */
+			case SDL_WINDOWEVENT_LEAVE:
+			case SDL_WINDOWEVENT_FOCUS_GAINED:
 			case SDL_WINDOWEVENT_FOCUS_LOST:
-				handle_window_focus(&events[i].window);
+				handle_window_focus(a, &events[i].window);
 				break;
 		}
 	}
 
 	if (resize) {
-		handle_last_resize_event(num_events, events);
+		handle_last_resize_event(a, num_events, events);
 	}
 
-	redraw_all_windows(false);
+	redraw_all_windows(a, false);
 }
 
 static void resize_subwindow(struct subwindow *subwindow)
@@ -2992,24 +3740,22 @@ static void resize_subwindow(struct subwindow *subwindow)
 	Term_redraw();
 	Term_activate(old);
 
-	refresh_angband_terms();
+	refresh_angband_terms(subwindow->app);
 }
 
-static void do_sizing(struct window *window, int x, int y)
+static void do_sizing(struct sdlpui_window *window, int x, int y)
 {
 	struct size_state *size_state = &window->size_state;
-
-	assert(size_state->subwindow != NULL);
-
-	SDL_Rect rect = size_state->subwindow->sizing_rect;
-
 	int newx = x - size_state->originx;
 	int newy = y - size_state->originy;
-
-	int left   = size_state->left ? newx : 0;
-	int top    = size_state->top  ? newy : 0;
-	int right  = size_state->left ? 0 : newx;
+	int left = size_state->left ? newx : 0;
+	int top = size_state->top  ? newy : 0;
+	int right = size_state->left ? 0 : newx;
 	int bottom = size_state->top  ? 0 : newy;
+	SDL_Rect rect;
+
+	assert(size_state->subwindow != NULL);
+	rect = size_state->subwindow->sizing_rect;
 
 	resize_rect(&rect, left, top, right, bottom);
 	fit_rect_in_rect_by_hw(&rect, &window->inner_rect);
@@ -3017,252 +3763,160 @@ static void do_sizing(struct window *window, int x, int y)
 	if (is_ok_col_row(size_state->subwindow,
 				&rect,
 				size_state->subwindow->font_width,
-				size_state->subwindow->font_height))
-	{
+				size_state->subwindow->font_height)
+			&& !SDL_RectEquals(&rect, &size_state->subwindow->sizing_rect)) {
 		size_state->subwindow->sizing_rect = rect;
+		window->dirty = true;
 	}
 
 	size_state->originx = x;
 	size_state->originy = y;
 }
 
-static void do_moving(struct window *window, int x, int y)
+static void do_moving(struct sdlpui_window *window, int x, int y)
 {
 	struct move_state *move_state = &window->move_state;
+	SDL_Rect old_rect = move_state->subwindow->full_rect;
+	SDL_Rect *rect;
 
 	assert(move_state->subwindow != NULL);
-
-	SDL_Rect *rect = &move_state->subwindow->full_rect;
+	rect = &move_state->subwindow->full_rect;
 
 	rect->x += x - move_state->originx;
 	rect->y += y - move_state->originy;
 
 	try_snap(window, move_state->subwindow, rect);
 	fit_rect_in_rect_by_xy(rect, &window->inner_rect);
+	if (!SDL_RectEquals(&old_rect, rect)) {
+		window->dirty = true;
+	}
 
 	move_state->originx = x;
 	move_state->originy = y;
 }
 
-static bool handle_menu_mousebuttonup(struct window *window,
-		const SDL_MouseButtonEvent *mouse)
-{
-	if (window->move_state.active && window->move_state.moving) {
-		window->move_state.moving = false;
-	} else if (window->size_state.active && window->size_state.sizing) {
-		window->size_state.sizing = false;
-
-		if (window->size_state.subwindow != NULL) {
-			resize_subwindow(window->size_state.subwindow);
-		}
-	} 
-	
-	if (window->move_state.active
-			|| window->size_state.active
-			|| is_over_status_bar(&window->status_bar, mouse->x, mouse->y))
-	{
-		return true;
-	} else {
-		return false;
-	}
-}
-
-static bool handle_menu_mousemotion(struct window *window,
+static bool handle_mousemotion(struct my_app *a,
 		const SDL_MouseMotionEvent *mouse)
 {
-	if (window->move_state.moving) {
-		do_moving(window, mouse->x, mouse->y);
-		return true;
-	} else if (window->size_state.sizing) {
-		do_sizing(window, mouse->x, mouse->y);
-		return true;
-	} else if (window->move_state.active || window->size_state.active) {
-		return true;
-	} else if (is_over_status_bar(&window->status_bar, mouse->x, mouse->y)) {
-		return true;
-	}
+	struct sdlpui_dialog *d;
+	SDL_Event pendm[4];
 
-	return false;
-}
-
-static bool handle_menu_keyboard(struct window *window, const SDL_Event *event)
-{
-	if (window->move_state.active || window->size_state.active) {
-		return true;
-	}
-
-	SDL_Event key = *event;
-	/* the user pressed a key; probably wants to play? */
-	SDL_PushEvent(&key);
-
-	return false;
-}
-
-static bool handle_status_bar_buttons(struct window *window,
-		const SDL_Event *event)
-{
-	bool handled = false;
-
-	for (size_t i = 0; i < window->status_bar.button_bank.number; i++) {
-		struct button *button = &window->status_bar.button_bank.buttons[i];
-		if (button->callbacks.on_event != NULL) {
-			handled |= button->callbacks.on_event(window, button, event);
-		} else {
-			handled |= do_button(window, button, event);
-		}
-	}
-
-	return handled;
-}
-
-static void redraw_status_bar_buttons(struct window *window)
-{
-	SDL_Event shutdown = {.type = SDL_USEREVENT};
-	(void) handle_status_bar_buttons(window, &shutdown);
-}
-
-static bool handle_menu_windowevent(struct window *window,
-		const SDL_WindowEvent *event)
-{
-	if (window->move_state.active) {
-		signal_move_state(window);
-	} else if (window->size_state.active) {
-		signal_size_state(window);
-	}
-
-	redraw_status_bar_buttons(window);
-
-	handle_windowevent(event);
-
-	return false;
-}
-
-static bool is_event_windowid_ok(const struct window *window, const SDL_Event *event)
-{
-	switch (event->type) {
-		case SDL_KEYDOWN: /* fallthru */
-		case SDL_KEYUP:
-			return event->key.windowID == window->id;
-		case SDL_TEXTINPUT:
-			return event->text.windowID == window->id;
-		case SDL_MOUSEMOTION:
-			return event->motion.windowID == window->id;
-		case SDL_MOUSEBUTTONDOWN: /* fallthru */
-		case SDL_MOUSEBUTTONUP:
-			return event->button.windowID == window->id;
-		default:
-			return true;
-	}
-}
-
-/* returns true for events that should be processed by buttons */
-static bool is_ok_button_event(const struct window *window, const SDL_Event *event)
-{
-	switch (event->type) {
-		case SDL_KEYDOWN:         /* fallthru */
-		case SDL_KEYUP:           /* fallthru */
-		case SDL_TEXTINPUT:       /* fallthru */
-			return is_event_windowid_ok(window, event);
-		case SDL_MOUSEMOTION:     /* fallthru */
-		case SDL_MOUSEBUTTONDOWN: /* fallthru */
-		case SDL_MOUSEBUTTONUP:
-			return window->focus && is_event_windowid_ok(window, event);
-		case SDL_USEREVENT:
-			return true;
-		default:
-			return false;
-	}
-}
-
-static bool handle_status_bar_events(struct window *window,
-		const SDL_Event *event)
-{
-	if (!is_event_windowid_ok(window, event)) {
-		/* just in case */
-		if (window->move_state.active) {
-			signal_move_state(window);
-		} else if (window->size_state.active) {
-			signal_size_state(window);
-		}
+	if (!a->w_mouse) {
 		return false;
 	}
 
-	switch (event->type) {
-		case SDL_MOUSEMOTION:
-			return handle_menu_mousemotion(window, &event->motion);
-		case SDL_MOUSEBUTTONDOWN:
-			return handle_menu_mousebuttondown(window, &event->button);
-		case SDL_MOUSEBUTTONUP:
-			return handle_menu_mousebuttonup(window, &event->button);
-		case SDL_KEYDOWN:     /* fallthru */
-		case SDL_KEYUP:       /* fallthru */
-		case SDL_TEXTEDITING: /* fallthru */
-		case SDL_TEXTINPUT:
-			return handle_menu_keyboard(window, event);
-		case SDL_WINDOWEVENT:
-			return handle_menu_windowevent(window, &event->window);
-		case SDL_QUIT:
-			handle_quit();
-			return false;
-		default:
-			return false;
-	}
-}
+	/*
+	 * If more than one consecutive motion event is queued, only process
+	 * the last one.
+	 */
+	while (1) {
+		int npend = SDL_PeepEvents(pendm,
+			(int)(sizeof(pendm) / sizeof(pendm[0])),
+			SDL_GETEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION);
 
-static void do_status_bar_loop(struct window *window)
-{
-	window->status_bar.in_menu = true;
-
-	bool keep_going = true;
-	while (keep_going) {
-		SDL_Delay(window->delay);
-
-		SDL_Event event;
-		SDL_WaitEvent(&event);
-
-		bool handled = false;
-		if (is_ok_button_event(window, &event)
-				&& !window->move_state.moving
-				&& !window->size_state.sizing)
-		{
-			 handled = handle_status_bar_buttons(window, &event);
+		if (npend <= 0) {
+			if (npend < 0) {
+				SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+					"SDL_PeepEvents() for pending motion "
+					"events failed: %s", SDL_GetError());
+			}
+			break;
 		}
-
-		if (event.type == SDL_MOUSEMOTION) {
-			/* annoying mousemotion spam! */
-			SDL_FlushEvent(SDL_MOUSEMOTION);
-		}
-
-		if (!handled) {
-			/* so the user didnt click on a button */
-			keep_going = handle_status_bar_events(window, &event);
-		}
-
-		redraw_window(window);
+		SDL_assert(npend <= (int)(sizeof(pendm) / sizeof(pendm[0]))
+			&& pendm[npend - 1].type == SDL_MOUSEMOTION);
+		mouse = &pendm[npend - 1].motion;
 	}
 
-	window->status_bar.in_menu = false;
-}
-
-static bool has_visible_subwindow(const struct window *window, unsigned index)
-{
-	return get_subwindow_by_index(window, index, true) != NULL;
-}
-
-static bool handle_mousemotion(const SDL_MouseMotionEvent *mouse)
-{
-	struct window *window = get_window_by_id(mouse->windowID);
-
-	if (is_over_status_bar(&window->status_bar, mouse->x, mouse->y)) {
-		do_status_bar_loop(window);
+	if (a->w_mouse->move_state.moving) {
+		do_moving(a->w_mouse, mouse->x, mouse->y);
+		return true;
 	}
-	/* dont need other mousemotion events */
-	SDL_FlushEvent(SDL_MOUSEMOTION);
+	if (a->w_mouse->size_state.sizing) {
+		do_sizing(a->w_mouse, mouse->x, mouse->y);
+		return true;
+	}
+	/* Have a menu or dialog handle the event if appropriate. */
+	if (a->w_mouse->d_mouse
+			&& a->w_mouse->d_mouse->ftb->handle_mousemove
+			&& (*a->w_mouse->d_mouse->ftb->handle_mousemove)(
+				a->w_mouse->d_mouse, a->w_mouse, mouse)) {
+		return true;
+	}
+
+	/*
+	 * Ignore motion events while a mouse button is pressed (at
+	 * least up to the point that the mouse leaves the window).
+	 */
+	if (mouse->state != 0) {
+		return true;
+	}
+
+	/*
+	 * Has the motion entered any of the active dialogs/menus?
+	 * Check from front to back.
+	 */
+	d = a->w_mouse->d_head;
+	while (1) {
+		struct sdlpui_dialog *tgt = d;
+
+		if (!tgt) {
+			break;
+		}
+		d = tgt->next;
+		if (sdlpui_is_in_dialog(tgt, mouse->x, mouse->y)
+				&& tgt->ftb->find_control_containing) {
+			int comp_ind;
+			struct sdlpui_control *c =
+				(*tgt->ftb->find_control_containing)(
+				tgt, a->w_mouse, mouse->x, mouse->y,
+				&comp_ind);
+
+			if (a->w_mouse->d_mouse != tgt) {
+				struct sdlpui_dialog *old_d =
+					a->w_mouse->d_mouse;
+
+				if (old_d && old_d->ftb->handle_loses_mouse) {
+					(*old_d->ftb->handle_loses_mouse)(
+						old_d, a->w_mouse, c, tgt);
+				}
+				a->w_mouse->d_mouse = tgt;
+			}
+			/* Have key focus follow mouse. */
+			if (a->w_key != a->w_mouse) {
+				if (a->w_key && a->w_key->d_key
+						&& a->w_key->d_key->ftb->handle_loses_key) {
+					(*a->w_key->d_key->ftb->handle_loses_key)(
+						a->w_key->d_key, a->w_key, c,
+						tgt);
+				}
+				if (a->w_key) {
+					a->w_key->d_key = NULL;
+				}
+				SDL_assert(!a->w_key
+					|| !a->w_key->d_mouse);
+				a->w_key = a->w_mouse;
+			} else if (a->w_key->d_key && a->w_key->d_key != tgt) {
+				if (a->w_key->d_key->ftb->handle_loses_key) {
+					(*a->w_key->d_key->ftb->handle_loses_key)(
+						a->w_key->d_key, a->w_key,
+						c, tgt);
+				}
+			}
+			a->w_mouse->d_key = tgt;
+			if (a->w_mouse->d_mouse
+					&& a->w_mouse->d_mouse->ftb->handle_mousemove
+					&& (*a->w_mouse->d_mouse->ftb->handle_mousemove)(
+					a->w_mouse->d_mouse, a->w_mouse, mouse)) {
+				return true;
+			}
+			break;
+		}
+	}
 
 	return false;
 }
 
-/* x and y are relative to window */
+/** x and y are relative to window */
 static bool get_colrow_from_xy(const struct subwindow *subwindow,
 		int x, int y, int *col, int *row)
 {
@@ -3283,10 +3937,10 @@ static bool get_colrow_from_xy(const struct subwindow *subwindow,
 	return true;
 }
 
-static byte translate_key_mods(Uint16 mods)
+static uint8_t translate_key_mods(Uint16 mods)
 {
 #define TRANSLATE_K_MOD(m, k) ((m) & mods ? (k) : 0)
-	byte angband_mods =
+	uint8_t angband_mods =
 		TRANSLATE_K_MOD(KMOD_SHIFT, KC_MOD_SHIFT)
 		| TRANSLATE_K_MOD(KMOD_CTRL, KC_MOD_CONTROL)
 		| TRANSLATE_K_MOD(KMOD_ALT, KC_MOD_ALT)
@@ -3295,30 +3949,104 @@ static byte translate_key_mods(Uint16 mods)
 	return angband_mods;
 }
 
-static bool handle_mousebuttondown(const SDL_MouseButtonEvent *mouse)
+static bool handle_mousebutton(struct my_app *a,
+		const SDL_MouseButtonEvent *mouse)
 {
-	struct window *window = get_window_by_id(mouse->windowID);
-	assert(window != NULL);
+	struct subwindow *subwindow;
+	int button, col, row;
+	uint8_t mods;
+	term *old;
+	bool touched;
 
-	struct subwindow *subwindow = get_subwindow_by_xy(window, mouse->x, mouse->y);
-	if (subwindow == NULL) {
-		/* not an error, the user clicked in some random place */
-		return false;
-	} else if (!subwindow->top) {
-		bring_to_top(window, subwindow);
-		redraw_window(window);
+	if (!a->w_mouse) {
 		return false;
 	}
 
-	/* terms that are not main do not react to events, and main term
-	 * lives in main window */
-	if (window->index != MAIN_WINDOW) {
-		return false;
+	/* Terminate moving/sizing on a mouse release. */
+	if (mouse->state == SDL_RELEASED
+			&& (a->w_mouse->move_state.moving
+			|| a->w_mouse->size_state.sizing)) {
+		if (a->w_mouse->move_state.moving) {
+			SDL_assert(a->w_mouse->move_state.active);
+			a->w_mouse->move_state.moving = false;
+		} else {
+			SDL_assert(a->w_mouse->size_state.active);
+			a->w_mouse->size_state.sizing = false;
+			if (a->w_mouse->size_state.subwindow) {
+				resize_subwindow(a->w_mouse->size_state.subwindow);
+			}
+		}
+		return true;
+	}
+
+	/* Have a menu or dialog handle the event if appropriate. */
+	touched = false;
+	if (a->w_mouse->d_mouse) {
+		/*
+		 * Press events outside of the dialog will act as if the dialog 
+		 * lost mouse focus to another unknown dialog.  Do not do the
+		 * same for release events in case the press happens in a
+		 * dialog, followed by mouse motion, and then the release
+		 * happens outside the dialog.
+		 */
+		if (mouse->state == SDL_PRESSED && !sdlpui_is_in_dialog(
+				a->w_mouse->d_mouse, mouse->x, mouse->y)) {
+			if (a->w_mouse->d_mouse->ftb->handle_loses_mouse) {
+				(*a->w_mouse->d_mouse->ftb->handle_loses_mouse)(
+					a->w_mouse->d_mouse, a->w_mouse,
+					NULL, NULL);
+			}
+			touched = true;
+		} else if (a->w_mouse->d_mouse->ftb->handle_mouseclick
+				&& (*a->w_mouse->d_mouse->ftb->handle_mouseclick)(
+				a->w_mouse->d_mouse, a->w_mouse, mouse)) {
+			return true;
+		}
+	}
+
+	/* If requested, start moving/sizing on a press. */
+	if (mouse->state != SDL_RELEASED
+			&& (a->w_mouse->move_state.active
+			|| a->w_mouse->size_state.active)) {
+		subwindow = get_subwindow_by_xy(a->w_mouse, mouse->x, mouse->y);
+		if (subwindow && is_rect_in_rect(&subwindow->full_rect,
+				&a->w_mouse->inner_rect)) {
+			if (a->w_mouse->move_state.active
+					&& !a->w_mouse->move_state.moving) {
+				start_moving(a->w_mouse, subwindow, mouse);
+			} else if (a->w_mouse->size_state.active
+					&& !a->w_mouse->size_state.sizing) {
+				start_sizing(a->w_mouse, subwindow, mouse);
+			}
+			return true;
+		}
+	}
+
+	/* Otherwise only react to the button press and not the release. */
+	if (mouse->state == SDL_RELEASED) {
+		return touched;
+	}
+
+	subwindow = get_subwindow_by_xy(a->w_mouse, mouse->x, mouse->y);
+	if (subwindow == NULL) {
+		/* not an error, the user clicked in some random place */
+		return touched;
+	}
+	if (!subwindow->top) {
+		bring_to_top(a->w_mouse, subwindow);
+		redraw_window(a->w_mouse);
+		return true;
+	}
+
+	/*
+	 * Terms that are not main do not react to events, and main term
+	 * lives in the main window.
+	 */
+	if (a->w_mouse->index != MAIN_WINDOW) {
+		return touched;
 	}
 
 	/* all magic numbers are from ui-term.c and ui-context.c :) */
-
-	int button;
 	switch (mouse->button) {
 		case SDL_BUTTON_LEFT:
 			button = 1;
@@ -3328,22 +4056,20 @@ static bool handle_mousebuttondown(const SDL_MouseButtonEvent *mouse)
 			break;
 		default:
 			/* XXX other buttons? */
-			return false;
+			return touched;
 	}
 
-	int col;
-	int row;
 	if (!get_colrow_from_xy(subwindow, mouse->x, mouse->y, &col, &row)) {
-		return false;
+		return touched;
 	}
 
-	byte mods = translate_key_mods(SDL_GetModState());
+	mods = translate_key_mods(SDL_GetModState());
 	/* apparently mouse buttons dont get this */
 	mods &= ~KC_MOD_META;
 
 	button |= mods << 4;
 
-	term *old = Term;
+	old = Term;
 	Term_activate(subwindow->term);
 	Term_mousepress(col, row, button);
 	Term_activate(old);
@@ -3351,205 +4077,455 @@ static bool handle_mousebuttondown(const SDL_MouseButtonEvent *mouse)
 	return true;
 }
 
-static bool handle_keydown(const SDL_KeyboardEvent *key)
+static bool handle_mousewheel(struct my_app *a,
+		const SDL_MouseWheelEvent *wheel)
 {
-	byte mods = translate_key_mods(key->keysym.mod);
-	keycode_t ch = 0;
-
-	if (!(key->keysym.mod & KMOD_NUM)
-			|| (key->keysym.mod & KMOD_NUM
-				&& key->keysym.mod & KMOD_SHIFT))
-	{
-		switch (key->keysym.sym) {
-			/* keypad keys without numlock */
-			case SDLK_KP_0:    ch = '0';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_1:    ch = '1';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_2:    ch = '2';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_3:    ch = '3';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_4:    ch = '4';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_5:    ch = '5';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_6:    ch = '6';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_7:    ch = '7';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_8:    ch = '8';      mods |= KC_MOD_KEYPAD; break;
-			case SDLK_KP_9:    ch = '9';      mods |= KC_MOD_KEYPAD; break;
-		}
-	}
-
-	switch (key->keysym.sym) {
-		case SDLK_KP_MULTIPLY: ch = '*';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_PERIOD:   ch = '.';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_DIVIDE:   ch = '/';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_EQUALS:   ch = '=';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_MINUS:    ch = '-';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_PLUS:     ch = '+';      mods |= KC_MOD_KEYPAD; break;
-		case SDLK_KP_ENTER:    ch = KC_ENTER; mods |= KC_MOD_KEYPAD; break;
-		/* arrow keys */
-		case SDLK_UP:          ch = ARROW_UP;                        break;
-		case SDLK_DOWN:        ch = ARROW_DOWN;                      break;
-		case SDLK_LEFT:        ch = ARROW_LEFT;                      break;
-		case SDLK_RIGHT:       ch = ARROW_RIGHT;                     break;
-		/* text editing keys */
-		case SDLK_BACKSPACE:   ch = KC_BACKSPACE;                    break;
-		case SDLK_PAGEDOWN:    ch = KC_PGDOWN;                       break;
-		case SDLK_PAGEUP:      ch = KC_PGUP;                         break;
-		case SDLK_INSERT:      ch = KC_INSERT;                       break;
-		case SDLK_DELETE:      ch = KC_DELETE;                       break;
-		case SDLK_RETURN:      ch = KC_ENTER;                        break;
-		case SDLK_ESCAPE:      ch = ESCAPE;                          break;
-		case SDLK_HOME:        ch = KC_HOME;                         break;
-		case SDLK_END:         ch = KC_END;                          break;
-		case SDLK_TAB:         ch = KC_TAB;                          break;
-		/* function keys */
-		case SDLK_F1:          ch = KC_F1;                           break;
-		case SDLK_F2:          ch = KC_F2;                           break;
-		case SDLK_F3:          ch = KC_F3;                           break;
-		case SDLK_F4:          ch = KC_F4;                           break;
-		case SDLK_F5:          ch = KC_F5;                           break;
-		case SDLK_F6:          ch = KC_F6;                           break;
-		case SDLK_F7:          ch = KC_F7;                           break;
-		case SDLK_F8:          ch = KC_F8;                           break;
-		case SDLK_F9:          ch = KC_F9;                           break;
-		case SDLK_F10:         ch = KC_F10;                          break;
-		case SDLK_F11:         ch = KC_F11;                          break;
-		case SDLK_F12:         ch = KC_F12;                          break;
-		case SDLK_F13:         ch = KC_F13;                          break;
-		case SDLK_F14:         ch = KC_F14;                          break;
-		case SDLK_F15:         ch = KC_F15;                          break;
-	}
-
-	if (mods & KC_MOD_CONTROL) {
-		switch (key->keysym.sym) {
-			case SDLK_0: ch = '0'; break;
-			case SDLK_1: ch = '1'; break;
-			case SDLK_2: ch = '2'; break;
-			case SDLK_3: ch = '3'; break;
-			case SDLK_4: ch = '4'; break;
-			case SDLK_5: ch = '5'; break;
-			case SDLK_6: ch = '6'; break;
-			case SDLK_7: ch = '7'; break;
-			case SDLK_8: ch = '8'; break;
-			case SDLK_9: ch = '9'; break;
-
-			case SDLK_a: ch = 'a'; break;
-			case SDLK_b: ch = 'b'; break;
-			case SDLK_c: ch = 'c'; break;
-			case SDLK_d: ch = 'd'; break;
-			case SDLK_e: ch = 'e'; break;
-			case SDLK_f: ch = 'f'; break;
-			case SDLK_g: ch = 'g'; break;
-			case SDLK_h: ch = 'h'; break;
-			case SDLK_i: ch = 'i'; break;
-			case SDLK_j: ch = 'j'; break;
-			case SDLK_k: ch = 'k'; break;
-			case SDLK_l: ch = 'l'; break;
-			case SDLK_m: ch = 'm'; break;
-			case SDLK_n: ch = 'n'; break;
-			case SDLK_o: ch = 'o'; break;
-			case SDLK_p: ch = 'p'; break;
-			case SDLK_q: ch = 'q'; break;
-			case SDLK_r: ch = 'r'; break;
-			case SDLK_s: ch = 's'; break;
-			case SDLK_t: ch = 't'; break;
-			case SDLK_u: ch = 'u'; break;
-			case SDLK_v: ch = 'v'; break;
-			case SDLK_w: ch = 'w'; break;
-			case SDLK_x: ch = 'x'; break;
-			case SDLK_y: ch = 'y'; break;
-			case SDLK_z: ch = 'z'; break;
-		}
-	}
-
-	if (ch) {
-		if (mods & KC_MOD_CONTROL && !(mods & KC_MOD_KEYPAD)) {
-			ch = KTRL(ch);
-			if (!MODS_INCLUDE_CONTROL(ch)) {
-				mods &= ~KC_MOD_CONTROL;
-			}
-		}
-
-		Term_keypress(ch, mods);
+	/* Have a menu or dialog handle the event if appropriate. */
+	if (a->w_mouse && a->w_mouse->d_mouse
+			&& a->w_mouse->d_mouse->ftb->handle_mousewheel
+			&& (*a->w_mouse->d_mouse->ftb->handle_mousewheel)(
+				a->w_mouse->d_mouse, a->w_mouse, wheel)) {
 		return true;
-	} else {
-		return false;
+	}
+
+	/* Otherwise, nothing is done. */
+	return false;
+}
+
+static void handle_controller_added(struct my_app *a,
+		const SDL_ControllerDeviceEvent *event)
+{
+	/* Support only one controller */
+	if (a->controller) return;
+	a->controller = SDL_GameControllerOpen(event->which);
+}
+
+static void handle_controller_removed(struct my_app *a,
+		const SDL_ControllerDeviceEvent *event)
+{
+	if (!a->controller) return;
+
+	SDL_Joystick *joystick = SDL_GameControllerGetJoystick(a->controller);
+	if (event->which == SDL_JoystickInstanceID(joystick)) {
+		SDL_GameControllerClose(a->controller);
+		a->controller = NULL;
 	}
 }
 
-static keycode_t utf8_to_codepoint(const char *utf8_string)
+static bool handle_controller_button(struct my_app *a,
+		 const SDL_ControllerButtonEvent *event)
 {
-	/* hex  == binary
-	 * 0x00 == 00000000
-	 * 0x80 == 10000000
-	 * 0xc0 == 11000000
-	 * 0xe0 == 11100000
-	 * 0xf0 == 11110000
-	 * 0xf8 == 11111000
-	 * 0x3f == 00111111
-	 * 0x1f == 00011111
-	 * 0x0f == 00001111
-	 * 0x07 == 00000111 */
+	keycode_t ch;
+	uint8_t mods = 0;
 
-	keycode_t key = 0;
-
-#define IS_UTF8_INFO(mask, result) (((unsigned char) utf8_string[0] & (mask)) == (result))
-#define EXTRACT_UTF8_INFO(pos, mask, shift) (((unsigned char) utf8_string[(pos)] & (mask)) << (shift))
-	/* 6 is the number of information bits in a utf8 continuation byte (10xxxxxx) */
-	if (IS_UTF8_INFO(0x80, 0)) {
-		key = utf8_string[0];
-	} else if (IS_UTF8_INFO(0xe0, 0xc0)) {
-		key = EXTRACT_UTF8_INFO(0, 0x1f, 6)
-			| EXTRACT_UTF8_INFO(1, 0x3f, 0);
-	} else if (IS_UTF8_INFO(0xf0, 0xe0)) {
-		key = EXTRACT_UTF8_INFO(0, 0x0f, 12)
-			| EXTRACT_UTF8_INFO(1, 0x3f, 6)
-			| EXTRACT_UTF8_INFO(2, 0x3f, 0);
-	} else if (IS_UTF8_INFO(0xf8, 0xf0)) {
-		key = EXTRACT_UTF8_INFO(0, 0x07, 18)
-			| EXTRACT_UTF8_INFO(1, 0x3f, 12)
-			| EXTRACT_UTF8_INFO(2, 0x3f, 6)
-			| EXTRACT_UTF8_INFO(3, 0x3f, 0);
-	}
-#undef IS_UTF8_INFO
-#undef EXTRACT_UTF8_INFO
-
-	return key;
-}
-
-static bool handle_text_input(const SDL_TextInputEvent *input)
-{
-	keycode_t ch = utf8_to_codepoint(input->text);
-	if (ch == 0) {
+	if (event->state == SDL_RELEASED) {
 		return false;
 	}
 
-	byte mods = translate_key_mods(SDL_GetModState());
-
-	if (mods & KC_MOD_SHIFT) {
-		switch (ch) {
-			/* maybe the player pressed key on keypad? */
-			case '0': /* fallthru */
-			case '1': /* fallthru */
-			case '2': /* fallthru */
-			case '3': /* fallthru */
-			case '4': /* fallthru */
-			case '5': /* fallthru */
-			case '6': /* fallthru */
-			case '7': /* fallthru */
-			case '8': /* fallthru */
-			case '9':
-				return false;
-		}
-	}
-
-	if (!MODS_INCLUDE_SHIFT(ch)) {
-		mods &= ~KC_MOD_SHIFT;
+	/* Translate controller buttons into keycodes */
+	switch (event->button) {
+	case SDL_CONTROLLER_BUTTON_A:
+		ch = KC_ENTER;
+		break;
+	case SDL_CONTROLLER_BUTTON_B:
+		ch = ESCAPE;
+		break;
+	case SDL_CONTROLLER_BUTTON_BACK:
+		ch = KC_BACKSPACE;
+		break;
+	case SDL_CONTROLLER_BUTTON_START:
+		ch = '=';
+		break;
+	case SDL_CONTROLLER_BUTTON_GUIDE:
+		ch = '?';
+		break;
+	case SDL_CONTROLLER_BUTTON_DPAD_UP:
+		ch = ARROW_UP;
+		break;
+	case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+		ch = ARROW_DOWN;
+		break;
+	case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+		ch = ARROW_LEFT;
+		break;
+	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+		ch = ARROW_RIGHT;
+		break;
+	default:
+		return false;
 	}
 
 	Term_keypress(ch, mods);
-
 	return true;
 }
 
-static void wait_anykey(void)
+static bool handle_controller_axis(struct my_app *a,
+		 const SDL_ControllerAxisEvent *event)
+{
+	keycode_t ch;
+	uint8_t mods = 0;
+
+	/* Translate controller axes into keycodes */
+	if (event->axis == 0) {
+		/* left-right */
+		if (event->value > 1000) ch = ARROW_RIGHT;
+		else if (event->value < -1000) ch = ARROW_LEFT;
+		else return false;
+	} else if (event->axis == 1) {
+		/* up-down */
+		if (event->value > 1000) ch = ARROW_UP;
+		else if (event->value < -1000) ch = ARROW_DOWN;
+		else return false;
+	} else {
+		return false;
+	}
+
+	Term_keypress(ch, mods);
+	return true;
+}
+
+static bool trigger_menu_shortcut(struct my_app *a, keycode_t ch, uint8_t mods)
+{
+	/*
+	 * Check if it matches a menu shortcut for an active window.  If so,
+	 * give that window's menu bar key focus and return true.  Otherwise,
+	 * return false.
+	 */
+	int i = 0;
+
+	while (1) {
+		if (i >= MAX_WINDOWS) {
+			return false;
+		}
+		if (a->windows[i].loaded
+				&& a->menu_shortcuts[i].type == EVT_KBRD
+				&& a->menu_shortcuts[i].code == ch
+				&& a->menu_shortcuts[i].mods == mods) {
+			if (a->w_key != a->windows + i) {
+				struct sdlpui_window *old_w = a->w_key;
+				struct sdlpui_dialog *old_d = a->w_key->d_key;
+
+				SDL_assert(!a->windows[i].d_key);
+				SDL_assert(a->windows[i].status_bar->ftb->goto_first_control);
+				(a->windows[i].status_bar->ftb->goto_first_control)(
+					a->windows[i].status_bar, a->windows + i
+				);
+				if (old_w && old_d
+						&& old_d->ftb->handle_loses_key) {
+					(*old_d->ftb->handle_loses_key)(
+						old_d, old_w,
+						a->windows[i].status_bar->c_key,
+						a->windows[i].status_bar);
+				}
+				if (old_w) {
+					old_w->d_key = NULL;
+				}
+			} else if (a->w_key->d_key
+					!= a->windows[i].status_bar) {
+				struct sdlpui_dialog *old_d = a->w_key->d_key;
+
+				SDL_assert(a->windows[i].status_bar->ftb->goto_first_control);
+				(a->windows[i].status_bar->ftb->goto_first_control)(
+					a->windows[i].status_bar, a->windows + i
+				);
+				if (old_d && old_d->ftb->handle_loses_key) {
+					(*old_d->ftb->handle_loses_key)(
+						old_d, a->windows + i,
+						a->windows[i].status_bar->c_key,
+						a->windows[i].status_bar);
+				}
+			}
+			return true;
+		}
+		++i;
+	}
+}
+
+/**
+ * This function handles keys that don't produce text, and, if kp_as_mod
+ * the keypad and keypresses that will produce the same characters as keypad
+ * keypresses.  Others should be handled in textinput_event_to_angband_key.
+ */
+static void keyboard_event_to_angband_key(const SDL_KeyboardEvent *key,
+		bool kp_as_mod, keycode_t *ch, uint8_t *mods)
+{
+	*mods = translate_key_mods(key->keysym.mod);
+	*ch = 0;
+	switch (key->keysym.sym) {
+		/* arrow keys */
+		case SDLK_UP:          *ch = ARROW_UP; break;
+		case SDLK_DOWN:        *ch = ARROW_DOWN; break;
+		case SDLK_LEFT:        *ch = ARROW_LEFT; break;
+		case SDLK_RIGHT:       *ch = ARROW_RIGHT; break;
+		/* text editing keys */
+		case SDLK_BACKSPACE:   *ch = KC_BACKSPACE; break;
+		case SDLK_PAGEDOWN:    *ch = KC_PGDOWN; break;
+		case SDLK_PAGEUP:      *ch = KC_PGUP; break;
+		case SDLK_INSERT:      *ch = KC_INSERT; break;
+		case SDLK_DELETE:      *ch = KC_DELETE; break;
+		case SDLK_RETURN:      *ch = KC_ENTER; break;
+		case SDLK_ESCAPE:      *ch = ESCAPE; break;
+		case SDLK_HOME:        *ch = KC_HOME; break;
+		case SDLK_END:         *ch = KC_END; break;
+		case SDLK_TAB:         *ch = KC_TAB; break;
+		/* function keys */
+		case SDLK_F1:          *ch = KC_F1; break;
+		case SDLK_F2:          *ch = KC_F2; break;
+		case SDLK_F3:          *ch = KC_F3; break;
+		case SDLK_F4:          *ch = KC_F4; break;
+		case SDLK_F5:          *ch = KC_F5; break;
+		case SDLK_F6:          *ch = KC_F6; break;
+		case SDLK_F7:          *ch = KC_F7; break;
+		case SDLK_F8:          *ch = KC_F8; break;
+		case SDLK_F9:          *ch = KC_F9; break;
+		case SDLK_F10:         *ch = KC_F10; break;
+		case SDLK_F11:         *ch = KC_F11; break;
+		case SDLK_F12:         *ch = KC_F12; break;
+		case SDLK_F13:         *ch = KC_F13; break;
+		case SDLK_F14:         *ch = KC_F14; break;
+		case SDLK_F15:         *ch = KC_F15; break;
+	}
+
+	if (kp_as_mod) {
+		/* If numlock is set and shift is not pressed, numpad numbers
+		 * produce regular numbers and not keypad numbers */
+		uint8_t keypad_num_mod = ((key->keysym.mod & KMOD_NUM)
+			&& !(key->keysym.mod & KMOD_SHIFT)) ?
+			0x00 : KC_MOD_KEYPAD;
+
+		switch (key->keysym.sym) {
+			/* Keypad */
+			case SDLK_KP_0:
+				*ch = '0'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_1:
+				*ch = '1'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_2:
+				*ch = '2'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_3:
+				*ch = '3'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_4:
+				*ch = '4'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_5:
+				*ch = '5'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_6:
+				*ch = '6'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_7:
+				*ch = '7'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_8:
+				*ch = '8'; *mods |= keypad_num_mod; break;
+			case SDLK_KP_9:
+				*ch = '9'; *mods |= keypad_num_mod; break;
+
+			case SDLK_KP_MULTIPLY:
+				*ch = '*'; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_PERIOD:
+				*ch = '.'; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_DIVIDE:
+				*ch = '/'; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_EQUALS:
+				*ch = '='; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_MINUS:
+				*ch = '-'; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_PLUS:
+				*ch = '+'; *mods |= KC_MOD_KEYPAD; break;
+			case SDLK_KP_ENTER:
+				*ch = KC_ENTER; *mods |= KC_MOD_KEYPAD; break;
+
+			/*
+			 * Keys that produce the same character as keypad keys
+			 */
+			case SDLK_ASTERISK: *ch = '*'; break;
+			case SDLK_PLUS: *ch = '+'; break;
+		}
+		if (*mods & KC_MOD_SHIFT) {
+			bool match = true;
+			switch(key->keysym.sym) {
+				/*
+				 * Does not match every keyboard layout,
+				 * unfortunately.
+				 */
+				case SDLK_8: *ch = '*'; break;
+				case SDLK_EQUALS: *ch = '+'; break;
+				default: match = false;
+			}
+			if (match) {
+				*mods &= ~KC_MOD_SHIFT;
+			}
+		} else {
+			switch(key->keysym.sym) {
+				case SDLK_0: *ch = '0'; break;
+				case SDLK_1: *ch = '1'; break;
+				case SDLK_2: *ch = '2'; break;
+				case SDLK_3: *ch = '3'; break;
+				case SDLK_4: *ch = '4'; break;
+				case SDLK_5: *ch = '5'; break;
+				case SDLK_6: *ch = '6'; break;
+				case SDLK_7: *ch = '7'; break;
+				case SDLK_8: *ch = '8'; break;
+				case SDLK_9: *ch = '9'; break;
+				case SDLK_SLASH: *ch = '/'; break;
+				case SDLK_EQUALS: *ch = '='; break;
+				case SDLK_PERIOD: *ch = '.'; break;
+				case SDLK_MINUS: *ch = '-'; break;
+			}
+		}
+	} else if (key->keysym.sym == SDLK_KP_ENTER) {
+		*ch = KC_ENTER;
+	}
+
+	/* encode control */
+	if (*mods & KC_MOD_CONTROL) {
+		bool match = true;
+		switch (key->keysym.sym) {
+			case SDLK_LEFTBRACKET:  *ch = KTRL('['); break;
+			case SDLK_RIGHTBRACKET: *ch = KTRL(']'); break;
+			case SDLK_BACKSLASH:    *ch = KTRL('\\'); break;
+			case SDLK_a:            *ch = KTRL('A'); break;
+			case SDLK_b:            *ch = KTRL('B'); break;
+			case SDLK_c:            *ch = KTRL('C'); break;
+			case SDLK_d:            *ch = KTRL('D'); break;
+			case SDLK_e:            *ch = KTRL('E'); break;
+			case SDLK_f:            *ch = KTRL('F'); break;
+			case SDLK_g:            *ch = KTRL('G'); break;
+			case SDLK_h:            *ch = KTRL('H'); break;
+			case SDLK_i:            *ch = KTRL('I'); break;
+			case SDLK_j:            *ch = KTRL('J'); break;
+			case SDLK_k:            *ch = KTRL('K'); break;
+			case SDLK_l:            *ch = KTRL('L'); break;
+			case SDLK_m:            *ch = KTRL('M'); break;
+			case SDLK_n:            *ch = KTRL('N'); break;
+			case SDLK_o:            *ch = KTRL('O'); break;
+			case SDLK_p:            *ch = KTRL('P'); break;
+			case SDLK_q:            *ch = KTRL('Q'); break;
+			case SDLK_r:            *ch = KTRL('R'); break;
+			case SDLK_s:            *ch = KTRL('S'); break;
+			case SDLK_t:            *ch = KTRL('T'); break;
+			case SDLK_u:            *ch = KTRL('U'); break;
+			case SDLK_v:            *ch = KTRL('V'); break;
+			case SDLK_w:            *ch = KTRL('W'); break;
+			case SDLK_x:            *ch = KTRL('X'); break;
+			case SDLK_y:            *ch = KTRL('Y'); break;
+			case SDLK_z:            *ch = KTRL('Z'); break;
+			default: match = false;
+		}
+		if (match) {
+			*mods &= ~KC_MOD_CONTROL;
+		}
+	}
+}
+
+static bool handle_key(struct my_app *a, const SDL_KeyboardEvent *key)
+{
+	uint8_t mods;
+	keycode_t ch;
+
+	/* Have a menu or dialog handle the event if appropriate. */
+	if (a->w_key && a->w_key->d_key && a->w_key->d_key->ftb->handle_key
+			&& (*a->w_key->d_key->ftb->handle_key)(a->w_key->d_key,
+				a->w_key, key)) {
+		return true;
+	}
+
+	/*
+	 * For passing events to the game's core, react when the button is
+	 * pressed and not when it is released.
+	 */
+	if (key->state == SDL_RELEASED) {
+		return false;
+	}
+
+	/*
+	 * SDL will give us both keydown and text input events in many cases.
+	 * Between this function and handle_text_input we need to make sure that
+	 * Term_keypress gets called exactly once for a given key press from the
+	 * user.
+	 */
+	keyboard_event_to_angband_key(key, a->kp_as_mod, &ch, &mods);
+	if (ch) {
+		if (!trigger_menu_shortcut(a, ch, mods)) {
+			Term_keypress(ch, mods);
+		}
+		return true;
+	}
+	return false;
+}
+
+static void textinput_event_to_angband_key(const SDL_TextInputEvent *input,
+		bool kp_as_mod, keycode_t *ch, uint8_t *mods)
+{
+	*ch = sdlpui_utf8_to_codepoint(input->text);
+
+	/*
+	 * Do not handle any characters that can be produced by the keypad if
+	 * they were handled in keyboard_event_to_angband_key.
+	 */
+	if (kp_as_mod) {
+		switch (*ch) {
+			case '0':
+			case '1':
+			case '2':
+			case '3':
+			case '4':
+			case '5':
+			case '6':
+			case '7':
+			case '8':
+			case '9':
+			case '/':
+			case '*':
+			case '-':
+			case '+':
+			case '.':
+			case '=':
+				*ch = '\0';
+		}
+	}
+
+	*mods = translate_key_mods(SDL_GetModState());
+	/* Shift is already encoded in characters we receive here */
+	if (!MODS_INCLUDE_SHIFT(*ch)) {
+		*mods &= ~KC_MOD_SHIFT;
+	}
+}
+
+static bool handle_text_input(struct my_app *a, const SDL_TextInputEvent *input)
+{
+	keycode_t ch;
+	uint8_t mods;
+
+	/* Have a menu or dialog handle the event if appropriate. */
+	if (a->w_key && a->w_key->d_key && a->w_key->d_key->ftb->handle_textin
+			&& (*a->w_key->d_key->ftb->handle_textin)(
+				a->w_key->d_key, a->w_key, input)) {
+		return true;
+	}
+
+	textinput_event_to_angband_key(input, a->kp_as_mod, &ch, &mods);
+
+	if (!ch) {
+		return false;
+	}
+	if (!trigger_menu_shortcut(a, ch, mods)) {
+		Term_keypress(ch, mods);
+	}
+	return true;
+}
+
+static bool handle_text_editing(struct my_app *a,
+		const SDL_TextEditingEvent *edit)
+{
+	/* Have a menu or dialog handle the event if appropriate. */
+	if (a->w_key && a->w_key->d_key && a->w_key->d_key->ftb->handle_textedit
+			&& (*a->w_key->d_key->ftb->handle_textedit)(
+				a->w_key->d_key, a->w_key, edit)) {
+		return true;
+	}
+
+	/* Not passed on to the game's core. */
+	return false;
+}
+
+static void wait_anykey(struct my_app *a)
 {
 	SDL_Event event;
 
@@ -3563,7 +4539,7 @@ static void wait_anykey(void)
 		switch (event.type) {
 			case SDL_KEYDOWN:
 				expected = SDL_KEYUP;
-				break;;
+				break;
 			case SDL_MOUSEBUTTONDOWN:
 				expected = SDL_MOUSEBUTTONUP;
 				break;
@@ -3573,8 +4549,14 @@ static void wait_anykey(void)
 			case SDL_QUIT:
 				handle_quit();
 				break;
+			case SDL_RENDER_TARGETS_RESET:
+				recreate_textures(a, false);
+				break;
+			case SDL_RENDER_DEVICE_RESET:
+				recreate_textures(a, true);
+				break;
 			case SDL_WINDOWEVENT:
-				handle_windowevent(&event.window);
+				handle_windowevent(a, &event.window);
 				return;
 		}
 	}
@@ -3592,7 +4574,7 @@ static void handle_quit(void)
 	quit(NULL);
 }
 
-static bool get_event(void)
+static bool get_event(struct my_app *a)
 {
 	SDL_Event event;
 	if (!SDL_PollEvent(&event)) {
@@ -3601,15 +4583,38 @@ static bool get_event(void)
 
 	switch (event.type) {
 		case SDL_KEYDOWN:
-			return handle_keydown(&event.key);
+		case SDL_KEYUP:
+			return handle_key(a, &event.key);
 		case SDL_TEXTINPUT:
-			return handle_text_input(&event.text);
+			return handle_text_input(a, &event.text);
+		case SDL_TEXTEDITING:
+			return handle_text_editing(a, &event.edit);
 		case SDL_MOUSEMOTION:
-			return handle_mousemotion(&event.motion);
+			return handle_mousemotion(a, &event.motion);
 		case SDL_MOUSEBUTTONDOWN:
-			return handle_mousebuttondown(&event.button);
+		case SDL_MOUSEBUTTONUP:
+			return handle_mousebutton(a, &event.button);
+		case SDL_MOUSEWHEEL:
+			return handle_mousewheel(a, &event.wheel);
+		case SDL_CONTROLLERDEVICEADDED:
+			handle_controller_added(a, &event.cdevice);
+			return false;
+		case SDL_CONTROLLERDEVICEREMOVED:
+			handle_controller_removed(a, &event.cdevice);
+			return false;
+		case SDL_CONTROLLERBUTTONDOWN:
+		case SDL_CONTROLLERBUTTONUP:
+			return handle_controller_button(a, &event.cbutton);
+		case SDL_CONTROLLERAXISMOTION:
+			return handle_controller_axis(a, &event.caxis);
 		case SDL_WINDOWEVENT:
-			handle_windowevent(&event.window);
+			handle_windowevent(a, &event.window);
+			return false;
+		case SDL_RENDER_TARGETS_RESET:
+			recreate_textures(a, false);
+			return false;
+		case SDL_RENDER_DEVICE_RESET:
+			recreate_textures(a, true);
 			return false;
 		case SDL_QUIT:
 			handle_quit();
@@ -3619,7 +4624,7 @@ static bool get_event(void)
 	}
 }
 
-static void refresh_angband_terms(void)
+static void refresh_angband_terms(struct my_app *a)
 {
 	if (!character_dungeon) {
 		return;
@@ -3648,18 +4653,12 @@ static void refresh_angband_terms(void)
 		handle_stuff(player);
 		move_cursor_relative(player->grid.x, player->grid.y);
 
-		for (size_t i = 0; i < ANGBAND_TERM_MAX; i++) {
-			if (angband_term[i] == NULL) {
-				continue;
-			}
-			Term_activate(angband_term[i]);
-			Term_redraw();
-		}
+		Term_redraw_all();
 	}
 
 	Term_activate(old);
 
-	redraw_all_windows(false);
+	redraw_all_windows(a, false);
 }
 
 static errr term_xtra_event(int v)
@@ -3667,12 +4666,12 @@ static errr term_xtra_event(int v)
 	struct subwindow *subwindow = Term->data;
 	assert(subwindow != NULL);
 
-	redraw_all_windows(true);
+	redraw_all_windows(subwindow->app, true);
 
 	if (v) {
 		while (true) {
 			for (int i = 0; i < DEFAULT_IDLE_UPDATE_PERIOD; i++) {
-				if (get_event()) {
+				if (get_event(subwindow->app)) {
 					return 0;
 				}
 				SDL_Delay(subwindow->window->delay);
@@ -3680,7 +4679,7 @@ static errr term_xtra_event(int v)
 			idle_update();
 		}
 	} else {
-		(void) get_event();
+		(void) get_event(subwindow->app);
 	}
 
 	return 0;
@@ -3693,7 +4692,7 @@ static errr term_xtra_flush(void)
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
 			case SDL_WINDOWEVENT:
-				handle_windowevent(&event.window);
+				handle_windowevent(&g_app, &event.window);
 				break;
 		}
 	}
@@ -3719,7 +4718,7 @@ static errr term_xtra_fresh(void)
 	struct subwindow *subwindow = Term->data;
 	assert(subwindow != NULL);
 
-	if (!subwindow->window->status_bar.in_menu) {
+	if (!subwindow->window->d_mouse && !subwindow->window->d_key) {
 		try_redraw_window(subwindow->window);
 	}
 
@@ -3738,7 +4737,7 @@ static errr term_xtra_delay(int v)
 
 static errr term_xtra_react(void)
 {
-	init_colors();
+	init_colors(&g_app);
 
 	return 0;
 }
@@ -3811,10 +4810,10 @@ static errr term_text_hook(int col, int row, int n, int a, const wchar_t *s)
 	struct subwindow *subwindow = Term->data;
 	assert(subwindow != NULL);
 
-	SDL_Color fg = g_colors[a % MAX_COLORS];
+	SDL_Color fg = subwindow->app->colors[a % MAX_COLORS];
 	SDL_Color bg;
 
-	switch (a / MAX_COLORS) {
+	switch (a / MULT_BG) {
 		case BG_BLACK:
 			bg = subwindow->color;
 			break;
@@ -3822,11 +4821,11 @@ static errr term_text_hook(int col, int row, int n, int a, const wchar_t *s)
 			bg = fg;
 			break;
 		case BG_DARK:
-			bg = g_colors[DEFAULT_SHADE_COLOR];
+			bg = subwindow->app->colors[DEFAULT_SHADE_COLOR];
 			break;
 		default:
 			/* debugging */
-			bg = g_colors[DEFAULT_ERROR_COLOR];
+			bg = subwindow->app->colors[DEFAULT_ERROR_COLOR];
 			break;
 	}
 
@@ -3855,21 +4854,40 @@ static errr term_text_hook(int col, int row, int n, int a, const wchar_t *s)
 }
 
 static errr term_pict_hook(int col, int row, int n,
-		const int *ap, const wchar_t *cp, const int *tap, const int *tcp)
+		const int *ap, const wchar_t *cp, const int *tap, const wchar_t *tcp)
 {
+	int dhrclip;
 	struct subwindow *subwindow = Term->data;
 	assert(subwindow != NULL);
 
+	if (!current_graphics_mode || current_graphics_mode->grafID == GRAPHICS_NONE) {
+		/*
+		 * Do nothing unsuccessfully if asked to draw a tile while
+		 * they're not enabled.  Could proceed in this function
+		 * with no apparent ill effects, but that just wastes time.
+		 */
+		return -1;
+	}
 	assert(subwindow->window->graphics.texture != NULL);
 
+	if (subwindow->window->graphics.overdraw_row) {
+		dhrclip = Term_get_first_tile_row(Term) + tile_height - 1;
+	} else {
+		/*
+		 * There's no double-height tiles so the value does not
+		 * matter.
+		 */
+		dhrclip = 0;
+	}
+
 	for (int i = 0; i < n; i++) {
-		render_tile_font_scaled(subwindow, col + i, row, tap[i], tcp[i], true);
+		render_tile_font_scaled(subwindow, col + i, row, tap[i], tcp[i], true, dhrclip);
 
 		if (tap[i] == ap[i] && tcp[i] == cp[i]) {
 			continue;
 		}
 
-		render_tile_font_scaled(subwindow, col + i, row, ap[i], cp[i], false);
+		render_tile_font_scaled(subwindow, col + i, row, ap[i], cp[i], false, dhrclip);
 	}
 
 	subwindow->window->dirty = true;
@@ -3913,7 +4931,7 @@ static void term_view_map_shared(struct subwindow *subwindow,
 
 	SDL_RenderPresent(subwindow->window->renderer);
 
-	wait_anykey();
+	wait_anykey(subwindow->app);
 }
 
 static void term_view_map_tile(struct subwindow *subwindow)
@@ -3954,7 +4972,7 @@ static void term_view_map_tile(struct subwindow *subwindow)
 
 	/* render cursor around player */
 	render_outline_rect_width(subwindow->window,
-			map, &cursor, &g_colors[DEFAULT_SUBWINDOW_CURSOR_COLOR],
+			map, &cursor, &subwindow->app->colors[DEFAULT_SUBWINDOW_CURSOR_COLOR],
 			/* XXX some arbitrary values that look ok at the moment */
 			MIN(MIN(tile.w / 4, tile.h / 4),
 				DEFAULT_VISIBLE_BORDER));
@@ -3993,7 +5011,7 @@ static void term_view_map_text(struct subwindow *subwindow)
 
 	/* render cursor around player */
 	render_outline_rect_width(subwindow->window,
-			map, &cursor, &g_colors[DEFAULT_SUBWINDOW_CURSOR_COLOR],
+			map, &cursor, &subwindow->app->colors[DEFAULT_SUBWINDOW_CURSOR_COLOR],
 			/* XXX some arbitrary values that look reasonable at the moment */
 			MIN(MIN(subwindow->font_width / 4,
 					subwindow->font_height / 4),
@@ -4006,9 +5024,9 @@ static void term_view_map_text(struct subwindow *subwindow)
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 }
 
-static void term_view_map_hook(term *term)
+static void term_view_map_hook(term *terminal)
 {
-	struct subwindow *subwindow = term->data;
+	struct subwindow *subwindow = terminal->data;
 	if (subwindow->window->graphics.id == GRAPHICS_NONE) {
 		term_view_map_text(subwindow);
 	} else {
@@ -4016,22 +5034,238 @@ static void term_view_map_hook(term *term)
 	}
 }
 
-static SDL_Texture *load_image(const struct window *window, const char *path)
+#ifdef MSYS2_ENCODING_WORKAROUND
+/*
+ * Override the default character encoding in MSYS2 for better handling in
+ * term_text_hook() of characters that don't fall in the ASCII range.  See
+ * init_sdl2() for more details about the default character encoding in MSYS2.
+ */
+
+/**
+ * Convert UTF-8 to UTF-16 with each UTF-16 in the native byte order and
+ * lossily change any code point that requires a surrogate pair to U+FFFD.
+ * Return the total number of code points that would be generated by
+ * converting the * UTF-8 input.
+ *
+ * \param dest Points to the buffer in which to store the conversion.  May be
+ * NULL.
+ * \param src Is a null-terminated UTF-8 sequence.
+ * \param n Is the maximum number of code points to store in dest.
+ *
+ * In case of malformed UTF-8, inserts a U+FFFD in the converted output at the
+ * point of the error.
+ */
+static size_t term_mbcs_sdl2_msys2(wchar_t *dest, const char *src, int n)
+{
+	size_t nout = (n > 0) ? n : 0;
+	size_t count = 0;
+
+	while (1) {
+		/*
+		 * Default to U+FFFD to indicate an erroneous UTF-8 sequence
+		 * that could not be decoded.  Follow "best practice"
+		 * recommended by the Unicode 6 standard:  an erroneous
+		 * sequence ends as soon as a disallowed byte is encountered.
+		 */
+		uint32_t decoded = 0xfffd;
+
+		if (((unsigned int) *src & 0x80) == 0) {
+			/*
+			 * Encoded as a single byte:  U+0000 to U+007F ->
+			 * 0xxxxxxx.
+			 */
+			if (*src == 0) {
+				if (dest && count < nout) {
+					dest[count] = 0;
+				}
+				break;
+			}
+			decoded = *src;
+			++src;
+		} else if (((unsigned int) *src & 0xe0) == 0xc0) {
+			/*
+			 * Encoded as two bytes:  U+0080 to U+07FF ->
+			 * 110xxxxx 10xxxxxx.
+			 */
+			uint32_t part = ((uint32_t) *src & 0x1f) << 6;
+
+			++src;
+			/*
+			 * Check that the first two bits of the continuation
+			 * byte are valid and the encoding is not overlong.
+			 */
+			if (((unsigned int) *src & 0xc0) == 0x80
+					&& part > 0x40) {
+				decoded = part + ((uint32_t) *src & 0x3f);
+				++src;
+			}
+		} else if (((unsigned int) *src & 0xf0) == 0xe0) {
+			/*
+			 * Encoded as three bytes:  U+0800 to U+FFFF ->
+			 * 1110xxxx 10xxxxxx 10xxxxxx.
+			 */
+			uint32_t part = ((uint32_t) *src & 0xf) << 12;
+
+			++src;
+			if (((unsigned int) *src & 0xc0) == 0x80) {
+				part += ((uint32_t) *src & 0x3f) << 6;
+				++src;
+				/*
+				 * The second part of the test rejects
+				 * overlong encodings.  The third part
+				 * rejects encodings of U+D800 to U+DFFF,
+				 * reserved for surrogate pairs.
+				 */
+				if (((unsigned int) *src & 0xc0) == 0x80
+						&& part >= 0x800
+						&& (part & 0xf800) != 0xd800) {
+					decoded = part
+						+ ((uint32_t) *src & 0x3f);
+					++src;
+				}
+			}
+		} else if (((unsigned int) *src & 0xf8) == 0xf0) {
+			/*
+			 * Encoded as four bytes:  U+10000 to U+1FFFFF ->
+			 * 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx.
+			 */
+			uint32_t part = ((uint32_t) *src & 0x7) << 18;
+
+			++src;
+			if (((unsigned int) *src & 0xc0) == 0x80) {
+				part += ((uint32_t) * src & 0x3f) << 12;
+				++src;
+				/*
+				 * The second part of the test rejects
+				 * overlong encodings.  The third part
+				 * rejects code points beyond U+10FFFF which
+				 * can't be encoded in UTF-16.
+				 */
+				if (((unsigned int) *src & 0xc0) == 0x80
+						&& part >= 0x10000
+						&& (part & 0xff0000)
+						<= 0x100000) {
+					part += ((uint32_t) *src & 0x3f) << 6;
+					++src;
+					if (((unsigned int) *src & 0xc0)
+							== 0x80) {
+						decoded = part
+							+ ((uint32_t) *src
+							& 0x3f);
+						++src;
+					}
+				}
+			}
+		} else {
+			/*
+			 * Either an impossible byte or one that signals the
+			 * start of a five byte or longer encoding.
+			 */
+			++src;
+		}
+		if (dest && count < nout) {
+			if (decoded >= 0x10000) {
+				/*
+				 * Would require a surrogate pair to represent
+				 * accurately.  Substitute U+FFFD instead.
+				 */
+				assert(decoded <= 0x10FFFF);
+				dest[count] = (wchar_t) 0xfffd;
+			} else {
+				/*
+				 * By the decoding logic, the decoded value
+				 * should not match part of surrogate pair.
+				 */
+				assert(decoded < 0xd800 || decoded > 0xdfff);
+				dest[count] = (wchar_t) decoded;
+			}
+		}
+		++count;
+	}
+	return count;
+}
+
+/**
+ * Convert a UTF-16 stored in the native byte order to UTF-8.
+ * \param s Points to the buffer where the conversion should be stored.
+ * That buffer must have at least term_wcsz_sdl2_msys2() bytes.
+ * \param wchar Is the UTF-16 value to convert.
+ * \return The returned value is the number of bytes written to s or -1
+ * if the UTF-16 value could not be converted.
+ *
+ * This is a necessary counterpart to term_mbcs_sdl2_msys2():  since we
+ * are overriding the default multibyte to wide character conversion, need
+ * to override the reverse conversion as well.
+ */
+static int term_wctomb_sdl2_msys2(char *s, wchar_t wchar)
+{
+	if ((unsigned int) wchar <= 0x7f) {
+		*s = wchar;
+		return 1;
+	}
+	if ((unsigned int) wchar < 0x7ff) {
+		*s++ = 0xc0 + (((unsigned int) wchar & 0x7c0) >> 6);
+		*s++ = 0x80 + ((unsigned int) wchar & 0x3f);
+		return 2;
+	}
+	/* Refuse to encode a value reserved for surrogate pairs in UTF-16. */
+	if ((unsigned int) wchar >= 0xd800 && (unsigned int) wchar <= 0xdfff) {
+		return -1;
+	}
+	*s++ = 0xe0 + (((unsigned int) wchar & 0xf000) >> 12);
+	*s++ = 0x80 + (((unsigned int) wchar & 0xfc0) >> 6);
+	*s++ = 0x80 + ((unsigned int) wchar & 0x3f);
+	return 3;
+}
+
+/**
+ * Return whether a UTF-16 value is printable.
+ *
+ * This is a necessary counterpart to term_mbcs_sdl2_msys2() so that
+ * screening of wide characters in the core's text_out_to_screen() is
+ * consistent with what term_mbcs_sdl2_msys2() does.
+ */
+static int term_iswprint_sdl2_msys2(wint_t wc)
+{
+	/*
+	 * Upcast the UTF-16 value to UTF-32 since the UTF-16 value is either
+	 * equal to the code point's value or is part of a surrogate pair.
+	 */
+	return utf32_isprint((uint32_t) wc);
+}
+
+/**
+ * Return the maximum number of bytes needed for a multibyte encoding of a
+ * wchar.
+ */
+static int term_wcsz_sdl2_msys2(void)
+{
+	/*
+	 * UTF-8 takes at most 3 bytes to encode a code point that can be
+	 * encoded with a single 16-bit quantity in UTF-16.
+	 */
+	return 3;
+}
+
+#endif /* MSYS2_ENCODING_WORKAROUND */
+
+static SDL_Texture *load_image(const struct sdlpui_window *window,
+		const char *path)
 {
 	SDL_Surface *surface = IMG_Load(path);
 	if (surface == NULL) {
-		quit_fmt("cant load image '%s': %s", path, IMG_GetError());
+		quit_fmt("cannot load image '%s': %s", path, IMG_GetError());
 	}
 	SDL_Texture *texture = SDL_CreateTextureFromSurface(window->renderer, surface);
 	if (texture == NULL) {
-		quit_fmt("cant create texture from image '%s': %s", path, SDL_GetError());
+		quit_fmt("cannot create texture from image '%s': %s", path, SDL_GetError());
 	}
 	SDL_FreeSurface(surface);
 
 	return texture;
 }
 
-static void load_wallpaper(struct window *window, const char *path)
+static void load_wallpaper(struct sdlpui_window *window, const char *path)
 {
 	if (window->wallpaper.mode == WALLPAPER_DONT_SHOW) {
 		return;
@@ -4078,7 +5312,7 @@ static void load_wallpaper(struct window *window, const char *path)
 	}
 }
 
-static void load_default_wallpaper(struct window *window)
+static void load_default_wallpaper(struct sdlpui_window *window)
 {
 	if (window->wallpaper.mode == WALLPAPER_DONT_SHOW) {
 		return;
@@ -4090,7 +5324,7 @@ static void load_default_wallpaper(struct window *window)
 	load_wallpaper(window, path);
 }
 
-static void load_default_window_icon(const struct window *window)
+static void load_default_window_icon(const struct sdlpui_window *window)
 {
 	char path[4096];
 	path_build(path, sizeof(path), DEFAULT_WINDOW_ICON_DIR, DEFAULT_WINDOW_ICON);
@@ -4103,7 +5337,7 @@ static void load_default_window_icon(const struct window *window)
 	SDL_FreeSurface(surface);
 }
 
-static void load_graphics(struct window *window, graphics_mode *mode)
+static void load_graphics(struct sdlpui_window *window, graphics_mode *mode)
 {
 	assert(window->graphics.texture == NULL);
 
@@ -4114,10 +5348,11 @@ static void load_graphics(struct window *window, graphics_mode *mode)
 		tile_width = 1;
 		tile_height = 1;
 	} else {
+		size_t i;
 		char path[4096];
 		path_build(path, sizeof(path), mode->path, mode->file);
 		if (!file_exists(path)) {
-			quit_fmt("cant load graphcis: file '%s' doesnt exist", path);
+			quit_fmt("cannot load graphics: file '%s' doesn't exist", path);
 		}
 
 		window->graphics.texture = load_image(window, path);
@@ -4128,6 +5363,15 @@ static void load_graphics(struct window *window, graphics_mode *mode)
 
 		window->graphics.overdraw_row = mode->overdrawRow;
 		window->graphics.overdraw_max = mode->overdrawMax;
+
+		for (i = 0; i < N_ELEMENTS(window->subwindows); i++) {
+			if (window->subwindows[i] &&
+					window->subwindows[i]->term) {
+				window->subwindows[i]->term->dblh_hook =
+					(window->graphics.overdraw_row) ?
+					is_dh_tile : NULL;
+			}
+		}
 	}
 
 	if (character_dungeon) {
@@ -4137,14 +5381,14 @@ static void load_graphics(struct window *window, graphics_mode *mode)
 	window->graphics.id = mode->grafID;
 }
 
-static void reload_all_graphics(graphics_mode *mode)
+static void reload_all_graphics(struct my_app *a, graphics_mode *mode)
 {
 	if (mode == NULL) {
 		return;
 	}
 
 	for (size_t i = 0; i < MAX_WINDOWS; i++) {
-		struct window *window = get_window_direct(i);
+		struct sdlpui_window *window = get_window_direct(a, i);
 		if (window == NULL) {
 			continue;
 		}
@@ -4157,21 +5401,34 @@ static void reload_all_graphics(graphics_mode *mode)
 	}
 }
 
-static const struct font_info *find_font_info(const char *name)
+static const struct font_info *find_font_info(const struct font_info *fonts,
+		int nfonts, const char *name)
 {
-	for (size_t i = 0; i < N_ELEMENTS(g_font_info); i++) {
-		if (g_font_info[i].loaded && streq(g_font_info[i].name, name)) {
-			return &g_font_info[i];
+	int i;
+
+	for (i = 0; i < nfonts; i++) {
+		if (streq(fonts[i].name, name)) {
+			return &fonts[i];
 		}
 	}
 
 	return NULL;
 }
 
-static void make_font_cache(const struct window *window, struct font *font)
+static void make_font_cache(const struct sdlpui_window *window,
+		struct font *font)
 {
+	const int glyph_w = font->ttf.glyph.w;
+	const int glyph_h = font->ttf.glyph.h;
+	/*
+	 * Limit the horizontal size of the texture for the cached font to
+	 * avoid bumping into limits in the renderer.
+	 */
+	const size_t ncol = 16;
+
 	font->cache.texture = make_subwindow_texture(window,
-			(int) ASCII_CACHE_SIZE * font->ttf.glyph.w, font->ttf.glyph.h);
+		(int)ncol * glyph_w,
+		(int)((ASCII_CACHE_SIZE + (ncol - 1)) / ncol) * glyph_h);
 	assert(font->cache.texture != NULL);
 		
 	/* fill texture with white transparent pixels */
@@ -4180,41 +5437,49 @@ static void make_font_cache(const struct window *window, struct font *font)
 	/* restore the alpha; we will render glyphs in white */
 	white.a = 0xFF;
 
-	/* y remains the same during the loop below; other values of rect change */
-	SDL_Rect rect = {0};
-
-	for (size_t i = 0; i < ASCII_CACHE_SIZE; i++) {
+	for (size_t i = 0, icol = 0, irow = 0; i < ASCII_CACHE_SIZE; i++) {
 		SDL_Surface *surface = TTF_RenderGlyph_Blended(font->ttf.handle,
 				(Uint16) g_ascii_codepoints_for_cache[i], white);
 		if (surface == NULL) {
-			quit_fmt("cant render surface for cache in font '%s': %s",
-					font->name, TTF_GetError());
+			quit_fmt("font cache rendering failed for '%c'"
+				" (ASCII %lu) in font '%s': %s",
+				g_ascii_codepoints_for_cache[i],
+				(unsigned long)g_ascii_codepoints_for_cache[i],
+				font->name, TTF_GetError());
 		}
+
 		SDL_Texture *texture = SDL_CreateTextureFromSurface(window->renderer, surface);
 		if (texture == NULL) {
-			quit_fmt("cant create texture for cache in font '%s': %s",
+			quit_fmt("cannot create texture for cache in font '%s': %s",
 					font->name, SDL_GetError());
 		}
+
+		SDL_Rect src = {0, 0, surface->w, surface->h};
+		SDL_Rect dst = {glyph_w * icol, glyph_h * irow, glyph_w, glyph_h};
+
+		crop_rects(&src, &dst);
+
+		SDL_RenderCopy(window->renderer, texture, &src, &dst);
+
+		font->cache.rects[i] = dst;
+
 		SDL_FreeSurface(surface);
-
-		SDL_QueryTexture(texture, NULL, NULL, &rect.w, &rect.h);
-		rect.w = MIN(rect.w, font->ttf.glyph.w - font->ttf.glyph.x);
-		rect.h = MIN(rect.h, font->ttf.glyph.h - font->ttf.glyph.y);
-
-		SDL_RenderCopy(window->renderer, texture, NULL, &rect);
-
-		font->cache.rects[i] = rect;
-		rect.x += font->ttf.glyph.w;
-
 		SDL_DestroyTexture(texture);
-	}
 
+		if (icol < ncol - 1) {
+			++icol;
+		} else {
+			icol = 0;
+			++irow;
+		}
+	}
 }
 
-static struct font *make_font(const struct window *window,
+static struct font *make_font(const struct sdlpui_window *window,
 		const char *name, int size)
 {
-	const struct font_info *info = find_font_info(name);
+	const struct font_info *info = find_font_info(window->app->fonts,
+		window->app->font_count, name);
 	if (info == NULL) {
 		return NULL;
 	}
@@ -4237,32 +5502,24 @@ static struct font *make_font(const struct window *window,
 static bool reload_font(struct subwindow *subwindow,
 		const struct font_info *info)
 {
-	struct font *new_font = make_font(subwindow->window, info->name, info->size);
+	struct font *new_font =
+		make_font(subwindow->window, info->name, info->size);
+	int min_w, min_h;
+
 	if (new_font == NULL) {
 		return false;
 	}
 
-	subwindow->sizing_rect = subwindow->full_rect;
-	if (!is_ok_col_row(subwindow,
-				&subwindow->sizing_rect, new_font->ttf.glyph.w, new_font->ttf.glyph.h))
-	{
-		int min_cols = subwindow->index == MAIN_SUBWINDOW ? MIN_COLS_MAIN : MIN_COLS_OTHER;
-		int min_rows = subwindow->index == MAIN_SUBWINDOW ? MIN_ROWS_MAIN : MIN_ROWS_OTHER;
-
-		subwindow->sizing_rect.w = min_cols * new_font->ttf.glyph.w + 2 * DEFAULT_BORDER;
-		subwindow->sizing_rect.h = min_rows * new_font->ttf.glyph.h + 2 * DEFAULT_BORDER;
-	}
-
-	if (subwindow->sizing_rect.w > subwindow->window->inner_rect.w
-			|| subwindow->sizing_rect.h > subwindow->window->inner_rect.h)
-	{
+	if (!is_usable_font_for_subwindow(new_font, subwindow,
+			&subwindow->sizing_rect)) {
 		free_font(new_font);
-		memset(&subwindow->sizing_rect, 0, sizeof(subwindow->sizing_rect));
-
 		return false;
 	}
 
-	fit_rect_in_rect_by_xy(&subwindow->sizing_rect, &subwindow->window->inner_rect);
+	get_minimum_subwindow_size(subwindow->index == MAIN_SUBWINDOW,
+		new_font->ttf.glyph.w, new_font->ttf.glyph.h, &min_w, &min_h);
+	coerce_rect_in_rect(&subwindow->sizing_rect,
+		&subwindow->window->inner_rect, min_w, min_h);
 
 	free_font(subwindow->font);
 	subwindow->font = new_font;
@@ -4279,22 +5536,17 @@ static void load_font(struct font *font)
 
 	font->ttf.handle = TTF_OpenFont(font->path, font->size);
 	if (font->ttf.handle == NULL) {
-		quit_fmt("cant open font '%s': %s", font->path, TTF_GetError());
+		quit_fmt("cannot open font '%s': %s", font->path, TTF_GetError());
 	}
 
 	font->ttf.glyph.h = TTF_FontHeight(font->ttf.handle);
-	font->ttf.glyph.h += 2 * GLYPH_PADDING;
 
 	if (TTF_GlyphMetrics(font->ttf.handle, GLYPH_FOR_ADVANCE,
 				NULL, NULL, NULL, NULL, &font->ttf.glyph.w) != 0)
 	{
-		quit_fmt("cant query glyph metrics for font '%s': %s",
+		quit_fmt("cannot query glyph metrics for font '%s': %s",
 				font->path, TTF_GetError());
 	}
-	font->ttf.glyph.w += 2 * GLYPH_PADDING;
-
-	font->ttf.glyph.x = GLYPH_PADDING;
-	font->ttf.glyph.y = GLYPH_PADDING;
 
 	TTF_SetFontHinting(font->ttf.handle, DEFAULT_FONT_HINTING);
 }
@@ -4317,25 +5569,110 @@ static void free_font(struct font *font)
 	mem_free(font);
 }
 
+static void recreate_textures(struct my_app *a, bool all)
+{
+	int i;
+
+	reload_all_graphics(a, current_graphics_mode);
+	for (i = 0; i < MAX_WINDOWS; ++i) {
+		struct sdlpui_window *w = &a->windows[i];
+		struct sdlpui_dialog *d;
+		int j;
+
+		if (!w->loaded) {
+			continue;
+		}
+
+		/*
+		 * Recreate the dynamic texture used to cache the dialog font.
+		 */
+		if (w->dialog_font->cache.texture) {
+			SDL_DestroyTexture(w->dialog_font->cache.texture);
+			w->dialog_font->cache.texture = NULL;
+			make_font_cache(w, w->dialog_font);
+		}
+
+		/* Recreate the static texture used for the stipple pattern. */
+		if (all && w->stipple.texture) {
+			SDL_DestroyTexture(w->stipple.texture);
+			w->stipple = sdlpui_compute_stipple(w->renderer);
+		}
+
+		/*
+		 * Recreate the texture used for the wallpaper.  That texture
+		 * is dynamic if the wallpapering mode is WALLPAPER_TILED;
+		 * otherwise, that texture is static.
+		 */
+		if (w->wallpaper.mode != WALLPAPER_DONT_SHOW
+				&& w->wallpaper.texture && (all
+				|| w->wallpaper.mode == WALLPAPER_TILED)) {
+			SDL_DestroyTexture(w->wallpaper.texture);
+			w->wallpaper.texture = NULL;
+			if (w->config) {
+				load_wallpaper(w, w->config->wallpaper_path);
+			} else {
+				load_default_wallpaper(w);
+			}
+		}
+
+		/*
+		 * Recreate the textures for subwindows; those are all
+		 * dynamic.
+		 */
+		for (j = 0; j < MAX_SUBWINDOWS; ++j) {
+			struct subwindow *sw = w->subwindows[j];
+
+			if (!sw) {
+				continue;
+			}
+			if (!sw->texture) {
+				SDL_DestroyTexture(sw->texture);
+				sw->texture = make_subwindow_texture(w,
+					sw->full_rect.w, sw->full_rect.h);
+				SDL_assert(sw->texture);
+			}
+			if (!sw->aux_texture) {
+				SDL_DestroyTexture(sw->aux_texture);
+				sw->aux_texture =
+					make_subwindow_texture(w, 1, 1);
+				SDL_assert(sw->aux_texture);
+			}
+			if (sw->font->cache.texture) {
+				SDL_DestroyTexture(sw->font->cache.texture);
+				sw->font->cache.texture = NULL;
+				make_font_cache(w, sw->font);
+			}
+		}
+
+		/*
+		 * Recreate any textures used by dialogs or menus in the window.
+		 */
+		for (d = w->d_head; d; d = d->next) {
+			if (d->recreate_textures_callback) {
+				(*d->recreate_textures_callback)(d, w, all);
+			}
+		}
+	}
+
+	refresh_angband_terms(a);
+}
+
 static bool is_ok_col_row(const struct subwindow *subwindow,
 		const SDL_Rect *rect, int cell_w, int cell_h)
 {
-	const int min_col =
-		subwindow->index == MAIN_SUBWINDOW ? MIN_COLS_MAIN : MIN_COLS_OTHER;
-	const int min_row =
-		subwindow->index == MAIN_SUBWINDOW ? MIN_ROWS_MAIN : MIN_ROWS_OTHER;
+	int min_w, min_h;
 
-	if ((rect->w - DEFAULT_BORDER * 2) / cell_w < min_col) {
-		return false;
-	}
-	if ((rect->h - DEFAULT_BORDER * 2) / cell_h < min_row) {
+	get_minimum_subwindow_size(subwindow->index == MAIN_SUBWINDOW,
+		cell_w, cell_h, &min_w, &min_h);
+
+	if (rect->w < min_w || rect->h < min_h) {
 		return false;
 	}
 
 	return true;
 }
 
-static bool adjust_subwindow_geometry(const struct window *window,
+static bool adjust_subwindow_geometry(const struct sdlpui_window *window,
 		struct subwindow *subwindow)
 {
 	if (!subwindow->loaded && subwindow->config == NULL) {
@@ -4347,7 +5684,7 @@ static bool adjust_subwindow_geometry(const struct window *window,
 	}
 
 	/* coordinates of inner rect are relative to that of outer rect
-	 * (really, they are relative to subwindow's texture */
+	 * (really, they are relative to subwindow's texture) */
 	subwindow->inner_rect.x = 0;
 	subwindow->inner_rect.y = 0;
 	subwindow->inner_rect.w = subwindow->full_rect.w;
@@ -4388,38 +5725,50 @@ static bool adjust_subwindow_geometry(const struct window *window,
 	return true;
 }
 
-static void sort_to_top_aux(struct window *window,
-		size_t *next, struct subwindow **subwindows, bool top, bool always_top)
+static void sort_to_top_aux(struct sdlpui_window *window,
+		size_t *next_subwindow, struct subwindow **subwindows,
+		size_t num_subwindows, bool top, bool always_top)
 {
-	assert(*next < N_ELEMENTS(window->subwindows));
+	if (*next_subwindow == num_subwindows) {
+		return;
+	}
 
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
-		if (window->subwindows[i] == NULL
-				|| window->subwindows[i]->top != top
-				|| window->subwindows[i]->always_top != always_top)
+		if (window->subwindows[i] != NULL
+				&& window->subwindows[i]->top == top
+				&& window->subwindows[i]->always_top == always_top)
 		{
-			continue;
+			subwindows[(*next_subwindow)++] = window->subwindows[i];
 		}
-		subwindows[(*next)++] = window->subwindows[i];
 	}
+
+	assert(*next_subwindow <= num_subwindows);
 }
 
-static void sort_to_top(struct window *window)
+static void sort_to_top(struct sdlpui_window *window)
 {
 	struct subwindow *tmp[N_ELEMENTS(window->subwindows)] = {NULL};
 	assert(sizeof(window->subwindows) == sizeof(tmp));
 
-	size_t current = 0;
+	size_t num_subwindows = 0;
+	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
+		if (window->subwindows[i] != NULL) {
+			num_subwindows++;
+		}
+	}
+
 	/* and that's how we sort here :) */
-	sort_to_top_aux(window, &current, tmp, false, false);
-	sort_to_top_aux(window, &current, tmp, true,  false);
-	sort_to_top_aux(window, &current, tmp, false, true);
-	sort_to_top_aux(window, &current, tmp, true,  true);
+	size_t current = 0;
+	sort_to_top_aux(window, &current, tmp, num_subwindows, false, false);
+	sort_to_top_aux(window, &current, tmp, num_subwindows, true,  false);
+	sort_to_top_aux(window, &current, tmp, num_subwindows, false, true);
+	sort_to_top_aux(window, &current, tmp, num_subwindows, true,  true);
 
 	memcpy(window->subwindows, tmp, sizeof(window->subwindows));
 }
 
-static void bring_to_top(struct window *window, struct subwindow *subwindow)
+static void bring_to_top(struct sdlpui_window *window,
+		struct subwindow *subwindow)
 {
 	assert(subwindow->window == window);
 
@@ -4439,23 +5788,30 @@ static void bring_to_top(struct window *window, struct subwindow *subwindow)
 	sort_to_top(window);
 }
 
-static void adjust_status_bar_geometry(struct window *window)
+static void adjust_status_bar_geometry(struct sdlpui_window *window)
 {
-	struct status_bar *status_bar = &window->status_bar;
+	int mw, mh;
 
-	status_bar->full_rect.x = 0;
-	status_bar->full_rect.y = 0;
-	status_bar->full_rect.w = window->full_rect.w;
-	status_bar->full_rect.h = DEFAULT_LINE_HEIGHT(status_bar->font->ttf.glyph.h);
-	status_bar->inner_rect = status_bar->full_rect;
-
-	int border = (status_bar->full_rect.h - status_bar->font->ttf.glyph.h) / 2;
-	resize_rect(&status_bar->inner_rect,
-			border, border, -border, -border);
+	if (window->status_bar->ftb->query_minimum_size) {
+		(*window->status_bar->ftb->query_minimum_size)(
+			window->status_bar, window, &mw, &mh);
+	} else {
+		(*window->status_bar->ftb->query_natural_size)(
+			window->status_bar, window, &mw, &mh);
+	}
+	assert(mw <= window->full_rect.w);
+	if (window->status_bar->ftb->resize) {
+		(*window->status_bar->ftb->resize)(window->status_bar, window,
+			window->full_rect.w, mh);
+	} else {
+		window->status_bar->rect.w = window->full_rect.w;
+		window->status_bar->rect.h = mh;
+	}
 }
 
-static struct subwindow *get_subwindow_by_index(const struct window *window,
-		unsigned index, bool visible)
+static struct subwindow *get_subwindow_by_index(
+		const struct sdlpui_window *window, unsigned index,
+		bool visible)
 {
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
@@ -4471,7 +5827,8 @@ static struct subwindow *get_subwindow_by_index(const struct window *window,
 	return NULL;
 }
 
-static struct subwindow *get_subwindow_by_xy(const struct window *window, int x, int y)
+static struct subwindow *get_subwindow_by_xy(
+		const struct sdlpui_window *window, int x, int y)
 {
 	/* checking subwindows in z order */
 	for (size_t i = N_ELEMENTS(window->subwindows); i > 0; i--) {
@@ -4487,228 +5844,142 @@ static struct subwindow *get_subwindow_by_xy(const struct window *window, int x,
 	return NULL;
 }
 
-static struct menu_panel *get_menu_panel_by_xy(struct menu_panel *menu_panel,
-		int x, int y)
+static void handle_button_open_subwindow(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
 {
-	while (menu_panel != NULL) {
-		if (is_point_in_rect(x, y, &menu_panel->rect)) {
-			return menu_panel;
-		}
-		menu_panel = menu_panel->next;
-	}
+	int tag;
+	unsigned int index;
+	struct subwindow *subwindow;
+	int minw, minh;
 
-	return NULL;
-}
-
-static bool is_over_status_bar(const struct status_bar *status_bar, int x, int y)
-{
-	return is_point_in_rect(x, y, &status_bar->full_rect);
-}
-
-static void make_button_bank(struct button_bank *bank)
-{
-	bank->buttons = mem_zalloc(sizeof(*bank->buttons) * MAX_BUTTONS);
-
-	bank->size = MAX_BUTTONS;
-	bank->number = 0;
-}
-
-static bool do_button_open_subwindow(struct window *window,
-		struct button *button)
-{
-	CHECK_BUTTON_GROUP_TYPE(button, BUTTON_GROUP_SUBWINDOWS, BUTTON_DATA_UVAL);
-
-	unsigned index = button->info.data.uval;
-	struct subwindow *subwindow = NULL;
-	
+	assert(ctrl->ftb->get_tag);
+	tag = (*ctrl->ftb->get_tag)(ctrl);
+	assert(tag >= 0);
+	index = (unsigned int)tag;
 	subwindow = get_subwindow_by_index(window, index, false);
 	if (subwindow != NULL) {
 		subwindow->visible = !subwindow->visible;
 		if (subwindow->visible) {
 			bring_to_top(window, subwindow);
 		}
-	} else if (is_subwindow_loaded(index)) {
+	} else if (is_subwindow_loaded(window->app, index)) {
 		subwindow = transfer_subwindow(window, index);
 		subwindow->visible = true;
 		bring_to_top(window, subwindow);
-		refresh_angband_terms();
+		refresh_angband_terms(subwindow->app);
 	} else {
 		subwindow = make_subwindow(window, index);
 		assert(subwindow != NULL);
 		bring_to_top(window, subwindow);
-		refresh_angband_terms();
+		refresh_angband_terms(subwindow->app);
 	}
 
-	redraw_all_windows(false);
+	/*
+	 * Changing which subwindows are displayed can change the minimum size
+	 * for the window.
+	 */
+	get_minimum_window_size(window, &minw, &minh);
+	SDL_SetWindowMinimumSize(window->window, minw, minh);
 
-	return true;
+	redraw_all_windows(subwindow->app, false);
 }
 
-static bool do_nothing_button(struct window *window,
-		struct button *button)
+static void load_status_bar(struct sdlpui_window *window)
 {
-	(void) window;
-	(void) button;
+	struct sdlpui_control *c;
+	unsigned int i;
+	int w, h;
 
-	return true;
-}
-
-static void close_status_bar_menu(struct status_bar *status_bar)
-{
-	if (status_bar->menu_panel != NULL) {
-		free_menu_panel(status_bar->menu_panel);
-		status_bar->menu_panel = NULL;
+	window->status_bar = sdlpui_start_simple_menu(NULL, NULL,
+		2 + N_ELEMENTS(window->subwindows)
+		+ ((window->index == MAIN_WINDOW) ? 1 : 0), false, true,
+		NULL, NULL, 0);
+	c = sdlpui_get_simple_menu_next_unused(window->status_bar,
+		SDLPUI_MFLG_NONE);
+	sdlpui_create_submenu_button(c, "Menu", SDLPUI_HOR_CENTER,
+		handle_menu_button, SDLPUI_CHILD_MENU_BELOW, 0, false);
+	if (window->index == MAIN_WINDOW) {
+		/*
+		 * For symmetry with the other windows, give the main window
+		 * an entry in the menu.  As the main window is always visible
+		 * while the application is hidden, that entry does not allow
+		 * interaction.
+		 */
+		c = sdlpui_get_simple_menu_next_unused(window->status_bar,
+			SDLPUI_MFLG_CAN_HIDE);
+		sdlpui_create_menu_indicator(c, "A", SDLPUI_HOR_CENTER, 0,
+			true);
 	}
-}
+	for (i = 1; i < (unsigned int)N_ELEMENTS(window->subwindows); ++i) {
+		struct subwindow *subw =
+			get_subwindow_by_index(window, i, false);
 
-static void make_default_status_buttons(struct status_bar *status_bar)
-{
-	SDL_Rect rect;
-	struct button_info info;
-	struct button_callbacks callbacks;
-
-#define PUSH_BUTTON_LEFT_TO_RIGHT(cap) \
-	get_string_metrics(status_bar->font, (cap), &rect.w, NULL); \
-	rect.w += DEFAULT_BUTTON_BORDER * 2; \
-	push_button(&status_bar->button_bank, status_bar->font, \
-			(cap), info, callbacks, &rect, CAPTION_POSITION_CENTER); \
-	rect.x += rect.w; \
-
-	rect.x = status_bar->full_rect.x;
-	rect.y = status_bar->full_rect.y;
-	rect.w = 0;
-	rect.h = status_bar->full_rect.h;
-
-	callbacks.on_render = render_menu_button;
-	callbacks.on_event = handle_menu_button;
-	callbacks.on_click = NULL;
-	callbacks.on_menu = NULL;
-
-	info.type = BUTTON_DATA_NONE;
-	info.group = BUTTON_GROUP_MENU;
-	PUSH_BUTTON_LEFT_TO_RIGHT("Menu");
-
-	callbacks.on_render = render_button_subwindows;
-	callbacks.on_event = NULL;
-
-	info.type = BUTTON_DATA_UVAL;
-	info.group = BUTTON_GROUP_SUBWINDOWS;
-
-	if (status_bar->window->index == MAIN_WINDOW) {
-		callbacks.on_click = do_nothing_button;
-		info.data.uval = MAIN_SUBWINDOW;
-		/* the main term is called Angband in game options */
-		PUSH_BUTTON_LEFT_TO_RIGHT("A");
+		c = sdlpui_get_simple_menu_next_unused(window->status_bar,
+			SDLPUI_MFLG_CAN_HIDE);
+		sdlpui_create_menu_toggle(c, format("%u", i),
+			SDLPUI_HOR_CENTER, handle_button_open_subwindow,
+			(int)i, false, subw && subw->visible);
 	}
-
-	callbacks.on_click = do_button_open_subwindow;
-	for (unsigned i = 1; i < N_ELEMENTS(status_bar->window->subwindows); i++) {
-		info.data.uval = i;
-		PUSH_BUTTON_LEFT_TO_RIGHT(format("%d", i));
-	}
-#undef PUSH_BUTTON_LEFT_TO_RIGHT
-
-#define PUSH_BUTTON_RIGHT_TO_LEFT(cap) \
-	get_string_metrics(status_bar->font, (cap), &rect.w, NULL); \
-	rect.w += DEFAULT_BUTTON_BORDER * 2; \
-	rect.x -= rect.w; \
-	push_button(&status_bar->button_bank, status_bar->font, \
-			(cap), info, callbacks, &rect, CAPTION_POSITION_CENTER); \
-
-	rect.x = status_bar->full_rect.x + status_bar->full_rect.w;
-	rect.y = status_bar->full_rect.y;
-	rect.w = 0;
-	rect.h = status_bar->full_rect.h;
-
-	callbacks.on_render = render_button_movesize;
-	callbacks.on_click = do_button_movesize;
-	callbacks.on_event = NULL;
-	callbacks.on_menu = NULL;
-
-	info.type = BUTTON_DATA_IVAL;
-	info.group = BUTTON_GROUP_MOVESIZE;
-
-	info.data.ival = BUTTON_MOVESIZE_MOVING;
-	PUSH_BUTTON_RIGHT_TO_LEFT("Move");
-
-	info.data.ival = BUTTON_MOVESIZE_SIZING;
-	PUSH_BUTTON_RIGHT_TO_LEFT("Size");
-#undef PUSH_BUTTON_RIGHT_TO_LEFT
-}
-
-static void reload_status_bar(struct status_bar *status_bar)
-{
-	close_status_bar_menu(status_bar);
-
-	SDL_DestroyTexture(status_bar->texture);
-	status_bar->texture = make_subwindow_texture(status_bar->window,
-			status_bar->full_rect.w, status_bar->full_rect.h);
-	assert(status_bar->texture != NULL);
-
-	free_button_bank(&status_bar->button_bank);
-	make_button_bank(&status_bar->button_bank);
-	make_default_status_buttons(status_bar);
-
-	render_status_bar(status_bar->window);
-}
-
-static void load_status_bar(struct window *window)
-{
-	if (window->status_bar.font == NULL) {
-		if (window->config != NULL) {
-			window->status_bar.font = make_font(window,
-					window->config->font_name,
-					window->config->font_size);
-		} else {
-			window->status_bar.font = make_font(window, DEFAULT_STATUS_BAR_FONT, 0);
-		}
-		assert(window->status_bar.font != NULL);
+	c = sdlpui_get_simple_menu_next_unused(window->status_bar,
+		SDLPUI_MFLG_END_GRAVITY);
+	window->move_button = c;
+	sdlpui_create_menu_toggle(c, "Move", SDLPUI_HOR_CENTER,
+		handle_button_movesize, 0, false, window->move_state.active);
+	c = sdlpui_get_simple_menu_next_unused(window->status_bar,
+		SDLPUI_MFLG_END_GRAVITY);
+	window->size_button = c;
+	sdlpui_create_menu_toggle(c, "Size", SDLPUI_HOR_CENTER,
+		handle_button_movesize, 1, false, window->size_state.active);
+	sdlpui_complete_simple_menu(window->status_bar, window);
+	if (window->status_bar->ftb->query_minimum_size) {
+		(*window->status_bar->ftb->query_minimum_size)(
+			window->status_bar, window, &w, &h);
 	} else {
-		quit_fmt("font '%s' already loaded in status bar in window %u",
-				window->status_bar.font->name, window->index);
+		(*window->status_bar->ftb->query_natural_size)(
+			window->status_bar, window, &w, &h);
 	}
-
-	adjust_status_bar_geometry(window);
-
-	window->status_bar.texture = make_subwindow_texture(window,
-			window->status_bar.full_rect.w, window->status_bar.full_rect.h);
-
-	/* let's try renderer */
-	if (SDL_SetRenderDrawColor(window->renderer,
-				window->status_bar.color.r, window->status_bar.color.g,
-				window->status_bar.color.b, window->status_bar.color.a) != 0) {
-		quit_fmt("cant set render color for status bar in window %u: %s",
-				window->index, SDL_GetError());
+	if (w > window->full_rect.w) {
+		quit("Window is too narrow for menu bar");
+	} else if (w < window->full_rect.w) {
+		if (window->status_bar->ftb->resize) {
+			(*window->status_bar->ftb->resize)(window->status_bar,
+				window, window->full_rect.w, h);
+		} else {
+			window->status_bar->rect.w = window->full_rect.w;
+			window->status_bar->rect.h = h;
+		}
 	}
-	/* well, renderer seems to work */
-	if (SDL_SetRenderTarget(window->renderer, window->status_bar.texture) != 0) {
-		quit_fmt("cant set status bar texture as target in window %u: %s",
-				window->index, SDL_GetError());
-	}
-	/* does it render? */
-	if (SDL_RenderClear(window->renderer) != 0) {
-		quit_fmt("cant clear status bar texture in window %u: %s",
-				window->index, SDL_GetError());
-	}
-
-	/* well, it probably works */
-	window->status_bar.window = window;
+	/*
+	 * Anchored to the top left corner of the window and not dismissed
+	 * when submenus are popped down.
+	 */
+	window->status_bar->rect.x = 0;
+	window->status_bar->rect.y = 0;
+	window->status_bar->pinned = true;
+	sdlpui_popup_dialog(window->status_bar, window, false);
 }
 
-static void fit_subwindow_in_window(const struct window *window,
+static void fit_subwindow_in_window(const struct sdlpui_window *window,
 		struct subwindow *subwindow)
 {
-	fit_rect_in_rect_by_xy(&subwindow->full_rect, &window->inner_rect);
+	int min_w, min_h;
+
+	get_minimum_subwindow_size(subwindow->index == MAIN_SUBWINDOW,
+		subwindow->font->ttf.glyph.w, subwindow->font->ttf.glyph.h,
+		&min_w, &min_h);
+	coerce_rect_in_rect(&subwindow->full_rect, &window->inner_rect,
+		min_w, min_h);
 	if (!is_rect_in_rect(&subwindow->full_rect, &window->inner_rect)) {
 		subwindow->borders.error = true;
 		render_borders(subwindow);
 	}
 }
 
-static void resize_window(struct window *window, int w, int h)
+static void resize_window(struct sdlpui_window *window, int w, int h)
 {
 	if (window->full_rect.w == w
-			&& window->full_rect.h == h)
+			&& window->full_rect.h == h
+			&& window->status_bar->rect.w == w)
 	{
 		return;
 	}
@@ -4727,12 +5998,10 @@ static void resize_window(struct window *window, int w, int h)
 		}
 	}
 
-	reload_status_bar(&window->status_bar);
-
 	redraw_window(window);
 }
 
-static void adjust_window_geometry(struct window *window)
+static void adjust_window_geometry(struct sdlpui_window *window)
 {
 	window->inner_rect.x = 0;
 	window->inner_rect.y = 0;
@@ -4740,7 +6009,7 @@ static void adjust_window_geometry(struct window *window)
 	window->inner_rect.h = window->full_rect.h;
 
 	resize_rect(&window->inner_rect,
-			0, window->status_bar.full_rect.h, 0, 0);
+			0, window->status_bar->rect.h, 0, 0);
 
 	if (window->inner_rect.w <= 0
 			|| window->inner_rect.h <= 0) {
@@ -4749,19 +6018,19 @@ static void adjust_window_geometry(struct window *window)
 	}
 }
 
-static void set_window_delay(struct window *window)
+static void set_window_delay(struct sdlpui_window *window)
 {
 	assert(window->window != NULL);
 
 	int display = SDL_GetWindowDisplayIndex(window->window);
 	if (display < 0) {
-		quit_fmt("cant get display of window %u: %s",
+		quit_fmt("cannot get display of window %u: %s",
 				window->index, SDL_GetError());
 	}
 
 	SDL_DisplayMode mode;
-	if (SDL_GetCurrentDisplayMode(display, &mode) != 0)
-	{
+	if (SDL_GetCurrentDisplayMode(display, &mode) != 0 ||
+			mode.refresh_rate <= 0) {
 		/* lets just guess; 60 fps is standard */
 		mode.refresh_rate = 60;
 	}
@@ -4769,13 +6038,58 @@ static void set_window_delay(struct window *window)
 	window->delay = 1000 / mode.refresh_rate;
 }
 
-/* initialize miscellaneous things in window */
-static void load_window(struct window *window)
+/** initialize miscellaneous things in window */
+static void load_window(struct sdlpui_window *window)
 {
+	if (window->dialog_font == NULL) {
+		const char *try_names[3];
+		int try_sizes[3];
+		int n_tries = 0, i = 0;
+
+		if (window->config && window->config->font_name) {
+			try_names[n_tries] = window->config->font_name;
+			try_sizes[n_tries] = window->config->font_size;
+			++n_tries;
+		}
+		try_names[n_tries] = DEFAULT_DIALOG_FONT;
+		try_sizes[n_tries] = 0;
+		++n_tries;
+		if (window->app->font_count > 0 && window->app->fonts[0].name) {
+			try_names[n_tries] = window->app->fonts[0].name;
+			try_sizes[n_tries] = window->app->fonts[0].size;
+			++n_tries;
+		}
+
+		while (1) {
+			if (i >= n_tries) {
+				quit_fmt("No usable status bar font for "
+					"window %u; configured to use '%s'",
+					window->index, try_names[0]);
+			}
+			window->dialog_font =
+				make_font(window, try_names[i], try_sizes[i]);
+			if (window->dialog_font) {
+				if (i > 0) {
+					plog_fmt("Font '%s' unusable; "
+						"substituting '%s'",
+						try_names[0], try_names[i]);
+					if (window->config) {
+						string_free(window->config->font_name);
+						window->config->font_name =
+							string_make(try_names[i]);
+					}
+				}
+				break;
+			}
+			++i;
+		}
+	}
+	window->stipple = sdlpui_compute_stipple(window->renderer);
 	load_status_bar(window);
+	window->infod = NULL;
+	window->shorte = NULL;
+	window->detaild = NULL;
 	adjust_window_geometry(window);
-	make_button_bank(&window->status_bar.button_bank);
-	make_default_status_buttons(&window->status_bar);
 	set_window_delay(window);
 	if (window->wallpaper.mode != WALLPAPER_DONT_SHOW) {
 		if (window->config == NULL) {
@@ -4795,7 +6109,7 @@ static void load_window(struct window *window)
 	window->loaded = true;
 }
 
-static bool choose_pixelformat(struct window *window,
+static bool choose_pixelformat(struct sdlpui_window *window,
 		const struct SDL_RendererInfo *info)
 {
 #define TRY_SET_WINDOW_PIXELFORMAT(format) \
@@ -4814,8 +6128,10 @@ static bool choose_pixelformat(struct window *window,
 	return false;
 }
 
-static void start_window(struct window *window)
+static void start_window(struct sdlpui_window *window)
 {
+	int minw, minh;
+
 	assert(!window->loaded);
 
 	if (window->config == NULL) {
@@ -4824,6 +6140,23 @@ static void start_window(struct window *window)
 				window->full_rect.w, window->full_rect.h,
 				SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE);
 	} else {
+		/*
+		 * For newer configuration files, stored_rect will have the
+		 * desired size for fullscreen.  Older configuration files
+		 * only save the size for whatever mode (fullscreen, not
+		 * fullscreen) the game was in so those will already have the
+		 * right size in full_rect.
+		 */
+		if (window->config->window_flags
+				& SDL_WINDOW_FULLSCREEN_DESKTOP) {
+			if (window->stored_rect.w &&
+					window->stored_rect.h) {
+				SDL_Rect tmp_rect = window->full_rect;
+
+				window->full_rect = window->stored_rect;
+				window->stored_rect = tmp_rect;
+			}
+		}
 		window->window = SDL_CreateWindow(VERSION_NAME,
 				window->full_rect.x, window->full_rect.y,
 				window->full_rect.w, window->full_rect.h,
@@ -4841,17 +6174,17 @@ static void start_window(struct window *window)
 				-1, window->config->renderer_flags);
 	}
 	if (window->renderer == NULL) {
-		quit_fmt("cant create renderer for window %u: %s",
+		quit_fmt("cannot create renderer for window %u: %s",
 				window->index, SDL_GetError());
 	}
 
 	SDL_RendererInfo info;
 	if (SDL_GetRendererInfo(window->renderer, &info) != 0) {
-		quit_fmt("cant query renderer in window %u", window->index);
+		quit_fmt("cannot query renderer in window %u", window->index);
 	}
 
 	if (!choose_pixelformat(window, &info)) {
-		quit_fmt("cant choose pixelformat for window %u", window->index);
+		quit_fmt("cannot choose pixelformat for window %u", window->index);
 	}
 
 	load_window(window);
@@ -4859,28 +6192,28 @@ static void start_window(struct window *window)
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		if (window->subwindows[i] != NULL) {
 			load_subwindow(window, window->subwindows[i]);
-			window->subwindows[i]->visible = true;
 		}
 	}
 
-	SDL_SetWindowMinimumSize(window->window,
-			DEFAULT_WINDOW_MINIMUM_W, DEFAULT_WINDOW_MINIMUM_H);
+	get_minimum_window_size(window, &minw, &minh);
+	SDL_SetWindowMinimumSize(window->window, minw, minh);
 
 	window->flags = SDL_GetWindowFlags(window->window);
 	window->id = SDL_GetWindowID(window->window);
 }
 
-static void wipe_window_aux_config(struct window *window)
+static void wipe_window_aux_config(struct sdlpui_window *window)
 {
 	window->config = mem_zalloc(sizeof(*window->config));
 	assert(window->config != NULL);
 
-	const struct window *main_window = get_window_direct(MAIN_WINDOW);
+	const struct sdlpui_window *main_window =
+		get_window_direct(window->app, MAIN_WINDOW);
 	assert(main_window != NULL);
 
 	SDL_RendererInfo rinfo;
 	if (SDL_GetRendererInfo(main_window->renderer, &rinfo) != 0) {
-		quit_fmt("cant get renderer info for main window: %s", SDL_GetError());
+		quit_fmt("cannot get renderer info for main window: %s", SDL_GetError());
 	}
 	window->config->renderer_flags = rinfo.flags;
 	window->config->renderer_index = -1;
@@ -4891,7 +6224,7 @@ static void wipe_window_aux_config(struct window *window)
 		char path[4096];
 		path_build(path, sizeof(path), DEFAULT_WALLPAPER_DIR, DEFAULT_WALLPAPER);
 		window->config->wallpaper_path = string_make(path);
-		window->config->font_name = string_make(DEFAULT_STATUS_BAR_FONT);
+		window->config->font_name = string_make(DEFAULT_DIALOG_FONT);
 	} else {
 		window->config->wallpaper_path = string_make(main_window->config->wallpaper_path);
 		window->config->font_name = string_make(main_window->config->font_name);
@@ -4900,7 +6233,7 @@ static void wipe_window_aux_config(struct window *window)
 
 	int display = SDL_GetWindowDisplayIndex(main_window->window);
 	if (display < 0) {
-		quit_fmt("cant get display from main window: %s", SDL_GetError());
+		quit_fmt("cannot get display from main window: %s", SDL_GetError());
 	}
 
 	/* center it on the screen */
@@ -4910,6 +6243,10 @@ static void wipe_window_aux_config(struct window *window)
 	window->full_rect.h = mode.h / 2;
 	window->full_rect.x = mode.w / 4;
 	window->full_rect.y = mode.h / 4;
+	window->stored_rect.w = 0;
+	window->stored_rect.h = 0;
+	window->stored_rect.x = 0;
+	window->stored_rect.y = 0;
 
 	if (current_graphics_mode != NULL) {
 		window->graphics.id = current_graphics_mode->grafID;
@@ -4917,11 +6254,14 @@ static void wipe_window_aux_config(struct window *window)
 }
 
 /* initialize window with suitable hardcoded defaults */
-static void wipe_window(struct window *window, int display)
+static void wipe_window(struct sdlpui_window *window, int display)
 {
+	struct my_app *app = window->app;
 	unsigned index = window->index;
 	memset(window, 0, sizeof(*window));
+	window->app = app;
 	window->index = index;
+	window->outlined_subwindow = (unsigned)-1;
 
 	for (size_t j = 0; j < N_ELEMENTS(window->subwindows); j++) {
 		window->subwindows[j] = NULL;
@@ -4929,7 +6269,7 @@ static void wipe_window(struct window *window, int display)
 
 	SDL_DisplayMode mode;
 	if (SDL_GetCurrentDisplayMode(display, &mode) != 0) {
-		quit_fmt("cant get display mode for window %u: %s",
+		quit_fmt("cannot get display mode for window %u: %s",
 				window->index, SDL_GetError());
 	}
 
@@ -4937,22 +6277,18 @@ static void wipe_window(struct window *window, int display)
 
 	window->full_rect.w = mode.w;
 	window->full_rect.h = mode.h;
+	window->stored_rect.w = 0;
+	window->stored_rect.h = 0;
+	window->stored_rect.x = 0;
+	window->stored_rect.y = 0;
 
-	window->color = g_colors[DEFAULT_WINDOW_BG_COLOR];
+	window->color = window->app->colors[DEFAULT_WINDOW_BG_COLOR];
 	window->alpha = DEFAULT_ALPHA_FULL;
-
-	window->status_bar.font = NULL;
 
 	window->wallpaper.texture = NULL;
 	window->wallpaper.mode = WALLPAPER_TILED;
 
-	window->status_bar.font = NULL;
-	window->status_bar.color = g_colors[DEFAULT_STATUS_BAR_BG_COLOR];
-	window->status_bar.button_bank.buttons = NULL;
-	window->status_bar.menu_panel = NULL;
-	window->status_bar.in_menu = false;
-
-	window->cursor = true;
+	window->stipple.texture = NULL;
 
 	window->graphics.texture = NULL;
 	window->graphics.id = GRAPHICS_NONE;
@@ -4967,10 +6303,23 @@ static void dump_subwindow(const struct subwindow *subwindow, ang_file *config)
 {
 #define DUMP_SUBWINDOW(sym, fmt, ...) \
 	file_putf(config, "subwindow-" sym ":%u:" fmt "\n", subwindow->index, __VA_ARGS__)
-	DUMP_SUBWINDOW("window", "%u", subwindow->window->index);
-	DUMP_SUBWINDOW("full-rect", "%d:%d:%d:%d",
+	DUMP_SUBWINDOW("window", "%u:%d", subwindow->window->index,
+			(subwindow->visible) ? 1 : 0);
+	if (subwindow->window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
+		DUMP_SUBWINDOW("full-rect", "%d:%d:%d:%d",
+			subwindow->stored_rect.x, subwindow->stored_rect.y,
+			subwindow->stored_rect.w, subwindow->stored_rect.h);
+		DUMP_SUBWINDOW("full-rect-fs", "%d:%d:%d:%d",
 			subwindow->full_rect.x, subwindow->full_rect.y,
 			subwindow->full_rect.w, subwindow->full_rect.h);
+	} else {
+		DUMP_SUBWINDOW("full-rect", "%d:%d:%d:%d",
+			subwindow->full_rect.x, subwindow->full_rect.y,
+			subwindow->full_rect.w, subwindow->full_rect.h);
+		DUMP_SUBWINDOW("full-rect-fs", "%d:%d:%d:%d",
+			subwindow->stored_rect.x, subwindow->stored_rect.y,
+			subwindow->stored_rect.w, subwindow->stored_rect.h);
+	}
 	DUMP_SUBWINDOW("font", "%d:%s",
 			subwindow->font->size, subwindow->font->name);
 	DUMP_SUBWINDOW("borders", "%s",
@@ -4983,7 +6332,7 @@ static void dump_subwindow(const struct subwindow *subwindow, ang_file *config)
 	file_put(config, "\n");
 }
 
-static void dump_window(const struct window *window, ang_file *config)
+static void dump_window(const struct sdlpui_window *window, ang_file *config)
 {
 #define DUMP_WINDOW(sym, fmt, ...) \
 	file_putf(config, "window-" sym ":%u:" fmt "\n", window->index, __VA_ARGS__)
@@ -4992,8 +6341,19 @@ static void dump_window(const struct window *window, ang_file *config)
 	int x;
 	int y;
 	SDL_GetWindowPosition(window->window, &x, &y);
-	DUMP_WINDOW("full-rect", "%d:%d:%d:%d",
+	if (window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
+		DUMP_WINDOW("full-rect", "%d:%d:%d:%d",
+			window->stored_rect.x, window->stored_rect.y,
+			window->stored_rect.w, window->stored_rect.h);
+		DUMP_WINDOW("full-rect-fs", "%d:%d:%d:%d",
 			x, y, window->full_rect.w, window->full_rect.h);
+	} else {
+		DUMP_WINDOW("full-rect", "%d:%d:%d:%d",
+			x, y, window->full_rect.w, window->full_rect.h);
+		DUMP_WINDOW("full-rect-fs", "%d:%d:%d:%d",
+			window->stored_rect.x, window->stored_rect.y,
+			window->stored_rect.w, window->stored_rect.h);
+	}
 
 	DUMP_WINDOW("fullscreen", "%s",
 			(window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) ? "true" : "false");
@@ -5015,24 +6375,23 @@ static void dump_window(const struct window *window, ang_file *config)
 			window->wallpaper.mode == WALLPAPER_SCALED    ? "scaled"   :
 			"ERROR");
 	DUMP_WINDOW("status-bar-font", "%d:%s",
-			window->status_bar.font->size, window->status_bar.font->name);
+			window->dialog_font->size, window->dialog_font->name);
 
 	DUMP_WINDOW("graphics-id", "%d", window->graphics.id);
 	DUMP_WINDOW("tile-scale", "width:%d", tile_width);
 	DUMP_WINDOW("tile-scale", "height:%d", tile_height);
-	DUMP_WINDOW("cursor", "%s", window->cursor ? "true" : "false");
 #undef DUMP_WINDOW
 	file_put(config, "\n");
 
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
-		if (subwindow != NULL && subwindow->visible) {
+		if (subwindow != NULL) {
 			dump_subwindow(subwindow, config);
 		}
 	}
 }
 
-static void detach_subwindow_from_window(struct window *window,
+static void detach_subwindow_from_window(struct sdlpui_window *window,
 		struct subwindow *subwindow)
 {
 	assert(subwindow->window == window);
@@ -5044,9 +6403,28 @@ static void detach_subwindow_from_window(struct window *window,
 	assert(i < N_ELEMENTS(window->subwindows));
 
 	window->subwindows[i] = NULL;
+	/* Also update the state of the menu bar. */
+	if (window->status_bar) {
+		int cidx = subwindow->index
+			+ ((window->index == MAIN_WINDOW) ? 1 : 0);
+		struct sdlpui_simple_menu *sm;
+		struct sdlpui_menu_button *mb;
+
+		assert(window->status_bar->type_code
+			== SDLPUI_DIALOG_SIMPLE_MENU);
+		sm = (struct sdlpui_simple_menu*)window->status_bar->priv;
+		assert(cidx < sm->number);
+		assert(sm->controls[cidx].type_code
+			== SDLPUI_CTRL_MENU_BUTTON);
+		mb = (struct sdlpui_menu_button*)sm->controls[cidx].priv;
+		assert(mb->subtype_code == SDLPUI_MB_TOGGLE);
+		mb->v.toggled = false;
+		window->status_bar->dirty = true;
+		window->dirty = true;
+	}
 }
 
-static void attach_subwindow_to_window(struct window *window,
+static void attach_subwindow_to_window(struct sdlpui_window *window,
 		struct subwindow *subwindow)
 {
 	assert(subwindow->window == window);
@@ -5060,9 +6438,10 @@ static void attach_subwindow_to_window(struct window *window,
 	window->subwindows[i] = subwindow;
 }
 
-static struct subwindow *make_subwindow(struct window *window, unsigned index)
+static struct subwindow *make_subwindow(struct sdlpui_window *window,
+		unsigned index)
 {
-	struct subwindow *subwindow = get_new_subwindow(index);
+	struct subwindow *subwindow = get_new_subwindow(window->app, index);
 	assert(subwindow != NULL);
 
 	load_subwindow(window, subwindow);
@@ -5072,14 +6451,23 @@ static struct subwindow *make_subwindow(struct window *window, unsigned index)
 	return subwindow;
 }
 
-static struct subwindow *transfer_subwindow(struct window *window, unsigned index)
+static struct subwindow *transfer_subwindow(struct sdlpui_window *window,
+		unsigned index)
 {
-	struct subwindow *subwindow = get_subwindow_direct(index);
+	struct subwindow *subwindow = get_subwindow_direct(window->app, index);
+
 	assert(subwindow != NULL);
 	assert(subwindow->inited);
 	assert(subwindow->loaded);
 
 	detach_subwindow_from_window(subwindow->window, subwindow);
+	if (subwindow->window != window) {
+		int minw, minh;
+
+		/* Removing a subwindow can change the minimum window size. */
+		get_minimum_window_size(subwindow->window, &minw, &minh);
+		SDL_SetWindowMinimumSize(subwindow->window->window, minw, minh);
+	}
 	subwindow->window = window;
 	attach_subwindow_to_window(window, subwindow);
 
@@ -5108,22 +6496,75 @@ static struct subwindow *transfer_subwindow(struct window *window, unsigned inde
 	return subwindow;
 }
 
-static void load_subwindow(struct window *window, struct subwindow *subwindow)
+static void load_subwindow(struct sdlpui_window *window,
+		struct subwindow *subwindow)
 {
 	assert(window->loaded);
 	assert(!subwindow->loaded);
 
 	if (subwindow->font == NULL) {
-		if (subwindow->config != NULL) {
-			subwindow->font = make_font(window,
-					subwindow->config->font_name, subwindow->config->font_size);
-		} else {
-			subwindow->font = make_font(window, DEFAULT_FONT, 0);
+		const char *try_names[3];
+		int try_sizes[3];
+		int n_tries = 0, i = 0;
+
+		if (subwindow->config && subwindow->config->font_name) {
+			try_names[n_tries] = subwindow->config->font_name;
+			try_sizes[n_tries] = subwindow->config->font_size;
+			++n_tries;
 		}
-		assert(subwindow->font != NULL);
+		try_names[n_tries] = DEFAULT_FONT;
+		try_sizes[n_tries] = (suffix_i(DEFAULT_FONT, ".fon")) ?
+			0 : DEFAULT_VECTOR_FONT_SIZE;
+		++n_tries;
+		if (window->app->font_count > 0 && window->app->fonts[0].name) {
+			try_names[n_tries] = window->app->fonts[0].name;
+			try_sizes[n_tries] = window->app->fonts[0].size;
+			++n_tries;
+		}
+
+		while (1) {
+			if (i >= n_tries) {
+				quit_fmt("No usable font for subwindow %u;"
+					" configured to use '%s'",
+					subwindow->index, try_names[0]);
+			}
+			subwindow->font = make_font(window, try_names[i],
+				try_sizes[i]);
+			if (subwindow->font) {
+				if (i > 0) {
+					plog_fmt("Font '%s' unusable "
+						"substituting '%s'",
+						try_names[0], try_names[i]);
+					if (subwindow->config) {
+						string_free(subwindow->config->font_name);
+						subwindow->config->font_name =
+							string_make(try_names[i]);
+					}
+				}
+				break;
+			}
+			++i;
+		}
 	}
+
+	/*
+	 * For newer configuration files, stored_rect will have the desired
+	 * size for fullscreen.  Older configuration files only save the
+	 * size of whatever mode (fullscreen, not fullscreen) the game was in
+	 * so those will already have the right size in full_rect.
+	 */
+	if (subwindow->config && window->config && (window->config->window_flags
+			& SDL_WINDOW_FULLSCREEN_DESKTOP)
+			&& subwindow->stored_rect.w
+			&& subwindow->stored_rect.h) {
+		SDL_Rect tmp_rect = subwindow->full_rect;
+
+		subwindow->full_rect = subwindow->stored_rect;
+		subwindow->stored_rect = tmp_rect;
+	}
+
 	if (!adjust_subwindow_geometry(window, subwindow)) {
-		quit_fmt("cant adjust geometry of subwindow %u in window %u",
+		quit_fmt("cannot adjust geometry of subwindow %u in window %u",
 				subwindow->index, window->index);
 	}
 	subwindow->texture = make_subwindow_texture(window,
@@ -5139,15 +6580,15 @@ static void load_subwindow(struct window *window, struct subwindow *subwindow)
 				subwindow->color.r, subwindow->color.g,
 				subwindow->color.b, subwindow->color.a) != 0)
 	{
-		quit_fmt("cant set draw color for subwindow %u window %u: %s",
+		quit_fmt("cannot set draw color for subwindow %u window %u: %s",
 				subwindow->index, window->index, SDL_GetError());
 	}
 	if (SDL_SetRenderTarget(window->renderer, subwindow->texture) != 0) {
-		quit_fmt("cant set subwindow %u as render target in window %u: %s",
+		quit_fmt("cannot set subwindow %u as render target in window %u: %s",
 				subwindow->index, window->index, SDL_GetError());
 	}
 	if (SDL_RenderClear(window->renderer) != 0) {
-		quit_fmt("cant clear texture in subwindow %u window %u: %s",
+		quit_fmt("cannot clear texture in subwindow %u window %u: %s",
 				subwindow->index, window->index, SDL_GetError());
 	}
 
@@ -5161,7 +6602,7 @@ static void clear_pw_flag(struct subwindow *subwindow)
 {
 	assert(subwindow->index < N_ELEMENTS(angband_term));
 
-	u32b new_flags[N_ELEMENTS(window_flag)];
+	uint32_t new_flags[N_ELEMENTS(window_flag)];
 	assert(sizeof(new_flags) == sizeof(window_flag));
 	memcpy(new_flags, window_flag, sizeof(new_flags));
 
@@ -5196,9 +6637,6 @@ static void link_term(struct subwindow *subwindow)
 	subwindow->term->complex_input = true;
 	subwindow->term->never_frosh = true;
 
-	subwindow->term->attr_blank = DEFAULT_ATTR_BLANK;
-	subwindow->term->char_blank = DEFAULT_CHAR_BLANK;
-
 	subwindow->term->xtra_hook = term_xtra_hook;
 	subwindow->term->curs_hook = term_curs_hook;
 	subwindow->term->bigcurs_hook = term_bigcurs_hook;
@@ -5206,6 +6644,11 @@ static void link_term(struct subwindow *subwindow)
 	subwindow->term->text_hook = term_text_hook;
 	subwindow->term->pict_hook = term_pict_hook;
 	subwindow->term->view_map_hook = term_view_map_hook;
+	if (subwindow->window->graphics.overdraw_row) {
+		subwindow->term->dblh_hook = is_dh_tile;
+	} else {
+		subwindow->term->dblh_hook = NULL;
+	}
 
 	subwindow->term->data = subwindow;
 	angband_term[subwindow->index] = subwindow->term;
@@ -5234,13 +6677,16 @@ static void load_term(struct subwindow *subwindow)
 /* initialize subwindow with suitable hardcoded defaults */
 static bool wipe_subwindow(struct subwindow *subwindow)
 {
+	struct my_app *app = subwindow->app;
 	unsigned index = subwindow->index;
 	memset(subwindow, 0, sizeof(*subwindow));
+	subwindow->app = app;
 	subwindow->index = index;
 
 	/* XXX 80x24 is essential for main */
-	subwindow->full_rect.w = MIN_COLS_MAIN * DEFAULT_FONT_W + DEFAULT_BORDER * 2;
-	subwindow->full_rect.h = MIN_ROWS_MAIN * DEFAULT_FONT_H + DEFAULT_BORDER * 2;
+	get_minimum_subwindow_size(true,
+		subwindow->app->def_font_w, subwindow->app->def_font_h,
+		&subwindow->full_rect.w, &subwindow->full_rect.h);
 	if (subwindow->index != MAIN_SUBWINDOW) {
 		subwindow->full_rect.w /= 2;
 		subwindow->full_rect.h /= 2;
@@ -5248,8 +6694,8 @@ static bool wipe_subwindow(struct subwindow *subwindow)
 	subwindow->cols = MIN_COLS_MAIN;
 	subwindow->rows = MIN_ROWS_MAIN;
 
-	subwindow->color = g_colors[DEFAULT_SUBWINDOW_BG_COLOR];
-	subwindow->borders.color = g_colors[DEFAULT_SUBWINDOW_BORDER_COLOR];
+	subwindow->color = subwindow->app->colors[DEFAULT_SUBWINDOW_BG_COLOR];
+	subwindow->borders.color = subwindow->app->colors[DEFAULT_SUBWINDOW_BORDER_COLOR];
 	subwindow->borders.visible = true;
 
 	subwindow->texture = NULL;
@@ -5264,16 +6710,6 @@ static bool wipe_subwindow(struct subwindow *subwindow)
 	subwindow->visible = true;
 
 	return true;
-}
-
-static void get_string_metrics(struct font *font, const char *str, int *w, int *h)
-{
-	assert(font != NULL);
-	assert(font->ttf.handle != NULL);
-
-	if (TTF_SizeUTF8(font->ttf.handle, str, w, h) != 0) {
-		quit_fmt("cant get string metrics for string '%s': %s", str, TTF_GetError());
-	}
 }
 
 static int sort_cb_font_info(const void *infoa, const void *infob)
@@ -5292,28 +6728,64 @@ static int sort_cb_font_info(const void *infoa, const void *infob)
 		return strcmp(namea, nameb);
 	} else {
 		/* otherwise, we'll sort them numbers-wise (6x12x.fon before 6x13x.fon) */
-		int wa = 0;
-		int ha = 0;
-		char facea[4 + 1] = {0};
+		int wa = 0, ha = 0, wb = 0, hb = 0;
+		char *facea = NULL, *exta = NULL, *faceb = NULL, *extb = NULL;
+		char *ew;
+		long lv;
 
-		int wb = 0;
-		int hb = 0;
-		char faceb[4 + 1] = {0};
+		lv = strtol(namea, &ew, 10);
+		if (ew != namea && *ew == 'x' && lv > INT_MIN && lv < INT_MAX) {
+			wa = (int)lv;
+			lv = strtol(ew + 1, &facea, 10);
+			if (facea != ew + 1 && lv > INT_MIN && lv < INT_MAX) {
+				ha = (int)lv;
+				exta = strchr(facea, '.');
+				if (exta == facea) {
+					exta = NULL;
+				}
+			}
+		}
+		lv = strtol(nameb, &ew, 10);
+		if (ew != nameb && *ew == 'x' && lv > INT_MIN && lv < INT_MAX) {
+			wb = (int)lv;
+			lv = strtol(ew + 1, &faceb, 10);
+			if (faceb != ew + 1 && lv > INT_MIN && lv < INT_MAX) {
+				hb = (int)lv;
+				extb = strchr(faceb, '.');
+				if (extb == faceb) {
+					extb = NULL;
+				}
+			}
+		}
 
-		sscanf(namea, "%dx%d%4[^.]", &wa, &ha, facea);
-		sscanf(nameb, "%dx%d%4[^.]", &wb, &hb, faceb);
-
+		if (!exta) {
+			if (!extb) {
+				/*
+				 * Neither match the expected pattern.  Sort
+				 * alphabetically.
+				 */
+				return strcmp(namea, nameb);
+			}
+			/* Put b last since it matches the expected pattern. */
+			return -1;
+		}
+		if (!extb) {
+			/* Put a last since it matches the expected pattern. */
+			return 1;
+		}
 		if (wa < wb) {
 			return -1;
-		} else if (wa > wb) {
-			return 1;
-		} else if (ha < hb) {
-			return -1;
-		} else if (ha > hb) {
-			return 1;
-		} else {
-			return strcmp(facea, faceb);
 		}
+		if (wa > wb) {
+			return 1;
+		}
+		if (ha < hb) {
+			return -1;
+		}
+		if (ha > hb) {
+			return 1;
+		}
+		return strncmp(facea, faceb, MAX(exta - facea, extb - faceb));
 	}
 }
 
@@ -5333,45 +6805,6 @@ static bool is_font_file(const char *path)
 	return is_font;
 }
 
-static void free_menu_panel(struct menu_panel *menu_panel)
-{
-	while (menu_panel) {
-		struct menu_panel *next = menu_panel->next;
-		free_button_bank(&menu_panel->button_bank);
-		mem_free(menu_panel);
-		menu_panel = next;
-	}
-}
-
-static void free_button_bank(struct button_bank *button_bank)
-{
-	for (size_t i = 0; i < button_bank->number; i++) {
-		mem_free(button_bank->buttons[i].caption);
-	}
-	mem_free(button_bank->buttons);
-	button_bank->buttons = NULL;
-	button_bank->number = 0;
-	button_bank->size = 0;
-}
-
-static void free_status_bar(struct status_bar *status_bar)
-{
-	if (status_bar->menu_panel != NULL) {
-		free_menu_panel(status_bar->menu_panel);
-		status_bar->menu_panel = NULL;
-	}
-	if (status_bar->button_bank.buttons != NULL) {
-		free_button_bank(&status_bar->button_bank);
-	}
-	if (status_bar->texture != NULL) {
-		SDL_DestroyTexture(status_bar->texture);
-		status_bar->texture = NULL;
-	}
-
-	free_font(status_bar->font);
-	status_bar->font = NULL;
-}
-
 static void free_font_info(struct font_info *font_info)
 {
 	if (font_info->name != NULL) {
@@ -5382,7 +6815,6 @@ static void free_font_info(struct font_info *font_info)
 		mem_free(font_info->path);
 		font_info->path = NULL;
 	}
-	font_info->loaded = false;
 }
 
 static void free_window_config(struct window_config *config)
@@ -5439,9 +6871,22 @@ static void free_subwindow(struct subwindow *subwindow)
 	subwindow->inited = false;
 }
 
-static void free_window(struct window *window)
+static void free_window(struct sdlpui_window *window)
 {
 	assert(window->loaded);
+
+	while (window->d_head) {
+		sdlpui_popdown_dialog(window->d_head, window, false);
+	}
+	window->d_tail = NULL;
+	window->d_mouse = NULL;
+	window->d_key = NULL;
+	window->status_bar = NULL;
+	window->move_button = NULL;
+	window->size_button = NULL;
+	window->infod = NULL;
+	window->shorte = NULL;
+	window->detaild = NULL;
 
 	for (size_t i = 0; i < N_ELEMENTS(window->subwindows); i++) {
 		struct subwindow *subwindow = window->subwindows[i];
@@ -5451,12 +6896,18 @@ static void free_window(struct window *window)
 		}
 	}
 
-	free_status_bar(&window->status_bar);
-
 	if (window->wallpaper.texture != NULL) {
 		SDL_DestroyTexture(window->wallpaper.texture);
 		window->wallpaper.texture = NULL;
 	}
+
+	if (window->stipple.texture != NULL) {
+		SDL_DestroyTexture(window->stipple.texture);
+		window->stipple.texture = NULL;
+	}
+
+	free_font(window->dialog_font);
+	window->dialog_font = NULL;
 
 	free_graphics(&window->graphics);
 
@@ -5479,68 +6930,113 @@ static void free_window(struct window *window)
 	window->inited = false;
 }
 
-static void init_colors(void)
+static void init_colors(struct my_app *a)
 {
-	assert(N_ELEMENTS(g_colors) == N_ELEMENTS(angband_color_table));
+	assert(N_ELEMENTS(a->colors) == N_ELEMENTS(angband_color_table));
+	size_t i;
 
-	for (size_t i = 0; i < N_ELEMENTS(g_colors); i++) {
-		g_colors[i].r = angband_color_table[i][1];
-		g_colors[i].g = angband_color_table[i][2];
-		g_colors[i].b = angband_color_table[i][3];
-		g_colors[i].a = DEFAULT_ALPHA_FULL;
+	for (i = 0; i < N_ELEMENTS(a->colors); i++) {
+		a->colors[i].r = angband_color_table[i][1];
+		a->colors[i].g = angband_color_table[i][2];
+		a->colors[i].b = angband_color_table[i][3];
+		a->colors[i].a = DEFAULT_ALPHA_FULL;
+	}
+	for (i = 0; i < N_ELEMENTS(a->windows); i++) {
+		a->windows[i].color = a->colors[DEFAULT_WINDOW_BG_COLOR];
+	}
+	for (i = 0; i < N_ELEMENTS(a->subwindows); i++) {
+		/* Retain whatever customized alpha the subwindow has. */
+		a->subwindows[i].color.r =
+			a->colors[DEFAULT_SUBWINDOW_BG_COLOR].r;
+		a->subwindows[i].color.g =
+			a->colors[DEFAULT_SUBWINDOW_BG_COLOR].g;
+		a->subwindows[i].color.b =
+			a->colors[DEFAULT_SUBWINDOW_BG_COLOR].b;
 	}
 }
 
-static void init_font_info(const char *directory)
+static void init_font_info(struct my_app *a, const char *directory)
 {
-	/* well maybe it will get ability to be reinitialized at some point */
-	for (size_t i = 0; i < N_ELEMENTS(g_font_info); i++) {
-		g_font_info[i].name = NULL;
-		g_font_info[i].path = NULL;
-		g_font_info[i].loaded = false;
+	char name[1024], path[4096];
+	ang_dir *dir;
+	TTF_Font *hfnt;
+
+	a->font_count = 0;
+	a->font_alloc = 0;
+	a->fonts = NULL;
+
+	dir = my_dopen(directory);
+	if (!dir) {
+		quit_fmt("Font directory '%s' is unreadable", directory);
 	}
 
-	ang_dir *dir = my_dopen(directory);
-	assert(dir != NULL);
-
-	char name[1024];
-	char path[4096];
-
-	size_t i = 0;
-	while (i < N_ELEMENTS(g_font_info) && my_dread(dir, name, sizeof(name))) {
+	while (my_dread(dir, name, sizeof(name))) {
 		path_build(path, sizeof(path), directory, name);
 
 		if (is_font_file(path)) {
-			g_font_info[i].name = string_make(name);
-			g_font_info[i].path = string_make(path);
-			g_font_info[i].loaded = true;
-			if (suffix(path, ".fon")) {
-				g_font_info[i].type = FONT_TYPE_RASTER;
-				g_font_info[i].size = 0;
-			} else {
-				g_font_info[i].type = FONT_TYPE_VECTOR;
-				g_font_info[i].size = DEFAULT_VECTOR_FONT_SIZE;
+			if (a->font_count >= a->font_alloc) {
+				if (a->font_count > 1024) {
+					break;
+				}
+				a->font_alloc = (a->font_alloc)
+					? 2 * a->font_alloc : 32;
+				a->fonts = mem_realloc(a->fonts,
+					a->font_alloc * sizeof(*a->fonts));
 			}
-			i++;
+			a->fonts[a->font_count].name = string_make(name);
+			a->fonts[a->font_count].path = string_make(path);
+			if (suffix_i(path, ".fon")) {
+				a->fonts[a->font_count].type = FONT_TYPE_RASTER;
+				a->fonts[a->font_count].size = 0;
+			} else {
+				a->fonts[a->font_count].type = FONT_TYPE_VECTOR;
+				a->fonts[a->font_count].size =
+					DEFAULT_VECTOR_FONT_SIZE;
+			}
+			++a->font_count;
 		}
 	}
-	assert(i > 0);
+	if (!a->font_count) {
+		quit_fmt("No usable fonts found in '%s'", directory);
+	}
 
-	sort(g_font_info, i, sizeof(g_font_info[0]), sort_cb_font_info);
+	sort(a->fonts, a->font_count, sizeof(a->fonts[0]), sort_cb_font_info);
 
-	for (size_t j = 0; j < i; j++) {
-		g_font_info[j].index = j;
+	for (int i = 0; i < a->font_count; ++i) {
+		a->fonts[i].index = i;
 	}
 
 	my_dclose(dir);
+
+	path_build(path, sizeof(path), directory, DEFAULT_FONT);
+	hfnt = TTF_OpenFont(path, suffix_i(path, ".fon") ?
+		0 : DEFAULT_VECTOR_FONT_SIZE);
+	if (!hfnt) {
+		hfnt = TTF_OpenFont(a->fonts[0].path,
+			(a->fonts[0].type == FONT_TYPE_VECTOR) ?
+			DEFAULT_VECTOR_FONT_SIZE : 0);
+	}
+	if (hfnt) {
+		if (TTF_GlyphMetrics(hfnt, GLYPH_FOR_ADVANCE, NULL, NULL, NULL,
+				NULL, &a->def_font_w) != 0) {
+			quit_fmt("cannot query glyph metrics for "
+				"default font: %s", TTF_GetError());
+		}
+		a->def_font_h = TTF_FontHeight(hfnt);
+		TTF_CloseFont(hfnt);
+	} else {
+		/* There's no available default; substitute something useful. */
+		a->def_font_w = 10;
+		a->def_font_h = 20;
+	}
 }
 
-static void create_defaults(void)
+static void create_defaults(struct my_app *a)
 {
-	struct window *window = get_new_window(MAIN_WINDOW);
+	struct sdlpui_window *window = get_new_window(a, MAIN_WINDOW);
 	assert(window != NULL);
 
-	struct subwindow *subwindow = get_new_subwindow(MAIN_SUBWINDOW);
+	struct subwindow *subwindow = get_new_subwindow(a, MAIN_SUBWINDOW);
 	assert(subwindow != NULL);
 
 	assert(MAIN_SUBWINDOW < N_ELEMENTS(window->subwindows));
@@ -5550,6 +7046,7 @@ static void create_defaults(void)
 static void quit_systems(void)
 {
 	SDL_StopTextInput();
+	sdlpui_quit();
 	TTF_Quit();
 	IMG_Quit();
 	SDL_Quit();
@@ -5557,14 +7054,28 @@ static void quit_systems(void)
 
 static void quit_hook(const char *s)
 {
-	dump_config_file();
+	if (s) {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fatal Error",
+			s, NULL);
+	}
 
-	free_globals();
+	/*
+	 * If at least the main window was successfully set up, remember the
+	 * configuration.
+	 */
+	if (g_app.windows[0].loaded) {
+		dump_config_file(&g_app);
+	}
+
+	free_globals(&g_app);
 	quit_systems();
 }
 
 static void init_systems(void)
 {
+#if defined(SDLPUI_TRACE_EVENTS) || defined(SDLPUI_TRACE_RENDER)
+	SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+#endif
 	if (SDL_Init(INIT_SDL_FLAGS) != 0) {
 		quit_fmt("SDL_Init: %s", SDL_GetError());
 	}
@@ -5575,94 +7086,211 @@ static void init_systems(void)
 	if (TTF_Init() != 0) {
 		quit_fmt("TTF_Init: %s", TTF_GetError());
 	}
+	if (sdlpui_init()) {
+		quit("sdlpui_init() failed");
+	}
+	SHORTCUT_EDITOR_CODE = sdlpui_register_code("ANGBAND_SHORTCUT_EDITOR");
+	SDL_assert(SHORTCUT_EDITOR_CODE);
 
 	/* On (some?) Macs the touchpad sends both mouse events and touch events;
 	 * the latter interfere badly with the working of the status bar */
 	SDL_EventState(SDL_FINGERMOTION, SDL_DISABLE);
 	SDL_EventState(SDL_FINGERDOWN, SDL_DISABLE);
 	SDL_EventState(SDL_FINGERUP, SDL_DISABLE);
+	/* Ignore Keymap changed events since they are not handled */
+	SDL_EventState(SDL_KEYMAPCHANGED, SDL_DISABLE);
 
 	SDL_StartTextInput();
 	SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+#ifdef SDL_HINT_POLL_SENTINEL
+	SDL_SetHint(SDL_HINT_POLL_SENTINEL, "0");
+#endif
 }
 
-int init_sdl2(int argc, char **argv)
+errr init_sdl2(int argc, char **argv)
 {
-	init_systems();
-	init_globals();
+	int i;
 
-	if (!init_graphics_modes()) {
-		quit_systems();
-		return 1;
+	g_app.print_sdl_details = false;
+	for (i = 1; i < argc; ++i) {
+		if (streq(argv[i], "-v")) {
+			g_app.print_sdl_details = true;
+			continue;
+		}
+		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Ignoring option: %s",
+			argv[i]);
 	}
-
-	if (!read_config_file()) {
-		create_defaults();
-	}
-
-	start_windows();
-	load_terms();
 
 	quit_aux = quit_hook;
+
+	/* Dump details about SDL that do not require SDL_Init(). */
+	if (g_app.print_sdl_details) {
+		SDL_version vr, vc;
+
+		SDL_GetVersion(&vr);
+		SDL_VERSION(&vc);
+		SDL_Log("SDL library version: %u.%u.%u (runtime) "
+			"%u.%u.%u (compiled; %s)", vr.major, vr.minor, vr.patch,
+			vc.major, vc.minor, vc.patch, SDL_REVISION);
+	}
+
+	init_systems();
+
+	/*
+	 * Dump details about SDL that may require that SDL_Init() has been
+	 * called.
+	 */
+	if (g_app.print_sdl_details) {
+		const char *driver_name;
+		const SDL_version *pv;
+		SDL_version lv;
+		int num_displays;
+
+		SDL_Log("Runtime SDL library revision: %s", SDL_GetRevision());
+		pv = IMG_Linked_Version();
+		SDL_IMAGE_VERSION(&lv);
+		SDL_Log("SDL_image library version: %u.%u.%u (runtime) "
+			"%u.%u.%u (compiled)", pv->major, pv->minor, pv->patch,
+			lv.major, lv.minor, lv.patch);
+		pv = TTF_Linked_Version();
+		SDL_TTF_VERSION(&lv);
+		SDL_Log("SDL_ttf library version: %u.%u.%u (runtime) "
+			"%u.%u.%u (compiled)", pv->major, pv->minor, pv->patch,
+			lv.major, lv.minor, lv.patch);
+		driver_name = SDL_GetCurrentVideoDriver();
+		SDL_Log("Platform and video driver: \"%s\" \"%s\"",
+			SDL_GetPlatform(), (driver_name) ? driver_name :
+			"Not initialized");
+		num_displays = SDL_GetNumVideoDisplays();
+		if (num_displays < 0) {
+			SDL_Log("No available displays: %s",
+				SDL_GetError());
+		}
+		for (i = 0; i < num_displays; ++i) {
+			const char *name = SDL_GetDisplayName(i);
+
+			if (name) {
+				SDL_DisplayMode mode;
+
+				SDL_Log("Display %d: %s:", i, name);
+				if (SDL_GetCurrentDisplayMode(i, &mode)) {
+					SDL_Log("    Mode unavailable: %s",
+						SDL_GetError());
+				} else {
+					SDL_Log("    Size: %d x %d",
+						mode.w, mode.h);
+					SDL_Log("    Refresh rate and "
+						"pixel format: %d %lu",
+						mode.refresh_rate,
+						(unsigned long)mode.format);
+				}
+			} else {
+				SDL_Log("Display %d: no name: %s", i,
+					SDL_GetError());
+			}
+		}
+	}
+
+	if (!init_graphics_modes()) {
+		quit("Graphics list load failed");
+	}
+
+	init_globals(&g_app);
+	if (!read_config_file(&g_app)) {
+		create_defaults(&g_app);
+	}
+
+	start_windows(&g_app);
+	load_terms(&g_app);
+
+#ifdef MSYS2_ENCODING_WORKAROUND
+	/*
+	 * Under MSYS2, mbcstowcs() converts UTF-8 by outputting a wchar_t
+	 * (a 16-bit quantity) for every byte in the UTF-8 sequence.  For most
+	 * bytes in the UTF-8 sequence, the corresponding wchar_t has the same
+	 * value as the byte but some are altered.  For instance the UTF-8
+	 * sequence 0x24, 0xC2, 0xA2, 0xE2, 0x82, 0xAC, 0xF0, 0x90, 0x8D, 0x88,
+	 * 0xF0, 0x90, 0x91, and 0x99 which represents U+0024, U+00A2, U+20AC,
+	 * U+10348, and U+10459 becomes 0x0024, 0x00C2, 0x00A2, 0x00E2, 0x201A,
+	 * 0x00AC, 0x00F0, 0x0090, 0x008D, 0x02C6, 0x00F0, 0x0090, 0x2018,
+	 * and 0x2122.  Override that to use a UTF-16 encoding for the
+	 * wchar_t's where any codepoint that would require a surrogate pair
+	 * is lossily converted to U+FFFD since ui-term.c only allows storage
+	 * for one wchar_t per grid location.
+	 */
+	text_mbcs_hook = term_mbcs_sdl2_msys2;
+	text_wctomb_hook = term_wctomb_sdl2_msys2;
+	text_wcsz_hook = term_wcsz_sdl2_msys2;
+	text_iswprint_hook = term_iswprint_sdl2_msys2;
+#endif /* MSYS2_ENCODING_WORKAROUND */
 
 	return 0;
 }
 
-/* these arrays contain windows and terms that the ui operates on */
-static struct subwindow g_subwindows[MAX_SUBWINDOWS];
-static struct window g_windows[MAX_WINDOWS];
-/* the string ANGBAND_DIR_USER is freed before calling quit_hook(),
- * so we need to save the path to config file here */
-static char g_config_file[4096];
-
-static void init_globals(void)
+static void init_globals(struct my_app *a)
 {
-	for (size_t i = 0; i < N_ELEMENTS(g_subwindows); i++) {
-		g_subwindows[i].index = i;
-	}
-	for (size_t i = 0; i < N_ELEMENTS(g_windows); i++) {
-		g_windows[i].index = i;
-	}
+	int num_joysticks;
 
-	init_font_info(ANGBAND_DIR_FONTS);
-	init_colors();
-
-	path_build(g_config_file, sizeof(g_config_file),
+	path_build(a->config_file, sizeof(a->config_file),
 			DEFAULT_CONFIG_FILE_DIR, DEFAULT_CONFIG_FILE);
+
+	for (size_t i = 0; i < N_ELEMENTS(a->subwindows); i++) {
+		a->subwindows[i].index = i;
+		a->subwindows[i].app = a;
+	}
+	for (size_t i = 0; i < N_ELEMENTS(a->windows); i++) {
+		a->windows[i].index = i;
+		a->windows[i].app = a;
+		a->menu_shortcuts[i] = KEYPRESS_NULL;
+	}
+
+	init_font_info(a, ANGBAND_DIR_FONTS);
+	init_colors(a);
+
+	a->w_mouse = NULL;
+	a->w_key = NULL;
+	a->kp_as_mod = true;
+	a->controller = NULL;
+	num_joysticks = SDL_NumJoysticks();
+	for (int i = 0; i < num_joysticks; i++) {
+		if (!SDL_IsGameController(i)) continue;
+		a->controller = SDL_GameControllerOpen(i);
+		/* We support one controller only */
+		if (a->controller) break;
+	}
 }
 
-static bool is_subwindow_loaded(unsigned index)
+static bool is_subwindow_loaded(struct my_app *a, unsigned index)
 {
-	const struct subwindow *subwindow = get_subwindow_direct(index);
+	const struct subwindow *subwindow = get_subwindow_direct(a, index);
 	assert(subwindow != NULL);
 
 	return subwindow->loaded;
 }
 
-static struct subwindow *get_subwindow_direct(unsigned index)
+static struct subwindow *get_subwindow_direct(struct my_app *a, unsigned index)
 {
 	size_t i;
-	if (index < N_ELEMENTS(g_subwindows)
-			&& g_subwindows[index].index == index)
-	{
+	if (index < N_ELEMENTS(a->subwindows)
+			&& a->subwindows[index].index == index) {
 		i = index;
 	} else {
-		for (i = 0; i < N_ELEMENTS(g_subwindows); i++) {
-			if (g_subwindows[i].index == index) {
+		for (i = 0; i < N_ELEMENTS(a->subwindows); i++) {
+			if (a->subwindows[i].index == index) {
 				break;
 			}
 		}
-		if (i == N_ELEMENTS(g_subwindows)) {
+		if (i == N_ELEMENTS(a->subwindows)) {
 			return NULL;
 		}
 	}
 
-	return &g_subwindows[i];
+	return &a->subwindows[i];
 }
 
-static struct subwindow *get_new_subwindow(unsigned index)
+static struct subwindow *get_new_subwindow(struct my_app *a, unsigned index)
 {
-	struct subwindow *subwindow = get_subwindow_direct(index);
+	struct subwindow *subwindow = get_subwindow_direct(a, index);
 	assert(subwindow != NULL);
 	assert(!subwindow->inited);
 	assert(!subwindow->loaded);
@@ -5675,12 +7303,12 @@ static struct subwindow *get_new_subwindow(unsigned index)
 	return subwindow;
 }
 
-static struct window *get_new_window(unsigned index)
+static struct sdlpui_window *get_new_window(struct my_app *a, unsigned index)
 {
-	assert(index < N_ELEMENTS(g_windows));
-	assert(g_windows[index].index == index);
+	assert(index < N_ELEMENTS(a->windows));
+	assert(a->windows[index].index == index);
 
-	struct window *window = &g_windows[index];
+	struct sdlpui_window *window = &a->windows[index];
 	assert(!window->inited);
 	assert(!window->loaded);
 
@@ -5689,60 +7317,77 @@ static struct window *get_new_window(unsigned index)
 	return window;
 }
 
-static struct window *get_window_direct(unsigned index)
+static struct sdlpui_window *get_window_direct(struct my_app *a, unsigned index)
 {
-	assert(index < N_ELEMENTS(g_windows));
+	assert(index < N_ELEMENTS(a->windows));
 
-	if (g_windows[index].loaded) {
-		assert(g_windows[index].index == index);
-		return &g_windows[index];
+	if (a->windows[index].loaded) {
+		assert(a->windows[index].index == index);
+		return &a->windows[index];
 	}
 
 	return NULL;
 }
 
-static struct window *get_window_by_id(Uint32 id)
+static struct sdlpui_window *get_window_by_id(struct my_app *a, Uint32 id)
 {
-	for (size_t i = 0; i < N_ELEMENTS(g_windows); i++) {
-		if (g_windows[i].loaded && g_windows[i].id == id) {
-			return &g_windows[i];
+	for (size_t i = 0; i < N_ELEMENTS(a->windows); i++) {
+		if (a->windows[i].loaded && a->windows[i].id == id) {
+			return &a->windows[i];
 		}
 	}
 	
 	return NULL;
 }
 
-static void free_globals(void)
+static void free_globals(struct my_app *a)
 {
-	for (size_t i = 0; i < N_ELEMENTS(g_font_info); i++) {
-		free_font_info(&g_font_info[i]);
+	for (int i = 0; i < a->font_count; i++) {
+		free_font_info(&a->fonts[i]);
 	}
-	for (size_t i = 0; i < N_ELEMENTS(g_windows); i++) {
-		if (g_windows[i].loaded) {
-			free_window(&g_windows[i]);
+	mem_free(a->fonts);
+	a->fonts = NULL;
+	a->font_count = 0;
+	a->font_alloc = 0;
+	for (size_t i = 0; i < N_ELEMENTS(a->windows); i++) {
+		if (a->windows[i].loaded) {
+			free_window(&a->windows[i]);
 		}
 	}
-	for (size_t i = 0; i < N_ELEMENTS(g_subwindows); i++) {
-		assert(!g_subwindows[i].inited);
-		assert(!g_subwindows[i].loaded);
-		assert(!g_subwindows[i].linked);
+	for (size_t i = 0; i < N_ELEMENTS(a->subwindows); i++) {
+		assert(!a->subwindows[i].inited);
+		assert(!a->subwindows[i].loaded);
+		assert(!a->subwindows[i].linked);
+	}
+	if (a->controller) {
+		SDL_GameControllerClose(a->controller);
+		a->controller = NULL;
 	}
 }
 
-static void start_windows(void)
+static void start_windows(struct my_app *a)
 {
-	for (size_t i = N_ELEMENTS(g_windows); i > 0; i--) {
-		if (g_windows[i - 1].inited) {
-			start_window(&g_windows[i - 1]);
+	int i;
+
+	for (i = (int)N_ELEMENTS(a->windows); i > 0; i--) {
+		if (a->windows[i - 1].inited) {
+			start_window(&a->windows[i - 1]);
+		}
+	}
+	if (a->print_sdl_details) {
+		for (i = 0; i < (int)N_ELEMENTS(a->windows); ++i) {
+			if (!a->windows[i].window) continue;
+			log_window_details(i, a->windows[i].window,
+				a->windows[i].renderer);
 		}
 	}
 }
 
-static void load_terms(void)
+static void load_terms(struct my_app *a)
 {
-	for (size_t i = 0; i < N_ELEMENTS(g_subwindows); i++) {
-		if (g_subwindows[i].loaded) {
-			load_term(&g_subwindows[i]);
+	for (size_t i = 0; i < N_ELEMENTS(a->subwindows); i++) {
+		if (a->subwindows[i].loaded) {
+			load_term(&a->subwindows[i]);
 		}
 	}
 
@@ -5751,49 +7396,59 @@ static void load_terms(void)
 
 /* Config file stuff */
 
-static void dump_config_file(void)
+static void dump_config_file(const struct my_app *a)
 {
-	ang_file *config = file_open(g_config_file, MODE_WRITE, FTYPE_TEXT);
+	ang_file *config = file_open(a->config_file, MODE_WRITE, FTYPE_TEXT);
 
 	assert(config != NULL);
 
-	for (size_t i = 0; i < N_ELEMENTS(g_windows); i++) {
-		if (g_windows[i].loaded) {
-			dump_window(&g_windows[i], config);
+	for (size_t i = 0; i < N_ELEMENTS(a->windows); i++) {
+		if (a->windows[i].loaded) {
+			dump_window(&a->windows[i], config);
 		}
 	}
+	for (size_t i = 0; i < N_ELEMENTS(a->menu_shortcuts); i++) {
+		char keypress[1024];
+
+		if (a->menu_shortcuts[i].type == EVT_KBRD
+				&& a->menu_shortcuts[i].code) {
+			keypress_to_text(keypress, sizeof(keypress),
+				a->menu_shortcuts + i, false);
+		} else {
+			my_strcpy(keypress, "None", sizeof(keypress));
+		}
+		file_putf(config, "menu-shortcut:%u:%s\n", (unsigned int)i,
+			keypress);
+	}
+	file_putf(config, "kp-as-modifier:%d\n", (a->kp_as_mod) ? 1 : 0);
 
 	file_close(config);
 }
 
-/* XXX more bad style :) */
-#define GET_WINDOW_FROM_INDEX \
-	if (parser_getuint(parser, "index") >= N_ELEMENTS(g_windows)) { \
-		return PARSE_ERROR_OUT_OF_BOUNDS; \
-	} \
-	struct window *window = &g_windows[parser_getuint(parser, "index")]; \
+static struct sdlpui_window *get_window_from_parser(struct parser *parser)
+{
+	struct my_app *a = parser_priv(parser);
+	unsigned int ind = parser_getuint(parser, "index");
 
-#define WINDOW_INIT_OK \
-	if (!window->inited) { \
-		return PARSE_ERROR_MISSING_RECORD_HEADER; \
-	}
+	return (ind >= N_ELEMENTS(a->windows)) ? NULL : &a->windows[ind];
+}
 
-#define GET_SUBWINDOW_FROM_INDEX \
-	if (parser_getuint(parser, "index") >= N_ELEMENTS(g_subwindows)) { \
-		return PARSE_ERROR_OUT_OF_BOUNDS; \
-	} \
-	struct subwindow *subwindow = &g_subwindows[parser_getuint(parser, "index")]; \
+static struct subwindow *get_subwindow_from_parser(struct parser *parser)
+{
+	struct my_app *a = parser_priv(parser);
+	unsigned int ind = parser_getuint(parser, "index");
 
-#define SUBWINDOW_INIT_OK \
-	if (!subwindow->inited) { \
-		return PARSE_ERROR_MISSING_RECORD_HEADER; \
-	}
+	return (ind >= N_ELEMENTS(a->subwindows)) ? NULL : &a->subwindows[ind];
+}
 
 static enum parser_error config_window_display(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-
+	struct sdlpui_window *window = get_window_from_parser(parser);
 	int display = parser_getint(parser, "display");
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
 
 	if (display < 0 || display > SDL_GetNumVideoDisplays()) {
 		return PARSE_ERROR_OUT_OF_BOUNDS;
@@ -5810,8 +7465,14 @@ static enum parser_error config_window_display(struct parser *parser)
 
 static enum parser_error config_window_fullscreen(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	const char *mode = parser_getsym(parser, "fullscreen");
 	if (streq(mode, "true")) {
@@ -5826,8 +7487,18 @@ static enum parser_error config_window_fullscreen(struct parser *parser)
 
 static enum parser_error config_window_rect(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+	/*
+	 * Assume not in fullscreen mode for now.  If necessary, swap
+	 * full_rect and stored_rect later in start_window().
+	 */
 	window->full_rect.x = parser_getint(parser, "x");
 	window->full_rect.y = parser_getint(parser, "y");
 	window->full_rect.w = parser_getint(parser, "w");
@@ -5836,11 +7507,39 @@ static enum parser_error config_window_rect(struct parser *parser)
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error config_window_rect_fs(struct parser *parser)
+{
+	struct sdlpui_window *window = get_window_from_parser(parser);
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+	/*
+	 * Assume not in fullscreen mode for now.  If necessary, swap
+	 * full_rect and stored_rect later in start_window().
+	 */
+	window->stored_rect.x = parser_getint(parser, "x");
+	window->stored_rect.y = parser_getint(parser, "y");
+	window->stored_rect.w = parser_getint(parser, "w");
+	window->stored_rect.h = parser_getint(parser, "h");
+
+	return PARSE_ERROR_NONE;
+}
+
 static enum parser_error config_window_renderer(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
 	const char *type = parser_getsym(parser, "type");
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	if (streq(type, "hardware")) {
 		window->config->renderer_flags = SDL_RENDERER_ACCELERATED;
@@ -5855,9 +7554,15 @@ static enum parser_error config_window_renderer(struct parser *parser)
 
 static enum parser_error config_window_wallpaper_path(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
 	const char *path = parser_getstr(parser, "path");
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 	if (streq(path, "default")) {
 		char buf[4096];
 		path_build(buf, sizeof(buf), DEFAULT_WALLPAPER_DIR, DEFAULT_WALLPAPER);
@@ -5872,9 +7577,15 @@ static enum parser_error config_window_wallpaper_path(struct parser *parser)
 
 static enum parser_error config_window_wallpaper_mode(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
 	const char *mode = parser_getstr(parser, "mode");
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	if (streq(mode, "none")) {
 		window->wallpaper.mode = WALLPAPER_DONT_SHOW;
@@ -5893,14 +7604,18 @@ static enum parser_error config_window_wallpaper_mode(struct parser *parser)
 
 static enum parser_error config_window_font(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
 	const char *name = parser_getstr(parser, "name");
 	int size = parser_getint(parser, "size");
 
-	if (find_font_info(name) == NULL) {
-		return PARSE_ERROR_INVALID_VALUE;
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
 	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
+	/* Checking whether the font is usable will be done in load_window(). */
 	window->config->font_name = string_make(name);
 	window->config->font_size = size;
 
@@ -5909,8 +7624,14 @@ static enum parser_error config_window_font(struct parser *parser)
 
 static enum parser_error config_window_graphics(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	int id = parser_getint(parser, "id");
 
@@ -5925,8 +7646,14 @@ static enum parser_error config_window_graphics(struct parser *parser)
 
 static enum parser_error config_window_tile_scale(struct parser *parser)
 {
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
+	struct sdlpui_window *window = get_window_from_parser(parser);
+
+	if (!window) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!window->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	if (window->graphics.id != GRAPHICS_NONE) {
 		if (streq(parser_getsym(parser, "which"), "height")) {
@@ -5941,33 +7668,21 @@ static enum parser_error config_window_tile_scale(struct parser *parser)
 	return PARSE_ERROR_NONE;
 }
 
-static enum parser_error config_window_cursor(struct parser *parser)
-{
-	GET_WINDOW_FROM_INDEX;
-	WINDOW_INIT_OK;
-
-	const char *cursor = parser_getsym(parser, "cursor");
-	
-	if (streq(cursor, "true")) {
-		window->cursor = true;
-	} else if (streq(cursor, "false")) {
-		window->cursor = false;
-	} else {
-		return PARSE_ERROR_INVALID_OPTION;
-	}
-
-	return PARSE_ERROR_NONE;
-}
-
 static enum parser_error config_subwindow_window(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
+	struct my_app *a = parser_priv(parser);
+	struct sdlpui_window *window;
 	unsigned windex = parser_getuint(parser, "windex");
-	if (windex >= N_ELEMENTS(g_windows)) {
+
+	if (!subwindow) {
 		return PARSE_ERROR_OUT_OF_BOUNDS;
 	}
-	struct window *window = &g_windows[windex];
+
+	if (windex >= N_ELEMENTS(a->windows)) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	window = &a->windows[windex];
 	if (!window->inited) {
 		return PARSE_ERROR_NON_SEQUENTIAL_RECORDS;
 	}
@@ -5975,7 +7690,14 @@ static enum parser_error config_subwindow_window(struct parser *parser)
 		return PARSE_ERROR_GENERIC;
 	}
 	subwindow->config = mem_zalloc(sizeof(*subwindow->config));
-
+	/*
+	 * Old versions only wrote visible subwindows to the configuration
+	 * file and did not append the visibility status to the subwindow-window
+	 * directive.
+	 */
+	if (parser_hasval(parser, "vis")) {
+		subwindow->visible = (parser_getint(parser, "vis") != 0);
+	}
 	subwindow->window = window;
 	attach_subwindow_to_window(window, subwindow);
 
@@ -5984,9 +7706,19 @@ static enum parser_error config_subwindow_window(struct parser *parser)
 
 static enum parser_error config_subwindow_rect(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-	SUBWINDOW_INIT_OK;
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
 
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
+	/*
+	 * Assume not in fullscreen mode for now.  If necessary, swap
+	 * full_rect and stored_rect later in load_subwindow().
+	 */
 	subwindow->full_rect.x = parser_getint(parser, "x");
 	subwindow->full_rect.y = parser_getint(parser, "y");
 	subwindow->full_rect.w = parser_getint(parser, "w");
@@ -5995,19 +7727,45 @@ static enum parser_error config_subwindow_rect(struct parser *parser)
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error config_subwindow_rect_fs(struct parser *parser)
+{
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
+
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
+	/*
+	 * Assume not in fullscreen mode for now.  If necessary, swap
+	 * full_rect and stored_rect later in load_subwindow().
+	 */
+	subwindow->stored_rect.x = parser_getint(parser, "x");
+	subwindow->stored_rect.y = parser_getint(parser, "y");
+	subwindow->stored_rect.w = parser_getint(parser, "w");
+	subwindow->stored_rect.h = parser_getint(parser, "h");
+
+	return PARSE_ERROR_NONE;
+}
+
 static enum parser_error config_subwindow_font(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-	SUBWINDOW_INIT_OK;
-
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
 	const char *name = parser_getstr(parser, "name");
 	int size = parser_getint(parser, "size");
 
-	if (find_font_info(name) == NULL) {
-		/* TODO maybe its not really an error? the font file was
-		 * probably just deleted and now the ui wont event start... */
-		return PARSE_ERROR_INVALID_VALUE;
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
 	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
+	/*
+	 * Checking whether the font is usable will be done in load_subwindow().
+	 */
 	subwindow->config->font_name = string_make(name);
 	subwindow->config->font_size = size;
 
@@ -6016,10 +7774,16 @@ static enum parser_error config_subwindow_font(struct parser *parser)
 
 static enum parser_error config_subwindow_borders(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-	SUBWINDOW_INIT_OK;
-
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
 	const char *borders = parser_getsym(parser, "borders");
+
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
 	if (streq(borders, "true")) {
 		subwindow->borders.visible = true;
 	} else if (streq(borders, "false")) {
@@ -6033,10 +7797,17 @@ static enum parser_error config_subwindow_borders(struct parser *parser)
 
 static enum parser_error config_subwindow_top(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-	SUBWINDOW_INIT_OK;
-
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
 	const char *top = parser_getsym(parser, "top");
+	const char *always = parser_getsym(parser, "always");
+
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
+
 	if (streq(top, "true")) {
 		subwindow->top = true;
 	} else if (streq(top, "false")) {
@@ -6045,7 +7816,6 @@ static enum parser_error config_subwindow_top(struct parser *parser)
 		return PARSE_ERROR_INVALID_VALUE;
 	}
 
-	const char *always = parser_getsym(parser, "always");
 	if (streq(always, "true")) {
 		subwindow->always_top = true;
 	} else if (streq(always, "false")) {
@@ -6059,10 +7829,15 @@ static enum parser_error config_subwindow_top(struct parser *parser)
 
 static enum parser_error config_subwindow_alpha(struct parser *parser)
 {
-	GET_SUBWINDOW_FROM_INDEX;
-	SUBWINDOW_INIT_OK;
-
+	struct subwindow *subwindow = get_subwindow_from_parser(parser);
 	int alpha = parser_getint(parser, "alpha");
+
+	if (!subwindow) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!subwindow->inited) {
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	}
 
 	if (alpha < 0 || alpha > DEFAULT_ALPHA_FULL) {
 		return PARSE_ERROR_INVALID_VALUE;
@@ -6072,12 +7847,44 @@ static enum parser_error config_subwindow_alpha(struct parser *parser)
 
 	return PARSE_ERROR_NONE;
 }
-#undef GET_WINDOW_FROM_INDEX
-#undef WINDOW_INIT_OK
-#undef GET_SUBWINDOW_FROM_INDEX
-#undef SUBWINDOW_INIT_OK
 
-static struct parser *init_parse_config(void)
+static enum parser_error config_menu_shortcut(struct parser *parser)
+{
+	struct my_app *a = parser_priv(parser);
+	unsigned int ind = parser_getuint(parser, "index");
+	const char *keypress_str = parser_getstr(parser, "keypress");
+
+	if (ind >= MAX_WINDOWS) {
+		return PARSE_ERROR_OUT_OF_BOUNDS;
+	}
+	if (!*keypress_str || streq(keypress_str, "None")) {
+		a->menu_shortcuts[ind] = KEYPRESS_NULL;
+	} else {
+		struct keypress buf[2];
+
+		buf[0].type = EVT_NONE;
+		buf[1].type = EVT_NONE;
+		keypress_from_text(buf, N_ELEMENTS(buf), keypress_str);
+		if (buf[0].type == EVT_KBRD && buf[1].type == EVT_NONE) {
+			/* Got exactly one keystroke. */
+			a->menu_shortcuts[ind] = buf[0];
+		} else {
+			/* Treat anything else as no shortcut. */
+			a->menu_shortcuts[ind] = KEYPRESS_NULL;
+		}
+	}
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error config_kp_as_mod(struct parser *parser)
+{
+	struct my_app *a = parser_priv(parser);
+
+	a->kp_as_mod = (parser_getint(parser, "enabled") != 0);
+	return PARSE_ERROR_NONE;
+}
+
+static struct parser *init_parse_config(struct my_app *a)
 {
 	struct parser *parser = parser_new();
 	
@@ -6085,8 +7892,10 @@ static struct parser *init_parse_config(void)
 			config_window_display);
 	parser_reg(parser, "window-fullscreen uint index sym fullscreen",
 			config_window_fullscreen);
-	parser_reg(parser, "window-full-rect uint index int x int y int w int h",
-			config_window_rect);
+	parser_reg(parser, "window-full-rect uint index int x int y int w "
+			"int h", config_window_rect);
+	parser_reg(parser, "window-full-rect-fs uint index int x int y int w "
+			"int h", config_window_rect_fs);
 	parser_reg(parser, "window-renderer uint index sym type",
 			config_window_renderer);
 	parser_reg(parser, "window-wallpaper-path uint index str path",
@@ -6099,13 +7908,13 @@ static struct parser *init_parse_config(void)
 			config_window_graphics);
 	parser_reg(parser, "window-tile-scale uint index sym which int scale",
 			config_window_tile_scale);
-	parser_reg(parser, "window-cursor uint index sym cursor",
-			config_window_cursor);
 
-	parser_reg(parser, "subwindow-window uint index uint windex",
+	parser_reg(parser, "subwindow-window uint index uint windex ?int vis",
 			config_subwindow_window);
-	parser_reg(parser, "subwindow-full-rect uint index int x int y int w int h",
-			config_subwindow_rect);
+	parser_reg(parser, "subwindow-full-rect uint index int x int y "
+			"int w int h", config_subwindow_rect);
+	parser_reg(parser, "subwindow-full-rect-fs uint index int x int y "
+			"int w int h", config_subwindow_rect_fs);
 	parser_reg(parser, "subwindow-font uint index int size str name",
 			config_subwindow_font);
 	parser_reg(parser, "subwindow-borders uint index sym borders",
@@ -6114,6 +7923,12 @@ static struct parser *init_parse_config(void)
 			config_subwindow_top);
 	parser_reg(parser, "subwindow-alpha uint index int alpha",
 			config_subwindow_alpha);
+
+	parser_reg(parser, "menu-shortcut uint index str keypress",
+			config_menu_shortcut);
+	parser_reg(parser, "kp-as-modifier int enabled", config_kp_as_mod);
+
+	parser_setpriv(parser, a);
 
 	return parser;
 }
@@ -6131,22 +7946,24 @@ static void print_error(const char *name, struct parser *parser)
 			parser_error_str[state.error]);
 }
 
-static bool read_config_file(void)
+static bool read_config_file(struct my_app *a)
 {
-	ang_file *config = file_open(g_config_file, MODE_READ, FTYPE_TEXT);
+	char line[1024];
+	ang_file *config = file_open(a->config_file, MODE_READ, FTYPE_TEXT);
+	struct parser *parser;
+	errr error = PARSE_ERROR_NONE;
+
 	if (config == NULL) {
 		/* not an error, its ok for a config file to not exist */
 		return false;
 	}
 
-	char line[1024];
-	struct parser *parser = init_parse_config();
-	errr error = 0;
+	parser = init_parse_config(a);
 
 	while (file_getl(config, line, sizeof(line))) {
 		error = parser_parse(parser, line);
 		if (error != PARSE_ERROR_NONE) {
-			print_error(g_config_file, parser);
+			print_error(a->config_file, parser);
 			break;
 		}
 	}

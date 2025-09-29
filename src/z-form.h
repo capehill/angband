@@ -31,15 +31,6 @@
  * This file makes use of both "z-util.c" and "z-virt.c"
  */
 
-/* MSVC doesn't have va_copy (which is C99) or an alternative, so we'll just
- * copy the SRC pointer. In other cases we'll use va_copy() as we should. */
-#ifdef _MSC_VER
-#define VA_COPY(DST, SRC) (DST) = (SRC)
-#else
-#define VA_COPY(DST, SRC) va_copy(DST, SRC)
-#endif
-
-
 /**** Available Functions ****/
 
 /**
@@ -50,7 +41,8 @@ extern size_t vstrnfmt(char *buf, size_t max, const char *fmt, va_list vp);
 /**
  * Simple interface to "vstrnfmt()"
  */
-extern size_t strnfmt(char *buf, size_t max, const char *fmt, ...);
+extern size_t strnfmt(char *buf, size_t max, const char *fmt, ...)
+	ATTRIBUTE ((format (printf, 3, 4)));
 
 /**
  * Format arguments into a static resizing buffer
@@ -65,22 +57,25 @@ extern void vformat_kill(void);
 /**
  * Append a formatted string to another string
  */
-extern void strnfcat(char *str, size_t max, size_t *end, const char *fmt, ...);
+extern void strnfcat(char *str, size_t max, size_t *end, const char *fmt, ...)
+	ATTRIBUTE ((format (printf, 4, 5)));
 
 /**
  * Simple interface to "vformat()"
  */
-extern char *format(const char *fmt, ...);
+extern char *format(const char *fmt, ...)
+	ATTRIBUTE ((format (printf, 1, 2)));
 
 /**
  * Vararg interface to "plog()", using "format()"
  */
-extern void plog_fmt(const char *fmt, ...);
+extern void plog_fmt(const char *fmt, ...)
+	ATTRIBUTE ((format (printf, 1, 2)));
 
 /**
  * Vararg interface to "quit()", using "format()"
  */
-extern void quit_fmt(const char *fmt, ...);
-
+extern void quit_fmt(const char *fmt, ...)
+	ATTRIBUTE ((format (printf, 1, 2)));
 
 #endif /* INCLUDED_Z_FORM_H */

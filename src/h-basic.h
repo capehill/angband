@@ -21,31 +21,6 @@
 
 #else
 
-/**
- * Native MSVC compiler doesn't understand inline or snprintf
- */
-#ifdef _MSC_VER
-#	define inline __inline
-#	define snprintf _snprintf
-#endif
-
-/* Necessary? */
-#ifdef NDS
-# include <fat.h>
-# include <unistd.h>
-# include <reent.h>
-# include <sys/iosupport.h>
-# include <errno.h>
-#endif
-
-/**
- * Using C99, assume we have stdint and stdbool
- */
-# if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) \
-  || (defined(_MSC_VER) && _MSC_VER >= 1600L)
-#  define HAVE_STDINT_H
-# endif
-
 # if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #  define HAVE_STDbool_H
 # endif
@@ -78,14 +53,15 @@
 # ifndef HAVE_DIRENT_H
 #  define HAVE_DIRENT_H
 # endif
-#endif
 
 /**
- * Define SETGID if we are running as a central install on a multiuser
- * system that has setgid support.
+ * May need to be tightened:  without autoconf.h assume all Unixes have mkdir().
  */
-/* #define SETGID */
+# if !defined(HAVE_MKDIR) && !defined(HAVE_CONFIG_H)
+#   define HAVE_MKDIR
+# endif
 
+#endif
 
 /**
  * Every system seems to use its own symbol as a path separator.
@@ -145,7 +121,11 @@
 # include <unistd.h>
 #endif
 
-
+#if defined(__GNUC__) || defined(__clang__)
+#define ATTRIBUTE __attribute__
+#else
+#define ATTRIBUTE(x)
+#endif
 
 /**
  * ------------------------------------------------------------------------
@@ -155,26 +135,9 @@
 
 /**
  * errr is an error code
- *
- * A "byte" is an unsigned byte of memory.
- * s16b/u16b are exactly 2 bytes (where possible)
- * s32b/u32b are exactly 4 bytes (where possible)
  */
 
 typedef int errr;
-
-/* Use guaranteed-size types */
-typedef uint8_t byte;
-
-typedef uint16_t u16b;
-typedef int16_t s16b;
-
-typedef uint32_t u32b;
-typedef int32_t s32b;
-
-typedef uint64_t u64b;
-typedef int64_t s64b;
-
 
 /** Debugging macros ***/
 

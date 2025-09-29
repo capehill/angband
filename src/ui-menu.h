@@ -49,12 +49,13 @@ typedef enum _menu_row_validity_t {
 } menu_row_validity_t;
 
 /* Cursor colours for different states */
-extern const byte curs_attrs[2][2];
+extern const uint8_t curs_attrs[2][2];
 
 /* Standard menu orderings */
 extern const char lower_case[];			/* abc..z */
 extern const char upper_case[];			/* ABC..Z */
 extern const char all_letters[];		/* abc..zABC..Z */
+extern const char all_letters_nohjkl[];		/* abc..gim..zABC..Z */
 
 
 /*
@@ -197,7 +198,13 @@ enum
 	MN_NO_ACTION = 0x20,
 
 	/* Tags can be selected via an inscription */
-	MN_INSCRIP_TAGS = 0x40
+	MN_INSCRIP_TAGS = 0x40,
+
+	/* Allow a keymap trigger whose first character in the action is ESCAPE
+	 * to break out of the menu; note that selections, cmd_keys, and
+	 * switch_keys take precedence so a keymap trigger that is also one
+	 * of those will not break out */
+	MN_KEYMAP_ESC = 0x80
 };
 
 
@@ -225,6 +232,23 @@ struct menu
 
   	/* auxiliary browser help function */
 	void (*browse_hook)(int oid, void *db, const region *loc);
+
+	/* This is an auxiliary function to allow predefined skins to handle
+	 * events for cmd_keys or switch_keys within menu_select() rather than
+	 * have menu_select()'s caller handle them.  If used, the function
+	 * should return true if the event, ev, was handled or false if it was
+	 * not. oid is the index of the cursor position in the list. */
+	bool (*keys_hook)(struct menu *m, const ui_event *ev, int oid);
+
+	/* This is an auxiliary function to allow presentation of a context
+	 * menu in response to a mouse click.  If used, the function should
+	 * return true if the event, in, was handled or false if it was not.
+	 * *out has the details for the event that will be passed upstream and
+	 * is initialized prior to the call to the auxiliary function.  If the
+	 * input event was handled, the function way want to modify *out.
+	 * This function is called after screening out any mouse events that
+	 * are handled natively by menu_select(). */
+	bool (*context_hook)(struct menu *m, const ui_event *in, ui_event *out);
 
 	/* Flags specifying the behavior of this menu (from struct menu_flags) */
 	int flags;
@@ -259,7 +283,7 @@ struct menu
 /**
  * Allocate and return a new, initialised, menu.
  */
-struct menu *menu_new(skin_id, const menu_iter *iter);
+struct menu *menu_new(skin_id id, const menu_iter *iter);
 struct menu *menu_new_action(menu_action *acts, size_t n);
 void menu_free(struct menu *m);
 
@@ -267,7 +291,7 @@ void menu_free(struct menu *m);
 /**
  * Initialise a menu, using the skin and iter functions specified.
  */
-void menu_init(struct menu *menu, skin_id skin, const menu_iter *iter);
+void menu_init(struct menu *menu, skin_id id, const menu_iter *iter);
 
 
 /**

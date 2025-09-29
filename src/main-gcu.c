@@ -27,6 +27,16 @@
 
 #ifdef USE_GCU
 #include "main.h"
+#ifdef _WIN32
+/*
+ * Microsoft puts write() in io.h and marks it with a deprecation warning.
+ * Use the equivalent _write() instead.
+ */
+#include <io.h>
+#define PLATFORM_WRITE _write
+#else
+#define PLATFORM_WRITE write
+#endif
 
 /**
  * Avoid 'struct term' name conflict with <curses.h> (via <term.h>) on AIX
@@ -40,8 +50,10 @@
 # ifdef HAVE_STDbool_H
 #  define NCURSES_ENABLE_STDbool_H 0
 # endif
+
 /* Mac needs _XOPEN_SOURCE_EXTENDED to expose mvwaddnstr(). */
 # define _XOPEN_SOURCE_EXTENDED 1
+
 # include <ncurses.h>
 #else
 # include <curses.h>
@@ -58,8 +70,8 @@
 
 
 /**
- * Hack -- Windows Console mode uses PDCURSES and cannot do any terminal stuff
- * Hack -- Windows needs Sleep(), and I really don't want to pull in all
+ * Windows Console mode uses PDCURSES and cannot do any terminal stuff
+ * Windows needs Sleep(), and I really don't want to pull in all
  *         the Win32 headers for this one function
  */
 #if defined(WIN32_CONSOLE_MODE)
@@ -106,10 +118,32 @@ static char *termtype;
 static bool loaded_terminfo;
 
 /**
+ * Simple rectangle type
+ */
+struct rect_s
+{
+    int  x,  y;
+    int cx, cy;
+};
+typedef struct rect_s rect_t, *rect_ptr;
+
+/* Trivial rectangle utility to make code a bit more readable */
+static rect_t rect(int x, int y, int cx, int cy)
+{
+    rect_t r;
+    r.x = x;
+    r.y = y;
+    r.cx = cx;
+    r.cy = cy;
+    return r;
+}
+
+/**
  * Information about a term
  */
 typedef struct term_data {
 	term t;                 /* All term info */
+	rect_t r;
 	WINDOW *win;            /* Pointer to the curses window */
 } term_data;
 
@@ -133,7 +167,7 @@ static int active = 0;
 #ifdef A_COLOR
 
 /**
- * Hack -- define "A_BRIGHT" to be "A_BOLD", because on many
+ * Define "A_BRIGHT" to be "A_BOLD", because on many
  * machines, "A_BRIGHT" produces ugly "inverse" video.
  */
 #ifndef A_BRIGHT
@@ -150,10 +184,17 @@ static int can_use_color = false;
  */
 static int colortable[BASIC_COLORS];
 
+/**
+ * Same colors as in the colortable, except fg and bg are both set to the fg value.
+ * These pairs are used for drawing solid walls.
+ */
+static int same_colortable[BASIC_COLORS];
+
 /* Screen info: use one big Term 0, or other subwindows? */
 static bool bold_extended = false;
-static bool ascii_walls = false;
-static int term_count = 4;
+static bool use_default_background = false;
+static bool keep_terminal_colors = false;
+static int term_count = 1;
 
 /**
  * Background color we should draw with; either BLACK or DEFAULT
@@ -169,6 +210,14 @@ static int bg_color = COLOR_BLACK;
 #define PAIR_MAGENTA 5
 #define PAIR_CYAN 6
 #define PAIR_BLACK 7
+#define PAIR_WHITE_WHITE 8
+#define PAIR_RED_RED 9
+#define PAIR_GREEN_GREEN 10
+#define PAIR_YELLOW_YELLOW 11
+#define PAIR_BLUE_BLUE 12
+#define PAIR_MAGENTA_MAGENTA 13
+#define PAIR_CYAN_CYAN 14
+#define PAIR_BLACK_BLACK 15
 
 #endif
 
@@ -219,7 +268,7 @@ static void keymap_game_prepare(void) {
 	game_termios.c_cc[VSUSP] = (char)26;
 
 #ifdef VDSUSP
-	/* Hack -- disable "Ctrl-Y" on *BSD */
+	/* Disable "Ctrl-Y" on *BSD */
 	game_termios.c_cc[VDSUSP] = (char)-1;
 #endif
 
@@ -256,7 +305,7 @@ static errr Term_xtra_gcu_alive(int v) {
 		echo();
 		nl();
 
-		/* Hack -- make sure the cursor is visible */
+		/* Make sure the cursor is visible */
 		Term_xtra(TERM_XTRA_SHAPE, 1);
 
 		/* Flush the curses buffer */
@@ -290,18 +339,253 @@ static errr Term_xtra_gcu_alive(int v) {
 	return 0;
 }
 
-const char help_gcu[] = "Text mode, subopts\n              -a     Use ASCII walls\n              -b     Big screen (equivalent to -n1)\n              -B     Use brighter bold characters\n              -nN    Use N terminals (up to 6)";
+const char help_gcu[] = "Text mode, subopts\n"
+	"              -B     Use brighter bold characters\n"
+	"              -D     Use terminal default background color\n"
+	"              -K     Keep terminal's color table when changing colors\n"
+	"              -nN    Use N terminals (up to 6, calculate size automatically. This option cannot be used with below options)\n"
+	"                   To manually set terminal sizes use below options\n"
+	"              -right (dimension)[,dimension]\n"
+	"              -left (dimension)[,dimension]\n"
+	"              -bottom (dimension)[,dimension]\n"
+	"              -top (dimension)[,dimension]\n"
+	"              -spacer (dimension)     space between terminals\n"
+	"                   Where dimension is = (columns)x(rows)\n"
+	"                   ex: 10x10\n"
+	"                   one of the value can also be ommited like 10x*\n"
+	"                   where * is automatically calculated if possible\n"
+	"                   if second dimension is specified then that side is split and second terminal is created.\n"
+	"                   incase of second dimension it can be automatically calculated by using *, ex: 10x10,*\n"
+	"                   second dimension is not allowed for top and bottom\n"
+	"                   NOTE: order of arguments matters\n"
+	"                   if top and bottom specified first then entire row is given to them, if they are specified after left, then margin is left for terminal and then the top and bottom terminal starts\n"
+	;
 
 /**
  * Usage:
  *
- * angband -mgcu -- [-a] [-b] [-B] [-nN]
+ * angband -mgcu -- [-B] [-D] [-nN]
  *
- *   -a      Use ASCII walls
- *   -b      Big screen (equivalent to -n1)
  *   -B      Use brighter bold characters
+ *   -D      Use terminal default background color
  *   -nN     Use N terminals (up to 6)
  */
+
+#ifdef MSYS2_ENCODING_WORKAROUND
+/*
+ * Override the default character encoding in MSYS2 for better handling in
+ * Term_text_gcu() of characters that don't fall in the ASCII range.  See
+ * init_sdl2() in main-sdl2.c for more details about the default character
+ * encoding in MSYS2.
+ */
+
+/**
+ * Convert UTF-8 to UTF-16 with each UTF-16 in the native byte order and
+ * lossily change any code point that requires a surrogate pair to U+FFFD.
+ * Return the total number of code points that would be generated by
+ * converting the UTF-8 input.
+ *
+ * \param dest Points to the buffer in which to store the conversion.  May be
+ * NULL.
+ * \param src Is a null-terminated UTF-8 sequence.
+ * \param n Is the maximum number of code points to store in dest.
+ *
+ * In case of malformed UTF-8, inserts a U+FFFD in the converted output at the
+ * point of the error.
+ */
+static size_t Term_mbcs_gcu_msys2(wchar_t *dest, const char *src, int n)
+{
+        size_t nout = (n > 0) ? n : 0;
+        size_t count = 0;
+
+        while (1) {
+                /*
+                 * Default to U+FFFD to indicate an erroneous UTF-8 sequence
+                 * that could not be decoded.  Follow "best practice"
+                 * recommended by the Unicode 6 standard:  an erroneous
+		 * sequence ends as soon as a disallowed byte is encountered.
+                 */
+                uint32_t decoded = 0xfffd;
+
+                if (((unsigned int) *src & 0x80) == 0) {
+                        /*
+                         * Encoded as a single byte:  U+0000 to U+007F ->
+                         * 0xxxxxxx.
+                         */
+                        if (*src == 0) {
+                                if (dest && count < nout) {
+                                        dest[count] = 0;
+                                }
+                                break;
+                        }
+                        decoded = *src;
+                        ++src;
+                } else if (((unsigned int) *src & 0xe0) == 0xc0) {
+                        /*
+                         * Encoded as two bytes:  U+0080 to U+07FF ->
+                         * 110xxxxx 10xxxxxx.
+                         */
+                        uint32_t part = ((uint32_t) *src & 0x1f) << 6;
+
+                        ++src;
+                        /*
+                         * Check that the first two bits of the continuation
+                         * byte are valid and the encoding is not overlong.
+                         */
+                        if (((unsigned int) *src & 0xc0) == 0x80
+                                        && part > 0x40) {
+                                decoded = part + ((uint32_t) *src & 0x3f);
+                                ++src;
+                        }
+                } else if (((unsigned int) *src & 0xf0) == 0xe0) {
+                        /*
+                         * Encoded as three bytes:  U+0800 to U+FFFF ->
+                         * 1110xxxx 10xxxxxx 10xxxxxx.
+                         */
+                        uint32_t part = ((uint32_t) *src & 0xf) << 12;
+
+                        ++src;
+                        if (((unsigned int) *src & 0xc0) == 0x80) {
+                                part += ((uint32_t) *src & 0x3f) << 6;
+                                ++src;
+                                /*
+                                 * The second part of the test rejects
+                                 * overlong encodings.  The third part
+                                 * rejects encodings of U+D800 to U+DFFF,
+                                 * reserved for surrogate pairs.
+                                 */
+                                if (((unsigned int) *src & 0xc0) == 0x80
+                                                && part >= 0x800
+                                                && (part & 0xf800) != 0xd800) {
+                                        decoded = part
+                                                + ((uint32_t) *src & 0x3f);
+                                        ++src;
+                                }
+                        }
+                } else if (((unsigned int) *src & 0xf8) == 0xf0) {
+                        /*
+                         * Encoded as four bytes:  U+10000 to U+1FFFFF ->
+                         * 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx.
+                         */
+                        uint32_t part = ((uint32_t) *src & 0x7) << 18;
+
+                        ++src;
+                        if (((unsigned int) *src & 0xc0) == 0x80) {
+                                part += ((uint32_t) * src & 0x3f) << 12;
+                                ++src;
+                                /*
+                                 * The second part of the test rejects
+                                 * overlong encodings.  The third part
+                                 * rejects code points beyond U+10FFFF which
+                                 * can't be encoded in UTF-16.
+                                 */
+                                if (((unsigned int) *src & 0xc0) == 0x80
+                                                && part >= 0x10000
+                                                && (part & 0xff0000)
+                                                <= 0x100000) {
+                                        part += ((uint32_t) *src & 0x3f) << 6;
+                                        ++src;
+                                        if (((unsigned int) *src & 0xc0)
+                                                        == 0x80) {
+                                                decoded = part
+                                                        + ((uint32_t) *src
+                                                        & 0x3f);
+                                                ++src;
+                                        }
+                                }
+                        }
+                } else {
+                        /*
+                         * Either an impossible byte or one that signals the
+                         * start of a five byte or longer encoding.
+                         */
+                        ++src;
+                }
+                if (dest && count < nout) {
+                        if (decoded >= 0x10000) {
+                                /*
+                                 * Would require a surrogate pair to represent
+                                 * accurately.  Substitute U+FFFD instead.
+                                 */
+                                assert(decoded <= 0x10FFFF);
+                                dest[count] = (wchar_t) 0xfffd;
+                        } else {
+                                /*
+                                 * By the decoding logic, the decoded value
+                                 * should not match part of surrogate pair.
+                                 */
+                                assert(decoded < 0xd800 || decoded > 0xdfff);
+                                dest[count] = (wchar_t) decoded;
+                        }
+                }
+                ++count;
+        }
+	return count;
+}
+
+/**
+ * Convert a UTF-16 stored in the native byte order to UTF-8.
+ * \param s Points to the buffer where the conversion should be stored.
+ * That buffer must have at least Term_wcsz_gcu_msys2() bytes.
+ * \param wchar Is the UTF-16 value to convert.
+ * \return The returned value is the number of bytes written to s or -1
+ * if the UTF-16 value could not be converted.
+ *
+ * This is a necessary counterpart to Term_mbcs_gcu_msys2():  since we
+ * are overriding the default multibyte to wide character conversion, need
+ * to override the reverse conversion as well.
+ */
+static int Term_wctomb_gcu_msys2(char *s, wchar_t wchar)
+{
+        if ((unsigned int) wchar <= 0x7f) {
+                *s = wchar;
+                return 1;
+        }
+        if ((unsigned int) wchar < 0x7ff) {
+                *s++ = 0xc0 + (((unsigned int) wchar & 0x7c0) >> 6);
+                *s++ = 0x80 + ((unsigned int) wchar & 0x3f);
+                return 2;
+        }
+        /* Refuse to encode a value reserved for surrogate pairs in UTF-16. */
+        if ((unsigned int) wchar >= 0xd800 && (unsigned int) wchar <= 0xdfff) {
+                return -1;
+        }
+        *s++ = 0xe0 + (((unsigned int) wchar & 0xf000) >> 12);
+        *s++ = 0x80 + (((unsigned int) wchar & 0xfc0) >> 6);
+        *s++ = 0x80 + ((unsigned int) wchar & 0x3f);
+        return 3;
+}
+
+/**
+ * Return whether a UTF-16 value is printable.
+ *
+ * This is a necessary counterpart to Term_mbcs_gcu_msys2() so that
+ * screening of wide characters in the core's text_out_to_screen() is
+ * consistent with what Term_mbcs_gcu_msys2() does.
+ */
+static int Term_iswprint_gcu_msys2(wint_t wc)
+{
+       /*
+         * Upcast the UTF-16 value to UTF-32 since the UTF-16 value is either
+         * equal to the code point's value or is part of a surrogate pair.
+         */
+        return utf32_isprint((uint32_t) wc);
+}
+
+/**
+ * Return the maximum number of bytes needed for a multibyte encoding of a
+ * wchar.
+ */
+static int Term_wcsz_gcu_msys2(void)
+{
+        /*
+         * UTF-8 takes at most 3 bytes to encode a code point that can be
+         * encoded with a single 16-bit quantity in UTF-16.
+         */
+        return 3;
+}
+
+#endif /* MSYS2_ENCODING_WORKAROUND */
 
 /**
  * Init the "curses" system
@@ -318,6 +602,11 @@ static void Term_init_gcu(term *t) {
 	/* Count init's, handle first */
 	if (active++ != 0) return;
 
+	#if defined(USE_NCURSES) && defined(KEY_MOUSE)
+	/* Turn on the mouse. */
+	mousemask(ALL_MOUSE_EVENTS, NULL);
+	#endif
+
 	/* Erase the window */
 	wclear(td->win);
 
@@ -329,6 +618,17 @@ static void Term_init_gcu(term *t) {
 
 	/* Game keymap */
 	keymap_game();
+
+#ifdef MSYS2_ENCODING_WORKAROUND
+	/*
+	 * Override default character encoding on MSYS2; see main-sdl2.c for
+	 * more details.
+	 */
+	text_mbcs_hook = Term_mbcs_gcu_msys2;
+	text_wctomb_hook = Term_wctomb_gcu_msys2;
+	text_wcsz_hook = Term_wcsz_gcu_msys2;
+	text_iswprint_hook = Term_iswprint_gcu_msys2;
+#endif /* MSYS2_ENCODING_WORKAROUND */
 }
 
 
@@ -345,7 +645,7 @@ static void Term_nuke_gcu(term *t) {
 	/* Count nuke's, handle last */
 	if (--active != 0) return;
 
-	/* Hack -- make sure the cursor is visible */
+	/* Make sure the cursor is visible */
 	Term_xtra(TERM_XTRA_SHAPE, 1);
 
 #ifdef A_COLOR
@@ -549,6 +849,25 @@ static errr Term_xtra_gcu_event(int v) {
 	}
 	#endif
 
+	#if defined(USE_NCURSES) && defined(KEY_MOUSE)
+	if (i == KEY_MOUSE) {
+		MEVENT m;
+		if (getmouse(&m) != OK) return (0);
+
+		int b = 0;
+		if (m.bstate & BUTTON1_CLICKED) b = 1;
+		else if (m.bstate & BUTTON2_CLICKED) b = 2;
+		else if (m.bstate & BUTTON3_CLICKED) b = 3;
+		else if (m.bstate & BUTTON4_CLICKED) b = 4;
+		if (m.bstate & BUTTON_SHIFT) b |= (KC_MOD_SHIFT << 4);
+		if (m.bstate & BUTTON_CTRL) b |= (KC_MOD_CONTROL << 4);
+		if (m.bstate & BUTTON_ALT) b |= (KC_MOD_ALT << 4);
+
+		if (b != 0) Term_mousepress(m.x, m.y, b);
+		return (0);
+	}
+	#endif
+
 	/* uncomment to debug keycode issues */
 	#if 0
 	printw("key %d", i);
@@ -667,60 +986,81 @@ static int create_color(int i, int scale) {
 
 
 /**
- * React to changes
+ * Adjust the color tables if there's more than 16 available.
  */
-static errr Term_xtra_gcu_react(void) {
-	if (ascii_walls) {
-		int i;
-		ascii_walls = false;
-		for (i = 0; i < 4; i++) {
-			// magma as %:D
-			feat_x_char[i][FEAT_MAGMA] = 0x23;
-			feat_x_attr[i][FEAT_MAGMA] = 0x01;
-
-			// quartz as %:D
-			feat_x_char[i][FEAT_QUARTZ] = 0x23;
-			feat_x_attr[i][FEAT_QUARTZ] = 0x01;
-
-			// quartz/magma w treasure as *:o
-			feat_x_char[i][FEAT_MAGMA_K] = feat_x_char[i][FEAT_QUARTZ_K] = 0x2A;
-			feat_x_attr[i][FEAT_MAGMA_K] = feat_x_attr[i][FEAT_QUARTZ_K] = 0x03;
-
-			// granite walls as #:D
-			feat_x_char[i][FEAT_GRANITE] = 0x23;
-			feat_x_attr[i][FEAT_GRANITE] = 0x01;
-
-			// permanent walls as #:r
-			feat_x_char[i][FEAT_PERM] = 0x23;
-			feat_x_attr[i][FEAT_PERM] = 0x04;
-		}
-	}
-
+static void handle_extended_color_tables(void) {
 #ifdef A_COLOR
 	if (COLORS == 256 || COLORS == 88) {
-		/* If we have more than 16 colors, find the best matches. These numbers
-		 * correspond to xterm/rxvt's builtin color numbers--they do not
-		 * correspond to curses' constants OR with curses' color pairs.
-		 *
-		 * XTerm has 216 (6*6*6) RGB colors, with each RGB setting 0-5.
-		 * RXVT has 64 (4*4*4) RGB colors, with each RGB setting 0-3.
-		 *
-		 * Both also have the basic 16 ANSI colors, plus some extra grayscale
-		 * colors which we do not use.
-		 */
+		int isbold = bold_extended ?  A_BRIGHT : A_NORMAL;
 		int i;
-		int scale = COLORS == 256 ? 6 : 4;
 
-		for (i = 0; i < BASIC_COLORS; i++) {
-			int fg = create_color(i, scale);
-			int isbold = bold_extended ? A_BRIGHT : A_NORMAL;
-			init_pair(i + 1, fg, bg_color);
-			colortable[i] = COLOR_PAIR(i + 1) | isbold;
+		if (keep_terminal_colors) {
+			/*
+			 * If we have more than 16 colors, find the best
+			 * matches in the terminal's default color table.
+			 * These numbers correspond to xterm/rxvt's builtin
+			 * color numbers--they do not correspond to curses'
+			 * constants OR with curses' color pairs.
+			 *
+			 * XTerm has 216 (6*6*6) RGB colors, with each RGB
+			 * setting 0-5.
+			 * RXVT has 64 (4*4*4) RGB colors, with each RGB
+			 * setting 0-3.
+			 *
+			 * Both also have the basic 16 ANSI colors, plus some
+			 * extra grayscale colors which we do not use.
+			 */
+			int scale = COLORS == 256 ? 6 : 4;
+
+			bg_color = create_color(COLOUR_DARK, scale);
+			for (i = 0; i < BASIC_COLORS; i++) {
+				int fg = create_color(i, scale);
+				init_pair(i + 1, fg, bg_color);
+				colortable[i] = COLOR_PAIR(i + 1) | isbold;
+				init_pair(BASIC_COLORS + i, fg, fg);
+				same_colortable[i] =
+					COLOR_PAIR(BASIC_COLORS + i) | isbold;
+			}
+		} else {
+			bg_color = 0;
+			for (i = 0; i < BASIC_COLORS; i++) {
+				/*
+				 * Scale components to a range of 0 - 1000 per
+				 * init_color()'s documentation.
+				 */
+				init_color(i,
+					(angband_color_table[i][1] * 1001) / 256,
+					(angband_color_table[i][2] * 1001) / 256,
+					(angband_color_table[i][3] * 1001) / 256);
+				init_pair(i + 1, i, bg_color);
+				colortable[i] = COLOR_PAIR(i + 1) | isbold;
+				init_pair(BASIC_COLORS + i, i, i);
+				same_colortable[i] =
+					COLOR_PAIR(BASIC_COLORS + i) | isbold;
+			}
+		}
+
+		for (i = 0; i < term_count; ++i) {
+			if (data[i].win) {
+				wbkgdset(data[i].win, ' ' |
+					colortable[COLOUR_DARK]);
+			}
+		}
+		if (data[0].win) {
+			/*
+			 * Adjust the background color on the standard screen
+			 * as well so separators between the terminals have
+			 * the same background as the rest.
+			 */
+			chtype term0_bkg = getbkgd(data[0].win);
+
+			if (getbkgd(stdscr) != term0_bkg) {
+				wbkgd(stdscr, term0_bkg);
+				wrefresh(stdscr);
+			}
 		}
 	}
 #endif
-
-	return 0;
 }
 
 
@@ -736,7 +1076,7 @@ static errr Term_xtra_gcu(int n, int v) {
 		case TERM_XTRA_CLEAR: touchwin(td->win); wclear(td->win); return 0;
 
 		/* Make a noise */
-		case TERM_XTRA_NOISE: write(1, "\007", 1); return 0;
+		case TERM_XTRA_NOISE: PLATFORM_WRITE(1, "\007", 1); return 0;
 
 		/* Flush the Curses buffer */
 		case TERM_XTRA_FRESH: wrefresh(td->win); return 0;
@@ -759,7 +1099,7 @@ static errr Term_xtra_gcu(int n, int v) {
 		case TERM_XTRA_DELAY: if (v > 0) usleep(1000 * v); return 0;
 
 		/* React to events */
-		case TERM_XTRA_REACT: Term_xtra_gcu_react(); return 0;
+		case TERM_XTRA_REACT: handle_extended_color_tables(); return 0;
 	}
 
 	/* Unknown event */
@@ -779,19 +1119,26 @@ static errr Term_curs_gcu(int x, int y) {
 
 /**
  * Erase a grid of space
- * Hack -- try to be "semi-efficient".
+ * Try to be "semi-efficient".
  */
 static errr Term_wipe_gcu(int x, int y, int n) {
 	term_data *td = (term_data *)(Term->data);
 
 	wmove(td->win, y, x);
 
-	if (x + n >= td->t.wid)
+	if (x + n >= td->t.wid) {
 		/* Clear to end of line */
 		wclrtoeol(td->win);
-	else
+	} else {
 		/* Clear some characters */
+		if (can_use_color) {
+			wattrset(td->win, colortable[COLOUR_DARK] | A_NORMAL);
+		}
 		whline(td->win, ' ', n);
+		if (can_use_color) {
+			wattrset(td->win, A_NORMAL);
+		}
+	}
 
 	return 0;
 }
@@ -805,12 +1152,21 @@ static errr Term_text_gcu(int x, int y, int n, int a, const wchar_t *s) {
 
 #ifdef A_COLOR
 	if (can_use_color) {
+
 		/* the lower 7 bits of the attribute indicate the fg/bg */
 		int attr = a & 127;
-		int color = colortable[attr];
 
 		/* the high bit of the attribute indicates a reversed fg/bg */
 		bool reversed = a > 127;
+
+		int color;
+
+		/* Set bg and fg to the same color when drawing solid walls */
+		if (a / MULT_BG == BG_SAME) {
+			color = same_colortable[attr];
+		} else {
+			color = colortable[attr];
+		}
 
 		/* the following check for A_BRIGHT is to avoid #1813 */
 		int mode;
@@ -831,7 +1187,6 @@ static errr Term_text_gcu(int x, int y, int n, int a, const wchar_t *s) {
 	mvwaddnwstr(td->win, y, x, s, n);
 	return 0;
 }
-
 
 /**
  * Create a window for the given "term_data" argument.
@@ -854,10 +1209,6 @@ static errr term_data_init_gcu(term_data *td, int rows, int cols, int y, int x)
 
 	/* Avoid bottom right corner */
 	t->icky_corner = true;
-
-	/* Erase with "white space" */
-	t->attr_blank = COLOUR_WHITE;
-	t->char_blank = ' ';
 
 	/* Differentiate between BS/^h, Tab/^i, etc. */
 	t->complex_input = true;
@@ -882,6 +1233,49 @@ static errr term_data_init_gcu(term_data *td, int rows, int cols, int y, int x)
 	return (0);
 }
 
+/**
+ * Simple helper
+ */ 
+static errr term_data_init(term_data *td)
+{
+	return term_data_init_gcu(td, td->r.cy, td->r.cx, td->r.y, td->r.x);
+}
+
+
+/* Parse 27,15,*x30 up to the 'x'. * gets converted to a big number
+   Parse 32,* until the end. Return count of numbers parsed */
+static int _parse_size_list(const char *arg, int sizes[], int max)
+{
+    int i = 0;
+    const char *start = arg;
+    const char *stop = arg;
+
+    for (;;)
+    {
+        if (!*stop || !isdigit(*stop))
+        {
+            if (i >= max) break;
+            if (*start == '*')
+                sizes[i] = 255;
+            else
+            {
+                /* rely on atoi("23,34,*") -> 23
+                   otherwise, copy [start, stop) into a new buffer first.*/
+                sizes[i] = atoi(start);
+            }
+            i++;
+            if (!*stop || *stop != ',') break;
+
+            stop++;
+            start = stop;
+        }
+        else
+            stop++;
+    }
+    return i;
+}
+
+
 static void hook_quit(const char *str) {
 	int i;
 
@@ -903,8 +1297,6 @@ static void hook_quit(const char *str) {
  */
 errr init_gcu(int argc, char **argv) {
 	int i;
-	int rows, cols, y, x;
-	int next_win = 0;
 
 	/* Initialize info about terminal capabilities */
 	termtype = getenv("TERM");
@@ -912,18 +1304,16 @@ errr init_gcu(int argc, char **argv) {
 
 	/* Parse args */
 	for (i = 1; i < argc; i++) {
-		if (prefix(argv[i], "-b")) {
-			term_count = 1;
-		} else if (prefix(argv[i], "-B")) {
+		if (prefix(argv[i], "-B")) {
 			bold_extended = true;
-		} else if (prefix(argv[i], "-a")) {
-			ascii_walls = true;
 		} else if (prefix(argv[i], "-n")) {
 			term_count = atoi(&argv[i][2]);
 			if (term_count > MAX_TERM_DATA) term_count = MAX_TERM_DATA;
 			else if (term_count < 1) term_count = 1;
-		} else {
-			plog_fmt("Ignoring option: %s", argv[i]);
+		} else if (prefix(argv[i], "-D")) {
+			use_default_background = true;
+		} else if (streq(argv[i], "-K")) {
+			keep_terminal_colors = true;
 		}
 	}
 
@@ -932,8 +1322,14 @@ errr init_gcu(int argc, char **argv) {
 
 	/* We do it like this to prevent a link error with curseses that
 	 * lack ESCDELAY. */
-	if (!getenv("ESCDELAY"))
-		putenv("ESCDELAY=20");
+	if (!getenv("ESCDELAY")) {
+#if _POSIX_C_SOURCE < 200112L
+		static char escdelbuf[80] = "ESCDELAY=20";
+		putenv(escdelbuf);
+#else
+		setenv("ESCDELAY", "20", 1);
+#endif
+	}
 
 	/* Initialize */
 	if (initscr() == NULL) return (-1);
@@ -949,10 +1345,11 @@ errr init_gcu(int argc, char **argv) {
 	/* Do we have color, and enough color, available? */
 	can_use_color = ((start_color() != ERR) && has_colors() &&
 					 (COLORS >= 8) && (COLOR_PAIRS >= 8));
+	if (!can_change_color()) keep_terminal_colors = true;
 
 #ifdef HAVE_USE_DEFAULT_COLORS
 	/* Should we use curses' "default color" */
-	if (use_default_colors() == OK) bg_color = -1;
+	if (use_default_background && use_default_colors() == OK) bg_color = -1;
 #endif
 
 	/* Attempt to use colors */
@@ -966,6 +1363,16 @@ errr init_gcu(int argc, char **argv) {
 		init_pair(PAIR_MAGENTA, COLOR_MAGENTA, bg_color);
 		init_pair(PAIR_CYAN, COLOR_CYAN, bg_color);
 		init_pair(PAIR_BLACK, COLOR_BLACK, bg_color);
+
+		/* These pairs are used for drawing solid walls */
+		init_pair(PAIR_WHITE_WHITE, COLOR_WHITE, COLOR_WHITE);
+		init_pair(PAIR_RED_RED, COLOR_RED, COLOR_RED);
+		init_pair(PAIR_GREEN_GREEN, COLOR_GREEN, COLOR_GREEN);
+		init_pair(PAIR_YELLOW_YELLOW, COLOR_YELLOW, COLOR_YELLOW);
+		init_pair(PAIR_BLUE_BLUE, COLOR_BLUE, COLOR_BLUE);
+		init_pair(PAIR_MAGENTA_MAGENTA, COLOR_MAGENTA, COLOR_MAGENTA);
+		init_pair(PAIR_CYAN_CYAN, COLOR_CYAN, COLOR_CYAN);
+		init_pair(PAIR_BLACK_BLACK, COLOR_BLACK, COLOR_BLACK);
 
 		/* Prepare the colors */
 		colortable[COLOUR_DARK]     = (COLOR_PAIR(PAIR_BLACK));
@@ -997,6 +1404,37 @@ errr init_gcu(int argc, char **argv) {
 		colortable[COLOUR_MUSTARD]     = (COLOR_PAIR(PAIR_YELLOW));
 		colortable[COLOUR_BLUE_SLATE]  = (COLOR_PAIR(PAIR_BLUE));
 		colortable[COLOUR_DEEP_L_BLUE] = (COLOR_PAIR(PAIR_BLUE));
+
+		same_colortable[COLOUR_DARK]     = (COLOR_PAIR(PAIR_BLACK_BLACK));
+		same_colortable[COLOUR_WHITE]    = (COLOR_PAIR(PAIR_WHITE_WHITE) | A_BRIGHT);
+		same_colortable[COLOUR_SLATE]    = (COLOR_PAIR(PAIR_WHITE_WHITE));
+		same_colortable[COLOUR_ORANGE]   = (COLOR_PAIR(PAIR_YELLOW_YELLOW) | A_BRIGHT);
+		same_colortable[COLOUR_RED]      = (COLOR_PAIR(PAIR_RED_RED));
+		same_colortable[COLOUR_GREEN]    = (COLOR_PAIR(PAIR_GREEN_GREEN));
+		same_colortable[COLOUR_BLUE]     = (COLOR_PAIR(PAIR_BLUE_BLUE));
+		same_colortable[COLOUR_UMBER]    = (COLOR_PAIR(PAIR_YELLOW_YELLOW));
+		same_colortable[COLOUR_L_DARK]   = (COLOR_PAIR(PAIR_BLACK_BLACK) | A_BRIGHT);
+		same_colortable[COLOUR_L_WHITE]  = (COLOR_PAIR(PAIR_WHITE_WHITE));
+		same_colortable[COLOUR_L_PURPLE] = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA));
+		same_colortable[COLOUR_YELLOW]   = (COLOR_PAIR(PAIR_YELLOW_YELLOW) | A_BRIGHT);
+		same_colortable[COLOUR_L_RED]    = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA) | A_BRIGHT);
+		same_colortable[COLOUR_L_GREEN]  = (COLOR_PAIR(PAIR_GREEN_GREEN) | A_BRIGHT);
+		same_colortable[COLOUR_L_BLUE]   = (COLOR_PAIR(PAIR_BLUE_BLUE) | A_BRIGHT);
+		same_colortable[COLOUR_L_UMBER]  = (COLOR_PAIR(PAIR_YELLOW_YELLOW));
+
+		same_colortable[COLOUR_PURPLE]      = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA));
+		same_colortable[COLOUR_VIOLET]      = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA));
+		same_colortable[COLOUR_TEAL]        = (COLOR_PAIR(PAIR_CYAN_CYAN));
+		same_colortable[COLOUR_MUD]         = (COLOR_PAIR(PAIR_YELLOW_YELLOW));
+		same_colortable[COLOUR_L_YELLOW]    = (COLOR_PAIR(PAIR_YELLOW_YELLOW) | A_BRIGHT);
+		same_colortable[COLOUR_MAGENTA]     = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA) | A_BRIGHT);
+		same_colortable[COLOUR_L_TEAL]      = (COLOR_PAIR(PAIR_CYAN_CYAN) | A_BRIGHT);
+		same_colortable[COLOUR_L_VIOLET]    = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA) | A_BRIGHT);
+		same_colortable[COLOUR_L_PINK]      = (COLOR_PAIR(PAIR_MAGENTA_MAGENTA) | A_BRIGHT);
+		same_colortable[COLOUR_MUSTARD]     = (COLOR_PAIR(PAIR_YELLOW));
+		same_colortable[COLOUR_BLUE_SLATE]  = (COLOR_PAIR(PAIR_BLUE));
+		same_colortable[COLOUR_DEEP_L_BLUE] = (COLOR_PAIR(PAIR_BLUE));
+		handle_extended_color_tables();
 	}
 #endif
 
@@ -1016,24 +1454,213 @@ errr init_gcu(int argc, char **argv) {
 	keymap_game_prepare();
 
 	/* Now prepare the term(s) */
-	for (i = 0; i < term_count; i++) {
-		/* Get the terminal dimensions; if the user asked for a big screen
-		 * then we'll put the whole screen in term 0; otherwise we'll divide
-		 * it amongst the available terms */
-		get_gcu_term_size(i, &rows, &cols, &y, &x);
-		
-		/* Skip non-existant windows */
-		if (rows <= 0 || cols <= 0) continue;
-		
-		/* Create a term */
-		term_data_init_gcu(&data[next_win], rows, cols, y, x);
-		
-		/* Remember the term */
-		angband_term[next_win] = &data[next_win].t;
-		
-		/* One more window */
-		next_win++;
+	if (term_count > 1) 
+	{	
+		int rows, cols, y, x;
+		int next_win = 0;
+		for (i = 0; i < term_count; i++) {
+			/* Get the terminal dimensions; if the user asked for a big screen
+			 * then we'll put the whole screen in term 0; otherwise we'll divide
+			 * it amongst the available terms */
+			get_gcu_term_size(i, &rows, &cols, &y, &x);
+			
+			/* Skip non-existant windows */
+			if (rows <= 0 || cols <= 0) continue;
+			
+			/* Create a term */
+			term_data_init_gcu(&data[next_win], rows, cols, y, x);
+			
+			/* Remember the term */
+			angband_term[next_win] = &data[next_win].t;
+			
+			/* One more window */
+			next_win++;
+		}
 	}
+	else
+/* Parse Args and Prepare the Terminals. Rectangles are specified
+      as Width x Height, right? The game will allow you to have two
+      strips of extra terminals, one on the right and one on the bottom.
+      The map terminal will than fit in as big as possible in the remaining
+      space.
+
+      Examples:
+        angband -mgcu -- -right 30x27,* -bottom *x7 will layout as
+
+        Term-0: Map (COLS-30)x(LINES-7) | Term-1: 30x27
+        --------------------------------|----------------------
+        <----Term-3: (COLS-30)x7------->| Term-2: 30x(LINES-27)
+
+        angband -mgcu -- -bottom *x7 -right 30x27,* will layout as
+
+        Term-0: Map (COLS-30)x(LINES-7) | Term-2: 30x27
+                                        |------------------------------
+                                        | Term-3: 30x(LINES-27)
+        ---------------------------------------------------------------
+        <----------Term-1: (COLS)x7----------------------------------->
+
+        Notice the effect on the bottom terminal by specifying its argument
+        second or first. Notice the sequence numbers for the various terminals
+        as you will have to blindly configure them in the window setup screen.
+
+        EDIT: Added support for -left and -top.
+    */
+    {
+        rect_t remaining = rect(0, 0, COLS, LINES);
+        int    spacer_cx = 1;
+        int    spacer_cy = 1;
+        int    next_term = 1;
+        int    term_ct = 1;
+
+        for (i = 1; i < argc; i++)
+        {
+            if (streq(argv[i], "-spacer"))
+            {
+                char *pe, *ystr;
+                long lv;
+
+                i++;
+                if (i >= argc)
+                    quit("Missing size specifier for -spacer");
+                lv = strtol(argv[i], &pe, 10);
+                /*
+                 * Also reject INT_MIN and INT_MAX so do not have to check
+                 * errno to detect overflow on platforms where sizeof(int) ==
+                 * sizeof(long).
+                 */
+                if (pe == argv[i] || *pe != 'x' || lv <= INT_MIN ||
+                        lv >= INT_MAX) {
+                    quit_fmt("Invalid specification for -spacer; got %s",
+                        argv[i]);
+                }
+                spacer_cx = (int)lv;
+                ystr = pe + 1;
+                lv = strtol(ystr, &pe, 10);
+                if (pe == ystr || !contains_only_spaces(pe) ||
+                        lv <= INT_MIN || lv >= INT_MAX) {
+                    quit_fmt("Invalid specification for -spacer; got %s",
+                        argv[i]);
+                }
+                spacer_cy = (int)lv;
+            }
+            else if (streq(argv[i], "-right") || streq(argv[i], "-left"))
+            {
+                const char *arg, *tmp;
+                bool left = streq(argv[i], "-left");
+                int  cx, cys[MAX_TERM_DATA] = {0}, ct, j, x, y;
+
+                i++;
+                if (i >= argc)
+                    quit(format("Missing size specifier for -%s", left ? "left" : "right"));
+
+                arg = argv[i];
+                tmp = strchr(arg, 'x');
+                if (!tmp)
+                    quit(format("Expected something like -%s 60x27,* for two %s hand terminals of 60 columns, the first 27 lines and the second whatever is left.", left ? "left" : "right", left ? "left" : "right"));
+                cx = atoi(arg);
+                remaining.cx -= cx;
+                if (left)
+                {
+                    x = remaining.x;
+                    y = remaining.y;
+                    remaining.x += cx;
+                }
+                else
+                {
+                    x = remaining.x + remaining.cx;
+                    y = remaining.y;
+                }
+                remaining.cx -= spacer_cx;
+                if (left)
+                    remaining.x += spacer_cx;
+                
+                tmp++;
+                ct = _parse_size_list(tmp, cys, MAX_TERM_DATA);
+                for (j = 0; j < ct; j++)
+                {
+                    int cy = cys[j];
+                    if (y + cy > remaining.y + remaining.cy)
+                        cy = remaining.y + remaining.cy - y;
+                    if (next_term >= MAX_TERM_DATA)
+                        quit(format("Too many terminals. Only %d are allowed.", MAX_TERM_DATA));
+                    if (cy <= 0)
+                    {
+                        quit(format("Out of bounds in -%s: %d is too large (%d rows max for this strip)", 
+                            left ? "left" : "right", cys[j], remaining.cy));
+                    }
+                    data[next_term++].r = rect(x, y, cx, cy);
+                    y += cy + spacer_cy;
+                    term_ct++;
+                }
+            }
+            else if (streq(argv[i], "-top") || streq(argv[i], "-bottom"))
+            {
+                const char *arg, *tmp;
+                bool top = streq(argv[i], "-top");
+                int  cy, cxs[MAX_TERM_DATA] = {0}, ct, j, x, y;
+
+                i++;
+                if (i >= argc)
+                    quit(format("Missing size specifier for -%s", top ? "top" : "bottom"));
+
+                arg = argv[i];
+                tmp = strchr(arg, 'x');
+                if (!tmp)
+                    quit(format("Expected something like -%s *x7 for a single %s terminal of 7 lines using as many columns as are available.", top ? "top" : "bottom", top ? "top" : "bottom"));
+                tmp++;
+                cy = atoi(tmp);
+                ct = _parse_size_list(arg, cxs, MAX_TERM_DATA);
+
+                remaining.cy -= cy;
+                if (top)
+                {
+                    x = remaining.x;
+                    y = remaining.y;
+                    remaining.y += cy;
+                }
+                else
+                {
+                    x = remaining.x;
+                    y = remaining.y + remaining.cy;
+                }
+                remaining.cy -= spacer_cy;
+                if (top)
+                    remaining.y += spacer_cy;
+                
+                tmp++;
+                for (j = 0; j < ct; j++)
+                {
+                    int cx = cxs[j];
+                    if (x + cx > remaining.x + remaining.cx)
+                        cx = remaining.x + remaining.cx - x;
+                    if (next_term >= MAX_TERM_DATA)
+                        quit(format("Too many terminals. Only %d are allowed.", MAX_TERM_DATA));
+                    if (cx <= 0)
+                    {
+                        quit(format("Out of bounds in -%s: %d is too large (%d cols max for this strip)", 
+                            top ? "top" : "bottom", cxs[j], remaining.cx));
+                    }
+                    data[next_term++].r = rect(x, y, cx, cy);
+                    x += cx + spacer_cx;
+                    term_ct++;
+                }
+            }
+        }
+
+        /* Map Terminal */
+        if (remaining.cx < MIN_TERM0_COLS || remaining.cy < MIN_TERM0_LINES)
+            quit(format("Failed: angband needs an %dx%d map screen, not %dx%d", MIN_TERM0_COLS, MIN_TERM0_LINES, remaining.cx, remaining.cy));
+        data[0].r = remaining;
+        term_data_init(&data[0]);
+        angband_term[0] = Term;
+
+        /* Child Terminals */
+        for (next_term = 1; next_term < term_ct; next_term++)
+        {
+            term_data_init(&data[next_term]);
+            angband_term[next_term] = Term;
+        }
+    }
 
 	/* Activate the "Angband" window screen */
 	Term_activate(&data[0].t);

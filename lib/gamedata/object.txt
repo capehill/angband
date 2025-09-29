@@ -15,17 +15,21 @@
 # cost : cost
 # attack : base damage : plus to-hit : plus to-dam
 # armor: base armor class : plus to-armor class
-# alloc: commonness : min " to " max
+# alloc: commonness : min_level to max_level
 # charges: charges
 # pile: chance of being generated in a pile : dice for number of items
-# power: power of the effect for object power eveluations
+# power: power of the effect for object power evaluations
 # msg: message on using the object
-# effect: effect when used : parameter (maybe) : paramater (maybe)
+# vis-msg: message on using the object, only when player is not blind
+# effect: effect when used : subtype (optional) : radius (optional) : parameter (optional)
 # effect-yx: y value for effect : x value for effect
 # dice:dice string
-# expr:dice expression
+# expr:substitution code:base value:expression
 # flags: flag | flag | etc.
 # values: label[value] | label[value] | etc.
+# brand: code
+# slay: code
+# curse: name : power
 # pval: pval
 # desc: description
 
@@ -36,7 +40,13 @@
 # optional, and the number of dice is optional and assumed to be 1
 # when not specified.  10+2d3M4 has the range 12-20.  10+M4 has the
 # range 10-14.  10+2d3 has the range 12-16.  10+d3 has the range 11-13.
-# 2d3, d3, M4, 2d3M4, and d3M4 are all acceptable as well.
+# 2d3, d3, M4, 2d3M4, and d3M4 are all acceptable as well.  Randomized
+# expressions which begin with "-" are currently handled differently in the
+# "values" line than they are elsewhere.  In the "values" line, the leading
+# "-" sets the sign on the base value (i.e. 10 in the example).  On other lines,
+# a leading "-" in the randomized expression means multiply the random result
+# from what follows by negative one.  As a result, something like "-d4" will
+# not work as you want when used for a "values" line.  Use "-5+1d4" instead.
 
 # 'name' indicates the beginning of an entry. The '&' and '~' symbols are use to
 # include articles and pluralization as necessary to ensure
@@ -64,7 +74,11 @@
 # 'type' is for the base type of item, from object_base.txt.
 
 # 'level' defines how "advanced" the object is, when determining how easy it
-# is to use a wand, staff or rod.
+# is to successfully use a wand, staff or rod.  For an item with an activation,
+# it affects the chance of successfully activating the item.  In a similar
+# vein, it affects how likely a wand or staff can be recharged without
+# backfiring.  For a chest, the level affects the types of traps the chest
+# may have.
 
 # 'weight' is in tenth-pounds.
 
@@ -80,7 +94,10 @@
 # 'alloc' is for allocation - frequency and range of levels found. It is used to
 # ensure that certain vital items such as food and recall scrolls
 # are found throughout the dungeon. The "allocation" depth need not
-# match the level as specified in the "level:" line, but is likely similar.
+# match the object's level as specified in the "level:" line, but is likely similar.
+# - commonness: Relative probability weight (higher = more common)
+# - min_level: Earliest dungeon level where this object can appear
+# - max_level: Latest dungeon level where this object can appear
 
 # 'charges' is for charges (wands and staves only).  This field accepts
 # randomized values.
@@ -94,11 +111,28 @@
 # flags: lines may be used as are needed to specify all the flags, and
 # flags are separated by the '|' symbol.
 
-# 'values' is for object modifiers which take a value - stats, slays, brands,
-# resistances and so on.  An example is SLAY_UNDEAD[3], which denotes that
-# the weapon concerned has a basic 3x slay against undead creatures.  Like
-# flags, values are separated by '|' and as many values: lines as needed
-# can be used.
+# 'values' is for properties that take a value.  Valid properties are the
+# object modifiers (as found in list-stats.h and list-object-modifiers.h)
+# or resistances ('RES_' prepended to the element name from list-elements.h).
+# The value appears in brackets after the property name.  For object modifiers,
+# the value can be any random expression.  For resistances, it must be a plain
+# integer value with the useful ones being 1 (resist), 3 (immune), and -1
+# (vulnerable).  Like flags, values are separated by '|' and as many values:
+# lines as needed can be used.
+
+# 'brand' adds a brand to the object.  It should be omitted for objects
+# without brands and may appear more than once for objects with multiple brands.
+# Specify the brand to be added by its code in brand.txt.
+
+# 'slay' adds a slay to the object.  It should be omitted for objects without
+# slays and may appear more than once for objects with multiple slays.  Specify
+# the slay to be added by its code in slay.txt.
+
+# 'curse' adds a curse to the object.  It should be omitted for objects without
+# curses and may appear more than once for objects with multiple curses.  A
+# curse has a name (as given in curse.txt) and a power.  The power is a
+# is a positive integer and indicates how hard it is to remove the curse.  A
+# larger power is more difficult to remove.
 
 # 'power' is used in calculating the power of the object for pricing and 
 # generating random artifacts.  It reflects the power of the effect of the
@@ -108,8 +142,11 @@
 # 'msg' is any message printed on using the object.
 
 # 'effect' is for the effect when an object is eaten, activated or whatever.
-# Fields are the name of the effect (as found in src/list-effects.h) and
-# possibly one or two parameters to the effect.
+# Fields are the name of the effect (as found in src/list-effects.h), the
+# subtype which is either an index or a name (look at effect_subtype()
+# in src/effects.c for more information about the available subtypes), the
+# radius, and the other parameter.  The effect name is required.  The others
+# are optional, and the trailing ones that are unused can be omitted.
 
 # 'effect-yx' is y and x values for an effect if necessary
 
@@ -148,7 +185,7 @@ graphics:*:r
 
 name:<unknown treasure>
 type:none
-graphics:*:o
+graphics:*:w
 
 name:<curse object>
 type:none
@@ -162,7 +199,7 @@ graphics:~:u
 level:1
 weight:22
 cost:2
-alloc:70:1 to 40
+alloc:70:1 to 100
 attack:1d1:0:0
 armor:0:0
 flags:BURNS_OUT | LIGHT_2 | EASY_KNOW
@@ -188,7 +225,7 @@ alloc:50:1 to 100
 attack:1d4:0:0
 armor:0:0
 pval:7500
-flags:EXPLODE
+flags:EXPLODE | THROWING
 desc:It can be used to fuel a lantern with 7500 turns of light, up to
 desc: a maximum of 15000 turns of light.
 desc:  When thrown, it is considered lit, so it does more than nominal
@@ -197,6 +234,61 @@ desc: damage (which occurs even against creatures resistant to fire).
 ##### Food #####
 
 ### Normal Food ###
+
+name:& Hard Biscuit~
+type:food
+graphics:,:U
+level:0
+weight:2
+cost:1
+power:0
+effect:NOURISH:INC_BY
+dice:10
+effect:CRUNCH
+desc:A filling if tooth-breaking biscuit made mostly of rye.
+
+name:& Apple~
+type:food
+graphics:,:R
+level:0
+weight:4
+cost:3
+alloc:40:0 to 20
+pile:10:1d2
+power:0
+msg:That tastes good.
+effect:NOURISH:INC_BY
+dice:10
+desc:Wrinkled, but sound and sweet.
+
+name:& Handful~ of Dried Fruits
+type:food
+graphics:,:u
+level:0
+weight:3
+cost:3
+alloc:40:0 to 50
+power:0
+msg:That tastes good.
+effect:NOURISH:INC_BY
+dice:15
+desc:Fruit roughly chopped and sun-dried, prepared as marching rations for the
+desc: rangers of Ithilien.
+
+name:& Slime Mold~
+type:food
+graphics:,:g
+level:1
+weight:2
+cost:2
+alloc:40:30 to 100
+pile:100:2d3
+power:0
+msg:That tastes better than nothing.
+effect:NOURISH:INC_BY
+dice:15
+desc:A strange fungal growth, prone to moving if not observed.  Not very tasty
+desc: but quite filling.
 
 name:& Ration~ of Food
 type:food
@@ -208,25 +300,68 @@ alloc:40:0 to 50
 pile:100:1d5
 power:0
 msg:That tastes good.
-effect:NOURISH
-dice:6000
-desc:This nutritious but fairly bland food is familiar to anyone contemplating
-desc: long journeys.
+effect:NOURISH:INC_BY
+dice:30
+desc:This nutritious but fairly bland food, called cram by the Lake-men who
+desc: make it is familiar to anyone contemplating long journeys.  It is
+desc: sustaining, but very uninteresting except as a chewing exercise.
 
-name:& Slime Mold~
+name:& Scrap~ of Flesh
 type:food
-graphics:,:g
-level:1
-weight:2
-cost:2
-alloc:40:5 to 60
-pile:100:2d3
+graphics:,:s
+level:0
+weight:5
+cost:0
+alloc:30:50 to 100
+pile:50:1d3
+power:0
+msg:That tastes disgusting.
+effect:RANDOM
+dice:5
+effect:NOURISH:INC_BY
+dice:20
+effect:NOURISH:INC_BY
+dice:20
+effect:NOURISH:INC_BY
+dice:10
+effect:NOURISH:SET_TO
+dice:1d4
+effect:NOURISH:SET_TO
+dice:5+1d4
+desc:A grey-looking piece of dried flesh of you dare not guess what creature.
+desc:  You would have to be desperate to eat this.
+
+
+name:& Slice~ of Meat
+type:food
+graphics:,:W
+level:0
+weight:10
+cost:3
+alloc:30:10 to 50
+pile:50:1d3
 power:0
 msg:That tastes good.
-effect:NOURISH
-dice:2500
-desc:A strange fungal growth, prone to moving if not observed.  Not very tasty
-desc: but quite filling.
+effect:NOURISH:INC_BY
+dice:40
+desc:A thick slice of pork, salted to keep it from spoiling.  It is very
+desc: filling.
+
+name:& Honey-cake~
+type:food
+graphics:,:y
+level:5
+weight:10
+cost:10
+alloc:30:20 to 70
+pile:40:1d3
+power:1
+msg:Delicious!
+effect:NOURISH:INC_TO
+dice:60
+desc:The Beornings are renowned as the best bakers among men, and their
+desc: honey-cakes are deservedly prized.  Made of wheat flour with nuts and
+desc: honey and twice baked, they will sustain you through a long march.
 
 name:& Piece~ of Elvish Waybread
 type:food
@@ -234,29 +369,17 @@ graphics:,:B
 level:5
 weight:3
 cost:10
-alloc:40:30 to 100
+alloc:20:30 to 100
 pile:10:1d3
 power:4
-msg:That tastes good.
-effect:NOURISH
-dice:7500
+msg:That tastes great.
+effect:NOURISH:INC_TO
+dice:75
 effect:CURE:POISONED
 effect:HEAL_HP
-dice:20
+dice:4d8
 desc:Food of the elves is always good; their waybread is no exception.  These
 desc: thin cakes are wrapped in leaves and keep their tastiness for months.
-
-name:& Hard Biscuit~
-type:food
-graphics:,:U
-level:0
-weight:2
-cost:1
-power:0
-effect:NOURISH
-dice:500
-effect:CRUNCH
-desc:A filling if tooth-breaking biscuit made mostly of rye.
 
 name:& Flask~ of Whisky
 type:food
@@ -266,8 +389,8 @@ weight:5
 cost:1
 power:0
 msg:That tastes great!
-effect:NOURISH
-dice:250
+effect:NOURISH:INC_BY
+dice:3
 effect:TIMED_INC:CONFUSED
 dice:-1+1d5
 desc:It raises your spirits.
@@ -280,11 +403,63 @@ weight:10
 cost:2
 power:0
 msg:That tastes great!  A fine vintage.
-effect:NOURISH
-dice:250
+effect:NOURISH:INC_BY
+dice:3
 effect:TIMED_INC:BOLD
 dice:79+1d41
 desc:A fine way to wash down some otherwise unappetising rations.
+
+name:& Sip~ of Miruvor
+type:food
+graphics:,:w
+level:0
+weight:2
+cost:100
+alloc:20:10 to 50
+power:0
+msg:You feel your heart warm.
+effect:NOURISH:INC_BY
+dice:3
+effect:RESTORE_STAT:STR
+effect:RESTORE_STAT:CON
+desc:Just a little of this warm and fragrant liquor gives you fresh hope and
+desc: vigour.
+
+name:& Swig~ of Orcish Liquor
+type:food
+graphics:,:m
+level:0
+weight:2
+cost:1
+alloc:20:20 to 100
+pile:10:1d3
+power:0
+msg:It burns your throat.
+effect:NOURISH:INC_BY
+dice:5
+effect:TIMED_SET:STUN
+dice:2+1d3
+effect:TIMED_SET:SLOW
+dice:2+1d3
+desc:This is a dirty brown color; you don't trust it.
+
+name:& Draught~ of the Ents
+type:food
+graphics:,:w
+level:0
+weight:10
+cost:2000
+alloc:10:60 to 100
+power:0
+msg:Refreshing!
+effect:NOURISH:INC_TO
+dice:60
+effect:RESTORE_STAT:STR
+effect:RESTORE_STAT:CON
+effect:GAIN_STAT:STR
+effect:GAIN_STAT:CON
+desc:This looks like pure water, but its scent reminds you of the smell of a
+desc: distant wood borne from afar by a cool breeze at night.
 
 ### The shrooms, an interesting collection ###
 
@@ -300,8 +475,8 @@ power:10
 effect:CURE:BLIND
 effect:TIMED_INC:TELEPATHY
 dice:50+7d7
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 
 name:Fast Recovery
 type:mushroom
@@ -318,8 +493,8 @@ effect:CURE:STUN
 effect:CURE:CUT
 effect:CURE:POISONED
 effect:CURE:BLIND
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 
 name:Vigor
 type:mushroom
@@ -335,8 +510,8 @@ effect:RESTORE_STAT:INT
 effect:RESTORE_STAT:WIS
 effect:RESTORE_STAT:DEX
 effect:RESTORE_STAT:CON
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 
 name:Clear Mind
 type:mushroom
@@ -354,8 +529,8 @@ effect:CURE:AFRAID
 effect:CURE:IMAGE
 effect:TIMED_INC:OPP_CONF
 dice:50+7d7
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 
 name:Emergency
 type:mushroom
@@ -366,16 +541,16 @@ cost:60
 alloc:10:5 to 100
 pile:70:1d4
 power:7
+effect:SET_VALUE
+dice:25+5d5
 effect:TIMED_INC:IMAGE
-dice:25+5d5
 effect:TIMED_INC:OPP_FIRE
-dice:25+5d5
 effect:TIMED_INC:OPP_COLD
-dice:25+5d5
+effect:CLEAR_VALUE
 effect:HEAL_HP
 dice:200
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 
 name:Terror
 type:mushroom
@@ -388,8 +563,8 @@ pile:70:1d4
 power:5
 effect:TIMED_SET:TERROR
 dice:25+5d5
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 desc:It allows you to run for your life.
 
 name:Stoneskin
@@ -403,8 +578,8 @@ pile:70:1d4
 power:5
 effect:TIMED_SET:STONESKIN
 dice:50+7d7
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 desc:Its poison turns your skin to stone, albeit briefly.
 
 name:Turbulence
@@ -428,8 +603,8 @@ alloc:10:10 to 40
 pile:70:1d4
 power:5
 effect:RESTORE_MANA
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 effect:RANDOM
 dice:2
 effect:DRAIN_STAT:STR
@@ -446,8 +621,8 @@ pile:70:1d4
 power:5
 effect:TIMED_INC:SPRINT
 dice:100
-effect:NOURISH
-dice:500
+effect:NOURISH:INC_BY
+dice:5
 desc:It hastes you for a while, but then makes you slower for a while afterward.
 
 name:Purging
@@ -459,13 +634,28 @@ cost:60
 alloc:1:15 to 100
 pile:70:1d4
 power:5
-effect:SET_NOURISH
-dice:$B
-expr:B:FOOD_FAINT:- 1
+msg:Your stomach heaves.
+effect:NOURISH:SET_TO
+dice:5
 effect:RESTORE_STAT:STR
 effect:RESTORE_STAT:CON
 effect:CURE:POISONED
 desc:It makes you very hungry but otherwise healthy.
+
+name:Shadows
+type:mushroom
+graphics:,:d
+level:0
+weight:1
+cost:300
+alloc:20:50 to 100
+pile:70:1d4
+power:9
+effect:NOURISH:INC_BY
+dice:5
+effect:TIMED_INC:STEALTH
+dice:10+d10
+desc:It makes you very stealthy for a short while.
 
 
 ##### Weapons #####
@@ -481,9 +671,10 @@ cost:30
 alloc:20:0 to 100
 attack:1d4:0:0
 armor:0:0
-desc:A short two-edged blade perfect for thrusting.
+flags:THROWING
+desc:A short two-edged blade perfect for thrusting or throwing.
 
-name:& Main Gauche~
+name:& Main~ Gauche~
 type:sword
 graphics:|:W
 level:3
@@ -492,6 +683,7 @@ cost:45
 alloc:20:3 to 100
 attack:1d5:0:0
 armor:0:0
+desc:A short thrusting blade with a large guard, primarily used in duels.
 
 name:& Rapier~
 type:sword
@@ -502,6 +694,7 @@ cost:70
 alloc:20:5 to 100
 attack:1d6:0:0
 armor:0:0
+desc:A long, thin thrusting blade, mainly used in duels.
 
 name:& Short Sword~
 type:sword
@@ -512,6 +705,7 @@ cost:90
 alloc:20:5 to 100
 attack:1d7:0:0
 armor:0:0
+desc:A short thrusting sword.
 
 name:& Cutlass~
 type:sword
@@ -556,6 +750,8 @@ cost:300
 alloc:20:10 to 100
 attack:2d5:0:0
 armor:0:0
+desc:A long, straight, two-edged blade, with two hand guards projecting out
+desc: from the hilt to form a perfect cross.
 
 name:& Broad Sword~
 type:sword
@@ -566,6 +762,7 @@ cost:300
 alloc:20:10 to 100
 attack:2d5:0:0
 armor:0:0
+desc:A heavy, single-edged sword with a strong grip.
 
 name:& Bastard Sword~
 type:sword
@@ -576,6 +773,8 @@ cost:400
 alloc:20:15 to 100
 attack:3d4:0:0
 armor:0:0
+desc:Also known as the hand-and-a-half blade.  A larger-than-normal straight-
+desc:sided sword with two cutting edges.
 
 name:& Katana~
 type:sword
@@ -586,6 +785,8 @@ cost:600
 alloc:20:20 to 100
 attack:3d5:0:0
 armor:0:0
+desc:A slightly curved long-handled slashing sword with a single-edged
+desc: blade and a chisel tip.
 
 name:& Zweihander~
 type:sword
@@ -607,6 +808,7 @@ cost:850
 alloc:20:40 to 100
 attack:4d5:0:0
 armor:0:0
+desc:A giant, curved blade designed to cleave the head cleanly from the body.
 
 name:& Blade~ of Chaos
 type:sword
@@ -618,6 +820,8 @@ alloc:10:70 to 100
 attack:6d5:0:0
 armor:0:0
 values:RES_CHAOS[1]
+desc:This inconstant weapon revels in disorder, hacking and slashing your foes
+desc: with bloodthirsty glee.
 
 
 
@@ -632,6 +836,8 @@ cost:30
 alloc:20:3 to 100
 attack:1d3:0:0
 armor:0:0
+desc:A heavy whip, this thick coil is thrown from the shoulder and can
+desc: knock down a large man.
 
 name:& Ball-and-Chain~
 type:hafted
@@ -642,6 +848,7 @@ cost:200
 alloc:20:20 to 100
 attack:2d4:0:0
 armor:0:0
+desc:A weighty iron ball, suspended by a chain from a sturdy oaken handle.
 
 name:& Morning Star~
 type:hafted
@@ -652,6 +859,8 @@ cost:396
 alloc:20:10 to 100
 attack:2d6:0:0
 armor:0:0
+desc:A sturdy wooden pole connected by a chain to a ball of steel, which often
+desc: has projecting spikes.
 
 name:& Flail~
 type:hafted
@@ -662,6 +871,8 @@ cost:353
 alloc:20:10 to 100
 attack:2d6:0:0
 armor:0:0
+desc:Two heavy bars of wood connected by a short link of chain, capable of
+desc: delivering crushing blows.
 
 name:& Two-Handed Great Flail~
 type:hafted
@@ -672,6 +883,8 @@ cost:590
 alloc:20:45 to 100
 attack:3d6:0:0
 armor:0:0
+desc:Two great bars of wood connected by a massive chain, needing two hands
+desc: to properly wield.
 
 
 ### Clubs ###
@@ -685,6 +898,7 @@ cost:130
 alloc:20:5 to 100
 attack:2d4:0:0
 armor:0:0
+desc:A war club with an iron head, usually flanged or spiked.
 
 name:& Lead-Filled Mace~
 type:hafted
@@ -695,6 +909,8 @@ cost:502
 alloc:20:15 to 100
 attack:4d3:0:0
 armor:0:0
+desc:A heavy war club topped with a mass of lead-filled steel, capable of
+desc: landing crushing blows.
 
 name:& Quarterstaff~
 type:hafted
@@ -705,6 +921,20 @@ cost:200
 alloc:20:10 to 100
 attack:1d9:0:0
 armor:0:0
+desc:Six feet of oak which can be wielded in both hands to give a drubbing or
+desc: block one.
+
+name:& Throwing Hammer~
+type:hafted
+graphics:\:D
+level:40
+weight:55
+cost:250
+alloc:10:40 to 100
+attack:2d4:0:0
+armor:0:0
+flags:THROWING
+desc:A short-handled iron hammer that can strike hard when thrown.
 
 name:& War Hammer~
 type:hafted
@@ -715,6 +945,7 @@ cost:225
 alloc:20:5 to 100
 attack:3d3:0:0
 armor:0:0
+desc:A mallet with a tapered head and a long handle.
 
 name:& Maul~
 type:hafted
@@ -725,6 +956,7 @@ cost:130
 alloc:20:5 to 100
 attack:4d4:0:0
 armor:0:0
+desc:A long-handled hammer with a heavy head.
 
 name:& Great Hammer~
 type:hafted
@@ -735,6 +967,7 @@ cost:500
 alloc:20:20 to 100
 attack:8d1:0:0
 armor:0:0
+desc:A mighty hammer with a massive head designed to crush and stun.
 
 name:& Mace~ of Disruption
 type:hafted
@@ -746,6 +979,8 @@ alloc:10:80 to 100
 attack:5d8:0:0
 armor:0:0
 slay:UNDEAD_3
+desc:A giant's weapon, enchanted with shattering power that breaks bones,
+desc: bodies, and spirit.
 
 
 
@@ -760,6 +995,9 @@ cost:36
 alloc:20:5 to 100
 attack:1d6:0:0
 armor:0:0
+flags:THROWING
+desc:The basic polearm, with a double-edged knife mounted on a light shaft.
+desc:  This weapon can be thrown effectively.
 
 name:& Awl-Pike~
 type:polearm
@@ -770,6 +1008,9 @@ cost:340
 alloc:20:10 to 100
 attack:1d8:0:0
 armor:0:0
+desc:A more robust version of the basic polearm, with a double-edged knife
+desc: mounted on a sturdy shaft.  It cannot be thrown effectively, but offers
+desc: some protection to the wielder.
 
 name:& Trident~
 type:polearm
@@ -780,6 +1021,7 @@ cost:120
 alloc:20:5 to 100
 attack:1d10:0:0
 armor:0:0
+desc:A three-pronged spear, originally for catching fish.
 
 name:& Halberd~
 type:polearm
@@ -790,6 +1032,9 @@ cost:430
 alloc:20:25 to 100
 attack:3d5:0:0
 armor:0:0
+desc:The most successful of the polearms, the halberd has a long haft mounted
+desc: with a heavy axe blade and opposing spike, and topped by a thrusting
+desc: spine.
 
 name:& Pike~
 type:polearm
@@ -800,9 +1045,24 @@ cost:358
 alloc:20:15 to 100
 attack:2d5:0:0
 armor:0:0
+desc:A fifteen foot spear, requiring two hands to wield, principally used in
+desc: infantry formations.
 
 
 ### Axes ###
+
+name:& Throwing Axe~
+type:polearm
+graphics:/:s
+level:25
+weight:40
+cost:150
+alloc:10:25 to 100
+attack:2d3:0:0
+armor:0:0
+flags:THROWING
+desc:A short-handled hatchet, balanced for throwing.  A classic skirmisher's
+desc: weapon.
 
 name:& Beaked Axe~
 type:polearm
@@ -813,6 +1073,7 @@ cost:408
 alloc:20:15 to 100
 attack:2d6:0:0
 armor:0:0
+desc:A narrow axe head opposed by a crow's beak for penetrating armour.
 
 name:& Broad Axe~
 type:polearm
@@ -823,6 +1084,7 @@ cost:304
 alloc:20:15 to 100
 attack:2d6:0:0
 armor:0:0
+desc:A simple, single-bladed war axe capable of chopping though limbs or armour.
 
 name:& Battle Axe~
 type:polearm
@@ -833,6 +1095,7 @@ cost:334
 alloc:20:15 to 100
 attack:2d8:0:0
 armor:0:0
+desc:A double-bladed axe.  Very popular among Dwarves.
 
 name:& Lochaber Axe~
 type:polearm
@@ -843,6 +1106,7 @@ cost:750
 alloc:20:45 to 100
 attack:3d8:0:0
 armor:0:0
+desc:A long shaft with a long narrow blade.
 
 name:& Great Axe~
 type:polearm
@@ -853,6 +1117,8 @@ cost:500
 alloc:20:40 to 100
 attack:4d4:0:0
 armor:0:0
+desc:An enormous two-handed battle axe, carried by Dwarven champions, who
+desc: compete to see who can cleave the most orc heads.
 
 
 ### Other misc polearms ###
@@ -866,6 +1132,8 @@ cost:800
 alloc:20:45 to 100
 attack:5d3:0:0
 armor:0:0
+desc:The long crescent blade stands out from the handle of this
+desc: polearm, and it is swung with two hands to harvest grain or blood.
 
 name:& Glaive~
 type:polearm
@@ -876,6 +1144,8 @@ cost:363
 alloc:20:20 to 100
 attack:2d6:0:0
 armor:0:0
+desc:A reinforced wooden pole eight feet long, topped by a massive knife blade
+desc: that can be used to thrust or chop.
 
 name:& Lance~
 type:polearm
@@ -886,6 +1156,7 @@ cost:230
 alloc:20:10 to 100
 attack:2d8:0:0
 armor:0:0
+desc:A massive, tapered spear used primarily from horseback.
 
 name:& Scythe~ of Slicing
 type:polearm
@@ -896,6 +1167,8 @@ cost:3500
 alloc:10:60 to 100
 attack:8d4:0:0
 armor:0:0
+desc:A reaper's weapon, the long blade almost hums in anticipation of
+desc: the blood it will spill.
 
 name:& Lucerne Hammer~
 type:polearm
@@ -906,7 +1179,7 @@ cost:376
 alloc:20:10 to 100
 attack:2d5:0:0
 armor:0:0
-
+desc:A long pole with a three- or four-pronged head balanced by a long spike.
 
 
 ##### Bows, Crossbows, Slings #####
@@ -920,6 +1193,8 @@ cost:5
 alloc:20:1 to 100
 flags:SHOOTS_SHOTS
 pval:2
+desc:A loop of leather and cords able to hurl stones or shot with
+desc: tremendous velocity.
 
 name:& Short Bow~
 type:bow
@@ -930,6 +1205,7 @@ cost:50
 alloc:20:3 to 100
 flags:SHOOTS_ARROWS
 pval:2
+desc:The traditional hunter's weapon, this light bow is easily drawn.
 
 name:& Long Bow~
 type:bow
@@ -940,6 +1216,8 @@ cost:120
 alloc:20:10 to 100
 flags:SHOOTS_ARROWS
 pval:3
+desc:As tall as a man, the longbow can drive an arrow through the
+desc: heaviest armour.
 
 name:& Light Crossbow~
 type:bow
@@ -950,6 +1228,8 @@ cost:140
 alloc:20:15 to 100
 flags:SHOOTS_BOLTS
 pval:3
+desc:A mechanical bow made of wood, it is cocked to augment the strength
+desc: of its wielder.
 
 name:& Heavy Crossbow~
 type:bow
@@ -960,6 +1240,8 @@ cost:300
 alloc:20:30 to 100
 flags:SHOOTS_BOLTS
 pval:4
+desc:This arbalest is so powerful it has to be reinforced with metal and
+desc: requires a crank to be cocked.
 
 
 ##### Missiles #####
@@ -992,7 +1274,7 @@ name:& Mithril Arrow~
 type:arrow
 graphics:{:B
 level:55
-weight:2
+weight:1
 cost:25
 pile:100:7d7
 alloc:20:50 to 100
@@ -1050,7 +1332,9 @@ pile:100:5d7
 alloc:30:0 to 100
 attack:1d2:0:0
 armor:0:0
-desc:It can be shot with a sling.
+flags:THROWING
+desc:It can be shot with a sling or thrown.
+
 
 name:& Iron Shot~
 type:shot
@@ -1062,20 +1346,22 @@ pile:100:5d7
 alloc:25:3 to 100
 attack:1d4:0:0
 armor:0:0
-desc:It can be shot with a sling.
+flags:THROWING
+desc:It can be shot with a sling or thrown.
 
 name:& Mithril Shot~
 type:shot
 graphics:{:B
 level:40
-weight:4
+weight:2
 cost:20
 pile:100:5d7
 alloc:20:40 to 100
 attack:2d4:5:5
 armor:0:0
-flags:IGNORE_ACID
-desc:It can be shot with a sling.
+flags:THROWING
+flags:IGNORE_ACID | IGNORE_FIRE
+desc:It can be shot with a sling or thrown.
 
 
 ##### Digging Tools #####
@@ -1090,6 +1376,7 @@ alloc:20:5 to 100
 attack:1d2:0:0
 armor:0:0
 flags:DIG_1
+desc:A compact and sturdy spade.
 
 name:& Pick~
 type:digger
@@ -1101,6 +1388,8 @@ alloc:20:30 to 100
 attack:1d3:0:0
 armor:0:0
 flags:DIG_2
+desc:A heavy mining tool with a long, slightly curved head that tapers
+desc: to chisel points on both ends.
 
 name:& Mattock~
 type:digger
@@ -1112,6 +1401,8 @@ alloc:20:50 to 100
 attack:1d8:0:0
 armor:0:0
 flags:DIG_3
+desc:A digging tool with a broad horizontal blade balanced by a smaller
+desc: vertical blade.  Used as a weapon of war by dwarves.
 
 
 ##### Armor #####
@@ -1127,8 +1418,8 @@ cost:4
 alloc:20:1 to 100
 attack:1d1:0:0
 armor:1:0
-desc:A set of open-topped footgear with soft calfskin lacings and a sturdy 
-desc:cured leather base.
+desc:A set of open-topped footgear with soft calfskin lacings and a sturdy
+desc: cured leather base.
 
 name:& Pair~ of Leather Boots
 type:boots
@@ -1139,6 +1430,7 @@ cost:7
 alloc:20:3 to 100
 attack:1d1:0:0
 armor:2:0
+desc:These are calf-high boots of flexible leather, laced from heel to calf.
 
 name:& Pair~ of Iron Shod Boots
 type:boots
@@ -1150,6 +1442,8 @@ alloc:20:5 to 100
 attack:1d1:0:0
 armor:4:0
 flags:IGNORE_FIRE
+desc:A set of sturdy leather boots strengthened with iron that will last
+desc: many weary miles.
 
 name:& Pair~ of Steel Shod Boots
 type:boots
@@ -1161,6 +1455,8 @@ alloc:20:20 to 100
 attack:1d1:0:0
 armor:7:0
 flags:IGNORE_FIRE
+desc:A set of double-lined leather boots, with toes and heels reinforced with
+desc: steel.
 
 name:& Pair~ of Mithril Shod Boots
 type:boots
@@ -1172,6 +1468,8 @@ alloc:20:60 to 100
 attack:1d1:0:0
 armor:8:0
 flags:IGNORE_ACID | IGNORE_FIRE
+desc:The enduring dwarves make the finest footgear known, and they march in it
+desc: for endless miles without wearying.
 
 name:& Pair~ of Ethereal Slippers
 type:boots
@@ -1183,7 +1481,7 @@ alloc:10:30 to 100
 attack:0d0:0:0
 armor:0:0
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD 
-
+desc:Fine quality elvish slippers, hard-wearing but apparently weightless.
 
 
 ### Headgear ###
@@ -1197,6 +1495,7 @@ cost:12
 alloc:20:3 to 100
 attack:0d0:0:0
 armor:2:0
+desc:A padded skullcap of boiled leather.
 
 name:& Metal Cap~
 type:helm
@@ -1207,6 +1506,7 @@ cost:30
 alloc:20:10 to 100
 attack:1d1:0:0
 armor:3:0
+desc:A pot-helm of steel that protects the skull.
 
 name:& Iron Helm~
 type:helm
@@ -1217,6 +1517,7 @@ cost:75
 alloc:20:20 to 100
 attack:1d3:0:0
 armor:7:0
+desc:A mighty helmet of heavy iron, completely enclosing the head.
 
 name:& Steel Helm~
 type:helm
@@ -1227,6 +1528,8 @@ cost:200
 alloc:20:40 to 100
 attack:1d3:0:0
 armor:9:0
+desc:This great helm covers the head and shoulders with plates of steel and a
+desc: curtain of mail.
 
 name:& Iron Crown~
 type:crown
@@ -1237,6 +1540,8 @@ cost:500
 alloc:20:45 to 100
 attack:1d1:0:0
 armor:0:0
+desc:A plain band of iron, crowned with iron spikes.  It is a tyrant's
+desc: symbol.
 
 name:& Golden Crown~
 type:crown
@@ -1248,6 +1553,8 @@ alloc:10:45 to 100
 attack:1d1:0:0
 armor:0:0
 flags:IGNORE_ACID
+desc:An elegant golden circlet, with slender spines thrusting upward.
+desc:  It looks like it should be resting over the brow of a king.
 
 name:& Jewel Encrusted Crown~
 type:crown
@@ -1259,6 +1566,8 @@ alloc:10:50 to 100
 attack:1d1:0:0
 armor:0:0
 flags:IGNORE_ACID
+desc:An elaboratedly decorated crown of massive gold, studded with a rainbow
+desc: of gems and jewels; worthy of a High King.
 
 
 ### Body armours ###
@@ -1272,6 +1581,7 @@ cost:4
 alloc:20:1 to 100
 attack:0d0:0:0
 armor:2:0
+desc:A practical garment of thick wool or velvet, draping from neck to heels.
 
 name:Soft Leather Armour~
 type:soft armor
@@ -1282,6 +1592,7 @@ cost:20
 alloc:20:3 to 100
 attack:0d0:0:0
 armor:8:0
+desc:A cuirass of pliable leather, with a thicker leather jack.
 
 name:Studded Leather Armour~
 type:soft armor
@@ -1292,6 +1603,7 @@ cost:100
 alloc:20:5 to 100
 attack:1d1:-1:0
 armor:12:0
+desc:A cuirass of pliable leather studded with metal rivets.
 
 name:Hard Leather Armour~
 type:soft armor
@@ -1302,6 +1614,7 @@ cost:150
 alloc:20:10 to 100
 attack:1d2:-1:0
 armor:16:0
+desc:A boiled leather cuirass and shoulder plates.
 
 name:Leather Scale Mail~
 type:soft armor
@@ -1312,6 +1625,8 @@ cost:370
 alloc:20:15 to 100
 attack:1d1:-1:0
 armor:20:0
+desc:A tunic and skirt sewn with thick, overlapping scales of hardened
+desc: leather.
 
 name:Metal Scale Mail~
 type:hard armor
@@ -1322,6 +1637,8 @@ cost:550
 alloc:20:25 to 100
 attack:1d4:-2:0
 armor:38:0
+desc:A heavy shirt of overlapping steel scales backed by leather, with
+desc: matching skirt and sleeves.
 
 name:Chain Mail~
 type:hard armor
@@ -1332,6 +1649,8 @@ cost:750
 alloc:20:20 to 100
 attack:1d4:-2:0
 armor:32:0
+desc:A hauberk, leggings, and sleeves of interlocking steel rings, well padded
+desc: with leather.
 
 name:Augmented Chain Mail~
 type:hard armor
@@ -1342,6 +1661,9 @@ cost:900
 alloc:20:35 to 100
 attack:1d4:-2:0
 armor:42:0
+desc:A hauberk, leggings, and sleeves of interlocking steel rings,
+desc: strategically reinforced at vital locations with a second layer
+desc: of chain, all over a layer of heavy padding.
 
 name:Bar Chain Mail~
 type:hard armor
@@ -1352,6 +1674,9 @@ cost:950
 alloc:20:40 to 100
 attack:1d4:-2:0
 armor:45:0
+desc:A hauberk, leggings, and sleeves of interlocking steel rings,
+desc: reinforced around the shoulders with segmented plates of steel,
+desc: all over a layer of heavy padding.
 
 name:Metal Brigandine Armour~
 type:hard armor
@@ -1362,6 +1687,9 @@ cost:1100
 alloc:20:45 to 100
 attack:1d4:-3:0
 armor:48:0
+desc:A stiff suit of armour composed of small metal plates sewn to an
+desc: inner layer of heavy canvas, and covered with a second layer of
+desc: cloth.
 
 name:Partial Plate Armour~
 type:hard armor
@@ -1372,6 +1700,7 @@ cost:1200
 alloc:20:30 to 100
 attack:1d6:-3:0
 armor:40:0
+desc:A steel corselet and vambraces over a skirt and leggings of chain.
 
 name:Metal Lamellar Armour~
 type:hard armor
@@ -1382,6 +1711,8 @@ cost:1250
 alloc:20:50 to 100
 attack:1d6:-3:0
 armor:58:0
+desc:This unusual armour is a surprisingly light suit of laced and
+desc: overlapping metal plates.
 
 name:Full Plate Armour~
 type:hard armor
@@ -1392,6 +1723,8 @@ cost:1350
 alloc:15:55 to 100
 attack:2d4:-3:0
 armor:62:0
+desc:A full suit of carefully fitted plates, with hinged joints backed
+desc: by chain, and light padding underneath.
 
 name:Ribbed Plate Armour~
 type:hard armor
@@ -1402,6 +1735,8 @@ cost:1500
 alloc:15:60 to 100
 attack:2d4:-3:0
 armor:66:0
+desc:A full suit of finely fitted metal armour consisting of steel plates
+desc: with reinforced ridging.
 
 name:Mithril Chain Mail~
 type:hard armor
@@ -1413,6 +1748,7 @@ alloc:10:55 to 100
 attack:1d4:-1:0
 armor:28:0
 flags:IGNORE_ACID
+desc:This wondrous suit of fine-linked chain shimmers as though of pure silver.
 
 name:Mithril Plate Mail~
 type:hard armor
@@ -1424,6 +1760,8 @@ alloc:10:65 to 100
 attack:2d4:-3:0
 armor:60:0
 flags:IGNORE_ACID
+desc:A shimmering suit of true-silver, forged long ago by dwarven smiths of
+desc: legend.  It gleams with purest white as you gaze upon it.
 
 name:Adamantite Plate Mail~
 type:hard armor
@@ -1435,6 +1773,7 @@ alloc:10:75 to 100
 attack:2d4:-4:0
 armor:80:0
 flags:IGNORE_ACID
+desc:An exquisite suit of nearly impenetrable adamantite.
 
 ### Cloaks ###
 
@@ -1470,8 +1809,8 @@ alloc:8:40 to 100
 attack:0d0:0:0
 armor:6:0
 values:STEALTH[1] | SPEED[1]
-desc:A mantle made of curious silken material by the Galadrim that wondrously 
-desc:takes on the hues and shapes of its surroundings.
+desc:A mantle made of curious silken material by the Galadrim that wondrously
+desc: takes on the hues and shapes of its surroundings.
 
 name:& Ethereal Cloak~
 type:cloak
@@ -1483,8 +1822,8 @@ alloc:10:70 to 100
 attack:0d0:0:0
 armor:0:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD 
-desc:This unearthly, completely transparent body mantle folds and drapes in 
-desc:iridescent patterns around you.  It weighs absolutely nothing.
+desc:This unearthly, completely transparent body mantle folds and drapes in
+desc: iridescent patterns around you.  It weighs absolutely nothing.
 
 
 ### Gloves ###
@@ -1498,6 +1837,7 @@ cost:5
 alloc:20:1 to 100
 attack:0d0:0:0
 armor:1:0
+desc:Leather hand protection, with an open palm for gripping weapons.
 
 name:& Set~ of Gauntlets
 type:gloves
@@ -1508,17 +1848,19 @@ cost:45
 alloc:20:10 to 100
 attack:1d1:0:0
 armor:3:0
+desc:A set of gloves that completely covers the hand and wrist in steel plating.
 
 name:& Set~ of Mithril Gauntlets
 type:gloves
 graphics:]:B
 level:0
-weight:25
+weight:15
 cost:700
 alloc:20:40 to 100
 attack:1d1:0:0
 armor:6:0
 flags:IGNORE_ACID | IGNORE_FIRE
+desc:A set of gauntlets wrought of light, shining mithril.
 
 name:& Set~ of Caestus
 type:gloves
@@ -1540,9 +1882,8 @@ weight:5
 cost:500
 alloc:10:50 to 100
 attack:1d1:0:0
-armor:0:2
+armor:0:5+d5
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
-flags:SPELLS_OK
 desc:Highly protective gloves designed for an alchemist's elemental magics.
 
 #N:179:& Set~ of Mining Gloves
@@ -1584,6 +1925,7 @@ cost:80
 alloc:20:15 to 100
 attack:1d2:0:0
 armor:5:0
+desc:A round shield of wood reinforced with metal rims and central disk.
 
 name:& Leather Shield~
 type:shield
@@ -1594,6 +1936,8 @@ cost:200
 alloc:20:10 to 100
 attack:1d3:0:0
 armor:8:0
+desc:A large oval shield made of layered wooden strips with a thick leather
+desc: covering.
 
 name:& Large Metal Shield~
 type:shield
@@ -1604,6 +1948,20 @@ cost:500
 alloc:20:30 to 100
 attack:1d5:0:0
 armor:12:0
+desc:An oval shield of wood covered by leather and rimmed with metal.  A large
+desc: iron shield boss offers excellent hand protection.
+
+name:& Knight's Shield~
+type:shield
+graphics:):W
+level:50
+weight:160
+cost:750
+alloc:10:50 to 100
+attack:1d6:0:0
+armor:15:0
+desc:A kite-shaped shield with rounded corners that covers the wearer from
+desc: chest to toe, emblazoned with heraldic symbols.
 
 name:& Mithril Shield~
 type:shield
@@ -1615,6 +1973,7 @@ alloc:10:70 to 100
 attack:1d4:0:0
 armor:16:10
 flags:IGNORE_ACID
+desc:A shield of purest white, made of mithril.
 
 
 
@@ -1739,7 +2098,7 @@ values:SEARCH[1+M5] | LIGHT[1] | RES_LIGHT[1]
 name:Flames
 type:ring
 graphics:=:d
-level:50
+level:30
 weight:2
 cost:500
 alloc:20:20 to 100
@@ -1757,7 +2116,7 @@ time:50+d50
 name:Acid
 type:ring
 graphics:=:d
-level:50
+level:25
 weight:2
 cost:500
 alloc:20:20 to 100
@@ -1775,7 +2134,7 @@ time:50+d50
 name:Ice
 type:ring
 graphics:=:d
-level:50
+level:28
 weight:2
 cost:500
 alloc:20:20 to 100
@@ -1793,7 +2152,7 @@ time:50+d50
 name:Lightning
 type:ring
 graphics:=:d
-level:50
+level:32
 weight:2
 cost:500
 alloc:20:20 to 100
@@ -1881,12 +2240,12 @@ armor:0:-8+4d3
 name:Open Wounds
 type:ring
 graphics:=:d
-level:0
+level:5
 weight:2
 cost:700
 alloc:20:10 to 50
 flags:IMPAIR_HP | EASY_KNOW
-power:6
+power:25
 effect:HEAL_HP
 dice:40
 effect:CURE:BLIND
@@ -1902,7 +2261,7 @@ weight:2
 cost:4000
 alloc:50:15 to 80
 flags:AFRAID | EASY_KNOW
-values:SPEED[4]
+values:SPEED[2]
 
 name:the Mouse
 type:ring
@@ -2232,7 +2591,9 @@ cost:70
 alloc:50:0 to 70
 pile:40:1d5
 power:6
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -2435,7 +2796,7 @@ effect:MASS_BANISH
 
 ### Utility ###
 
-name:Satisfy Hunger
+name:Remove Hunger
 type:scroll
 graphics:?:w
 level:5
@@ -2444,8 +2805,8 @@ cost:10
 alloc:60:5 to 100
 pile:100:2d3
 power:7
-effect:SET_NOURISH
-dice:16000
+effect:NOURISH:INC_TO
+dice:50
 
 name:Light
 type:scroll
@@ -2457,7 +2818,7 @@ alloc:50:0 to 60
 pile:35:2d3
 power:4
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:2
+effect:SPHERE:LIGHT_WEAK:2
 dice:2d8
 
 name:Word of Recall
@@ -2640,7 +3001,7 @@ alloc:10:1 to 70
 pile:70:1d3
 power:0
 effect:DARKEN_AREA
-effect:BALL:DARK_WEAK:3
+effect:SPHERE:DARK_WEAK:3
 dice:10
 
 name:Trap Creation
@@ -2772,8 +3133,8 @@ effect:TIMED_DEC:CUT
 dice:20
 effect:TIMED_DEC:CONFUSED
 dice:20
-effect:NOURISH
-dice:150
+effect:NOURISH:INC_BY
+dice:1
 
 name:Cure Serious Wounds
 type:potion
@@ -2789,8 +3150,8 @@ dice:40
 effect:CURE:BLIND
 effect:CURE:CUT
 effect:CURE:CONFUSED
-effect:NOURISH
-dice:150
+effect:NOURISH:INC_BY
+dice:1
 
 name:Cure Critical Wounds
 type:potion
@@ -2809,8 +3170,8 @@ effect:CURE:POISONED
 effect:CURE:STUN
 effect:CURE:AMNESIA
 effect:CURE:CONFUSED
-effect:NOURISH
-dice:150
+effect:NOURISH:INC_BY
+dice:1
 
 name:Healing
 type:potion
@@ -2829,8 +3190,8 @@ effect:CURE:POISONED
 effect:CURE:STUN
 effect:CURE:AMNESIA
 effect:CURE:CONFUSED
-effect:NOURISH
-dice:200
+effect:NOURISH:INC_BY
+dice:1
 
 name:*Healing*
 type:potion
@@ -2850,8 +3211,6 @@ effect:CURE:POISONED
 effect:CURE:STUN
 effect:CURE:AMNESIA
 effect:CURE:CONFUSED
-effect:NOURISH
-dice:300
 
 name:Life
 type:potion
@@ -3017,6 +3376,8 @@ effect:RESTORE_STAT:INT
 effect:GAIN_STAT:INT
 effect:RESTORE_STAT:WIS
 effect:GAIN_STAT:WIS
+effect:DETECT_ORE
+effect-yx:22:40
 effect:DETECT_GOLD
 effect-yx:22:40
 effect:DETECT_OBJECTS
@@ -3061,10 +3422,10 @@ type:potion
 graphics:!:d
 level:3
 weight:4
-cost:100
+cost:80
 alloc:40:3 to 100
 pile:25:2
-power:9
+power:8
 effect:HEAL_HP
 dice:30
 effect:CURE:AFRAID
@@ -3156,8 +3517,8 @@ cost:2
 alloc:10:1 to 10
 pile:70:2d3
 power:0
-effect:NOURISH
-dice:1000
+effect:NOURISH:INC_BY
+dice:10
 
 name:Sleep
 type:potion
@@ -3172,8 +3533,8 @@ armor:0:0
 power:0
 effect:TIMED_INC:PARALYZED
 dice:5+1d5
-effect:NOURISH
-dice:100
+effect:NOURISH:INC_BY
+dice:1
 
 name:Blindness
 type:potion
@@ -3202,8 +3563,8 @@ armor:0:0
 power:0
 effect:TIMED_INC:CONFUSED
 dice:10+4d5
-effect:NOURISH
-dice:50
+effect:NOURISH:INC_BY
+dice:1
 
 name:Poison
 type:potion
@@ -3232,10 +3593,10 @@ armor:0:0
 power:0
 effect:TIMED_INC:SLOW
 dice:15+1d25
-effect:NOURISH
-dice:50
+effect:NOURISH:INC_BY
+dice:1
 
-name:Lose Memories
+name:Surprise
 type:potion
 graphics:!:d
 level:10
@@ -3244,7 +3605,15 @@ cost:0
 alloc:10:10 to 15
 pile:25:2
 power:0
-effect:LOSE_EXP
+effect:RANDOM
+dice:5
+effect:TIMED_INC:SCRAMBLE
+dice:20+1d20
+effect:SHAPECHANGE:bat
+effect:DRAIN_STAT:INT
+effect:DRAIN_STAT:WIS
+effect:TIMED_INC:STONESKIN
+dice:20+1d20
 
 name:Salt Water
 type:potion
@@ -3254,11 +3623,10 @@ weight:4
 cost:0
 alloc:10:3 to 15
 pile:100:1d2
-msg:The potion makes you vomit!
 power:0
-effect:SET_NOURISH
-dice:$B
-expr:B:FOOD_STARVE:- 1
+msg:The potion makes you queasy.
+effect:NOURISH:SET_TO
+dice:2
 effect:CURE:POISONED
 effect:TIMED_INC_NO_RES:PARALYZED
 dice:4
@@ -3276,7 +3644,7 @@ pile:100:1d2
 alloc:20:40 to 100
 pile:70:1d3
 power:8
-effect:RANDOM
+effect:SELECT
 dice:2
 effect:BREATH:FIRE:0:20
 dice:80
@@ -3409,7 +3777,7 @@ dice:100
 name:Fire Balls
 type:wand
 graphics:-:d
-level:50
+level:55
 weight:10
 cost:1800
 alloc:20:50 to 100
@@ -3442,7 +3810,7 @@ dice:120
 name:Slow Monster
 type:wand
 graphics:-:d
-level:5
+level:15
 weight:10
 cost:500
 alloc:20:5 to 100
@@ -3522,7 +3890,7 @@ alloc:20:3 to 60
 attack:1d1:0:0
 armor:0:0
 charges:6+d10
-msg:A line of shimmering blue light appears.
+vis-msg:A line of shimmering blue light appears.
 power:6
 effect:LINE:LIGHT_WEAK
 dice:6d8
@@ -3556,18 +3924,19 @@ effect:BOLT_AWARE:MON_POLY
 dice:$B
 expr:B:PLAYER_LEVEL:+ 0
 
-name:Door Destruction
+name:Darkness
 type:wand
 graphics:-:d
-level:10
+level:3
 weight:10
 cost:100
-alloc:20:10 to 60
+alloc:20:3 to 60
 attack:1d1:0:0
 armor:0:0
-charges:6+d8
-power:5
-effect:ALTER:KILL_DOOR
+charges:6+d10
+power:4
+effect:LINE:DARK_WEAK
+dice:6d8
 
 name:Clone Monster
 type:wand
@@ -3633,7 +4002,7 @@ expr:B:PLAYER_LEVEL:/ 5
 name:Dragon's Flame
 type:wand
 graphics:-:d
-level:50
+level:55
 weight:10
 cost:2400
 alloc:20:50 to 100
@@ -3642,7 +4011,7 @@ armor:0:0
 charges:1+d3
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 power:13
-effect:BREATH:FIRE:0:30
+effect:ARC:FIRE:0:30
 dice:200
 
 name:Dragon's Frost
@@ -3657,7 +4026,7 @@ armor:0:0
 charges:1+d3
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 power:12
-effect:BREATH:COLD:0:30
+effect:ARC:COLD:0:30
 dice:160
 
 name:Dragon's Breath
@@ -3672,17 +4041,17 @@ armor:0:0
 charges:1+d3
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 power:12
-effect:RANDOM
+effect:SELECT
 dice:5
-effect:BREATH:ACID:0:30
+effect:ARC:ACID:0:30
 dice:160
-effect:BREATH:ELEC:0:30
+effect:ARC:ELEC:0:30
 dice:160
-effect:BREATH:FIRE:0:30
+effect:ARC:FIRE:0:30
 dice:160
-effect:BREATH:COLD:0:30
+effect:ARC:COLD:0:30
 dice:160
-effect:BREATH:POIS:0:30
+effect:ARC:POIS:0:30
 dice:160
 
 
@@ -3795,7 +4164,7 @@ armor:0:0
 charges:8+d8
 power:0
 effect:DARKEN_AREA
-effect:BALL:DARK_WEAK:3
+effect:SPHERE:DARK_WEAK:3
 dice:10
 
 ### Destruction ###
@@ -3845,7 +4214,7 @@ dice:5+1d5
 name:Slow Monsters
 type:staff
 graphics:_:d
-level:10
+level:20
 weight:50
 cost:800
 alloc:20:10 to 100
@@ -4063,7 +4432,7 @@ armor:0:0
 charges:8+d20
 power:4
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:2
+effect:SPHERE:LIGHT_WEAK:2
 dice:2d8
 
 name:Starlight
@@ -4077,7 +4446,7 @@ attack:1d2:0:0
 armor:0:0
 charges:6+d5
 power:5
-effect:STAR:LIGHT_WEAK
+effect:STAR:LIGHT
 dice:6d8
 
 name:Teleportation
@@ -4113,14 +4482,14 @@ type:staff
 graphics:_:d
 level:40
 weight:50
-cost:500
+cost:1500
 alloc:20:40 to 100
 attack:1d2:0:0
 armor:0:0
 charges:4+d3
-power:8
+power:13
 effect:REMOVE_CURSE
-dice:20+d20
+dice:35+d30
 
 name:the Magi
 type:staff
@@ -4145,12 +4514,14 @@ effect:RESTORE_MANA
 name:Treasure Location
 type:rod
 graphics:-:d
-level:5
+level:10
 weight:15
 cost:1000
 alloc:30:8 to 75
 power:6
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -4167,7 +4538,9 @@ attack:1d1:0:0
 armor:0:0
 flags:IGNORE_ELEC
 power:10
-effect:DETECT_GOLD
+effect:DETECT_ORE
+effect-yx:22:40
+effect:SENSE_GOLD
 effect-yx:22:40
 effect:SENSE_OBJECTS
 effect-yx:22:40
@@ -4180,7 +4553,7 @@ time:100
 name:Magic Mapping
 type:rod
 graphics:-:d
-level:65
+level:35
 weight:15
 cost:2000
 alloc:30:35 to 100
@@ -4194,7 +4567,7 @@ time:100
 name:Probing
 type:rod
 graphics:-:d
-level:35
+level:30
 weight:15
 cost:1000
 alloc:20:35 to 100
@@ -4210,7 +4583,7 @@ time:100
 name:Fire Bolts
 type:rod
 graphics:-:d
-level:30
+level:35
 weight:15
 cost:3000
 alloc:20:30 to 80
@@ -4329,7 +4702,7 @@ time:27
 name:Slow Monster
 type:rod
 graphics:-:d
-level:30
+level:40
 weight:15
 cost:1500
 alloc:20:30 to 100
@@ -4360,7 +4733,7 @@ time:40
 name:Curing
 type:rod
 graphics:-:d
-level:65
+level:40
 weight:15
 cost:1000
 alloc:20:10 to 80
@@ -4445,7 +4818,7 @@ time:23
 name:Teleport Other
 type:rod
 graphics:-:d
-level:45
+level:35
 weight:15
 cost:5000
 alloc:20:45 to 100
@@ -4479,7 +4852,7 @@ cost:500
 alloc:30:5 to 100
 attack:1d1:0:0
 armor:0:0
-msg:A line of shimmering blue light appears.
+vis-msg:A line of shimmering blue light appears.
 power:6
 effect:LINE:LIGHT_WEAK
 dice:6d8
@@ -4496,7 +4869,7 @@ attack:1d1:0:0
 armor:0:0
 power:4
 effect:LIGHT_AREA
-effect:SPOT:LIGHT_WEAK:2
+effect:SPHERE:LIGHT_WEAK:2
 dice:2d8
 time:30
 
@@ -4517,7 +4890,7 @@ time:60
 name:Speed
 type:rod
 graphics:-:d
-level:95
+level:55
 weight:15
 cost:25000
 alloc:10:80 to 100
@@ -4540,7 +4913,7 @@ graphics:~:s
 level:5
 weight:250
 cost:20
-alloc:5:5 to 100
+alloc:15:5 to 100
 attack:2d3:0:0
 armor:0:0
 
@@ -4550,7 +4923,7 @@ graphics:~:s
 level:15
 weight:500
 cost:60
-alloc:5:15 to 100
+alloc:10:15 to 100
 attack:2d5:0:0
 armor:0:0
 
@@ -4560,7 +4933,7 @@ graphics:~:s
 level:25
 weight:300
 cost:100
-alloc:5:25 to 100
+alloc:15:25 to 100
 attack:2d4:0:0
 armor:0:0
 
@@ -4570,7 +4943,7 @@ graphics:~:s
 level:35
 weight:1000
 cost:150
-alloc:5:35 to 100
+alloc:10:35 to 100
 attack:2d6:0:0
 armor:0:0
 
@@ -4580,7 +4953,7 @@ graphics:~:s
 level:45
 weight:500
 cost:200
-alloc:5:45 to 100
+alloc:15:45 to 100
 attack:2d4:0:0
 armor:0:0
 
@@ -4590,7 +4963,7 @@ graphics:~:s
 level:55
 weight:1000
 cost:250
-alloc:5:55 to 100
+alloc:10:55 to 100
 attack:2d6:0:0
 armor:0:0
 
@@ -4601,7 +4974,7 @@ armor:0:0
 name:Black Dragon Scale Mail~
 type:dragon armor
 graphics:[:s
-level:50
+level:27
 weight:120
 cost:40000
 alloc:8:35 to 100
@@ -4613,11 +4986,12 @@ power:11
 effect:BREATH:ACID:0:20
 dice:120
 time:50
+desc:A suit of utterly black scales, against which no metal or wood can rest.
 
 name:Blue Dragon Scale Mail~
 type:dragon armor
 graphics:[:b
-level:50
+level:30
 weight:100
 cost:40000
 alloc:8:25 to 100
@@ -4629,11 +5003,13 @@ power:18
 effect:BREATH:ELEC:0:20
 dice:150
 time:50
+desc:A suit of scales as blue as sapphires, emitting eerie sparks and coronas
+desc: as you move about in it.
 
 name:White Dragon Scale Mail~
 type:dragon armor
 graphics:[:w
-level:50
+level:25
 weight:110
 cost:40000
 alloc:8:30 to 100
@@ -4645,11 +5021,13 @@ power:10
 effect:BREATH:COLD:0:20
 dice:100
 time:50
+desc:A suit of scales, coldly gleaming in frosty white.  A shiver runs down
+desc: through your spine even as you look at it.
 
 name:Red Dragon Scale Mail~
 type:dragon armor
 graphics:[:r
-level:50
+level:32
 weight:160
 cost:40000
 alloc:8:40 to 100
@@ -4661,11 +5039,13 @@ power:20
 effect:BREATH:FIRE:0:20
 dice:200
 time:50
+desc:A suit of scales, with all the reds of every fire ever lit.  The scar
+desc: tissue from an old burn aches as you put this armour on.
 
 name:Green Dragon Scale Mail~
 type:dragon armor
 graphics:[:g
-level:60
+level:30
 weight:140
 cost:60000
 alloc:8:60 to 100
@@ -4677,11 +5057,13 @@ power:19
 effect:BREATH:POIS:0:20
 dice:150
 time:50
+desc:A suit of scales, glistening in sickly green, out from which falls the
+desc: skeleton of a rat who touched it and died in agony.
 
 name:Multi-Hued Dragon Scale Mail~
 type:dragon armor
 graphics:[:v
-level:90
+level:50
 weight:260
 cost:150000
 alloc:5:75 to 100
@@ -4690,7 +5072,7 @@ armor:45:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 values:RES_ACID[1] | RES_ELEC[1] | RES_FIRE[1] | RES_COLD[1] | RES_POIS[1]
 power:20
-effect:RANDOM
+effect:SELECT
 dice:5
 effect:BREATH:ACID:0:20
 dice:250
@@ -4703,11 +5085,13 @@ dice:250
 effect:BREATH:POIS:0:20
 dice:250
 time:50
+desc:A suit of scales that throbs with angry energies; it takes all your energy
+desc: to master the Elements fighting an endless war trapped inside.
 
-name:Pseudo-Dragon Scale Mail~
+name:Shining Dragon Scale Mail~
 type:dragon armor
 graphics:[:o
-level:65
+level:37
 weight:200
 cost:60000
 alloc:6:75 to 100
@@ -4716,18 +5100,20 @@ armor:32:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 values:RES_LIGHT[1] | RES_DARK[1]
 power:21
-effect:RANDOM
+effect:SELECT
 dice:2
 effect:BREATH:LIGHT:0:20
 dice:200
 effect:BREATH:DARK:0:20
 dice:200
 time:50
+desc:A suit of scales shining like a beacon of Light even as it greedily sucks
+desc: the energy away from everything that glows into Dark insatiate.
 
 name:Law Dragon Scale Mail~
 type:dragon armor
 graphics:[:B
-level:80
+level:45
 weight:220
 cost:80000
 alloc:6:80 to 100
@@ -4736,18 +5122,20 @@ armor:36:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 values:RES_SOUND[1] | RES_SHARD[1]
 power:23
-effect:RANDOM
+effect:SELECT
 dice:2
 effect:BREATH:SOUND:0:20
 dice:230
 effect:BREATH:SHARD:0:20
 dice:230
 time:50
+desc:A suit of scales in stern blue and silver.  You feel the slightest tremor
+desc: as you touch it, like massed trumpets heard and cyclones felt from afar.
 
 name:Gold Dragon Scale Mail~
 type:dragon armor
 graphics:[:y
-level:50
+level:30
 weight:180
 cost:40000
 alloc:8:70 to 100
@@ -4759,11 +5147,14 @@ power:19
 effect:BREATH:SOUND:0:20
 dice:150
 time:50
+desc:A suit of scales in mirror-like gold.  You hear nothing unusual as you
+desc: wear this armour, yet your ears ache as though in the midst of a
+desc: cacophony.
 
 name:Chaos Dragon Scale Mail~
 type:dragon armor
 graphics:[:v
-level:80
+level:45
 weight:240
 cost:80000
 alloc:5:85 to 100
@@ -4772,18 +5163,20 @@ armor:40:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 values:RES_CHAOS[1] | RES_DISEN[1]
 power:23
-effect:RANDOM
+effect:SELECT
 dice:2
 effect:BREATH:CHAOS:0:20
 dice:220
 effect:BREATH:DISEN:0:20
 dice:220
 time:50
+desc:A suit of scales that ripples and twists through every color and shape
+desc: imaginable as you stare in fascination.
 
 name:Balance Dragon Scale Mail~
 type:dragon armor
 graphics:[:v
-level:95
+level:52
 weight:280
 cost:100000
 alloc:3:95 to 100
@@ -4792,7 +5185,7 @@ armor:50:10
 flags:IGNORE_ACID | IGNORE_ELEC | IGNORE_FIRE | IGNORE_COLD
 values:RES_SOUND[1] | RES_SHARD[1] | RES_CHAOS[1] | RES_DISEN[1]
 power:24
-effect:RANDOM
+effect:SELECT
 dice:4
 effect:BREATH:SOUND:0:20
 dice:250
@@ -4803,11 +5196,14 @@ dice:250
 effect:BREATH:DISEN:0:20
 dice:250
 time:50
+desc:A suit of scales.  Featureless grey to casual inspection, yet a closer
+desc: look reveals patterns within patterns of iridescence that throb with
+desc: leashed energies bound as though by chains of adamant.
 
 name:Power Dragon Scale Mail~
 type:dragon armor
 graphics:[:v
-level:100
+level:57
 weight:300
 cost:300000
 alloc:1:100 to 100
@@ -4822,6 +5218,9 @@ power:25
 effect:BREATH:MISSILE:0:20
 dice:300
 time:50
+desc:A suit with scales of every color, surrounded in a nimbus of perfectly
+desc: untrammelled yet inextricably intermingled and utterly mastered powers
+desc: elemental and ethereal.
 
 
 

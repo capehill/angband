@@ -20,6 +20,7 @@
 #include "cave.h"
 #include "cmd-core.h"
 #include "game-input.h"
+#include "init.h"
 #include "mon-desc.h"
 #include "mon-util.h"
 #include "monster.h"
@@ -35,10 +36,19 @@
 static bool target_set;
 
 /**
+ * Is the target fixed (for the duration of a spell)?
+ */
+static bool target_fixed;
+
+/**
  * Player target
  */
 static struct target target;
 
+/**
+ * Old player target
+ */
+static struct target old_target;
 
 /**
  * Monster health description
@@ -48,6 +58,8 @@ void look_mon_desc(char *buf, size_t max, int m_idx)
 	struct monster *mon = cave_monster(cave, m_idx);
 
 	bool living = true;
+
+	if (!mon) return;
 
 	/* Determine if the monster is "living" (vs "undead") */
 	if (monster_is_destroyed(mon)) living = false;
@@ -74,7 +86,7 @@ void look_mon_desc(char *buf, size_t max, int m_idx)
 	/* Effect status */
 	if (mon->m_timed[MON_TMD_SLEEP]) my_strcat(buf, ", asleep", max);
 	if (mon->m_timed[MON_TMD_HOLD]) my_strcat(buf, ", held", max);
-	if (mon->m_timed[MON_TMD_HOLD]) my_strcat(buf, ", disenchanted", max);
+	if (mon->m_timed[MON_TMD_DISEN]) my_strcat(buf, ", disenchanted", max);
 	if (mon->m_timed[MON_TMD_CONF]) my_strcat(buf, ", confused", max);
 	if (mon->m_timed[MON_TMD_FEAR]) my_strcat(buf, ", afraid", max);
 	if (mon->m_timed[MON_TMD_STUN]) my_strcat(buf, ", stunned", max);
@@ -135,7 +147,7 @@ bool target_okay(void)
 
 
 /**
- * Set the target to a monster (or nobody)
+ * Set the target to a monster (or nobody); if target is fixed, don't unset
  */
 bool target_set_monster(struct monster *mon)
 {
@@ -144,6 +156,11 @@ bool target_set_monster(struct monster *mon)
 		target_set = true;
 		target.midx = mon->midx;
 		target.grid = mon->grid;
+		return true;
+	} else if (target_fixed) {
+		/* If a monster has died during a spell, this maintains its grid as
+		 * the target in case further effects of the spell need it */
+		target.midx = 0;
 		return true;
 	}
 
@@ -189,6 +206,32 @@ bool target_is_set(void)
 }
 
 /**
+ * Fix the target
+ */
+void target_fix(void)
+{
+	old_target = target;
+	target_fixed = true;
+}
+
+/**
+ * Release the target
+ */
+void target_release(void)
+{
+	target_fixed = false;
+
+	/* If the old target is a now-dead monster, cancel it */
+	if (old_target.midx != 0) {
+		struct monster *mon = cave_monster(cave, old_target.midx);
+		if (!mon || !mon->race || !monster_is_in_view(mon)) {
+			target.grid.y = 0;
+			target.grid.x = 0;
+		}
+	}
+}
+
+/**
  * Sorting hook -- comp function -- by "distance to player"
  *
  * We use "u" and "v" to point to arrays of "x" and "y" positions,
@@ -230,7 +273,7 @@ int cmp_distance(const void *a, const void *b)
  * Help select a location.  This function picks the closest from a set in 
  *(roughly) a given direction.
  */
-s16b target_pick(int y1, int x1, int dy, int dx, struct point_set *targets)
+int16_t target_pick(int y1, int x1, int dy, int dx, struct point_set *targets)
 {
 	int i, v;
 
@@ -285,13 +328,13 @@ bool target_accept(int y, int x)
 	struct object *obj;
 
 	/* Player grids are always interesting */
-	if (square(cave, grid).mon < 0) return true;
+	if (square(cave, grid)->mon < 0) return true;
 
 	/* Handle hallucination */
 	if (player->timed[TMD_IMAGE]) return false;
 
 	/* Obvious monsters */
-	if (square(cave, grid).mon > 0) {
+	if (square(cave, grid)->mon > 0) {
 		struct monster *mon = square_monster(cave, grid);
 		if (monster_is_obvious(mon)) {
 			return true;
@@ -299,18 +342,20 @@ bool target_accept(int y, int x)
 	}
 
 	/* Traps */
-	if (square_isvisibletrap(cave, grid)) return true;
+	if (square_isvisibletrap(player->cave, grid)) return true;
 
 	/* Scan all objects in the grid */
 	for (obj = square_object(player->cave, grid); obj; obj = obj->next) {
 		/* Memorized object */
-		if ((obj->kind == unknown_item_kind) || !ignore_known_item_ok(obj)) {
+		if (obj->kind == unknown_item_kind
+				 || !ignore_known_item_ok(player, obj)) {
 			return true;
 		}
 	}
 
 	/* Interesting memorized features */
-	if (square_isknown(cave, grid) && square_isinteresting(cave, grid)) {
+	if (square_isknown(cave, grid)
+			&& square_isinteresting(player->cave, grid)) {
 		return true;
 	}
 
@@ -380,16 +425,31 @@ bool target_sighted(void)
 #define TS_INITIAL_SIZE	20
 
 /**
- * Return a target set of target_able monsters.
+ * Return a target set of interesting locations including monsters, objects,
+ * traps, and features.
+ *
+ * \param mode If mode includes TARGET_KILL, only target_able monsters matching
+ * pred are included
+ * \param pred The monster predicate used to filter monsters (optional)
+ * \param restrict_to_panel Restricts the interesting points to the current
+ * panel
  */
-struct point_set *target_get_monsters(int mode, monster_predicate pred)
+struct point_set *target_get_monsters(int mode, monster_predicate pred,
+		bool restrict_to_panel)
 {
 	int y, x;
 	int min_y, min_x, max_y, max_x;
 	struct point_set *targets = point_set_new(TS_INITIAL_SIZE);
 
-	/* Get the current panel */
-	get_panel(&min_y, &min_x, &max_y, &max_x);
+	if (restrict_to_panel) {
+		/* Get the current panel */
+		get_panel(&min_y, &min_x, &max_y, &max_x);
+	} else {
+		min_y = player->grid.y - z_info->max_range;
+		max_y = player->grid.y + z_info->max_range + 1;
+		min_x = player->grid.x - z_info->max_range;
+		max_x = player->grid.x + z_info->max_range + 1;
+	}
 
 	/* Scan for targets */
 	for (y = min_y; y < max_y; y++) {
@@ -440,7 +500,7 @@ bool target_set_closest(int mode, monster_predicate pred)
 	target_set_monster(NULL);
 
 	/* Get ready to do targetting */
-	targets = target_get_monsters(mode, pred);
+	targets = target_get_monsters(mode, pred, false);
 
 	/* If nothing was prepared, then return */
 	if (point_set_size(targets) < 1) {
@@ -460,7 +520,7 @@ bool target_set_closest(int mode, monster_predicate pred)
 	}
 
 	/* Target the monster */
-	monster_desc(m_name, sizeof(m_name), mon, MDESC_CAPITAL);
+	monster_desc(m_name, sizeof(m_name), mon, MDESC_CAPITAL | MDESC_COMMA);
 	if (!(mode & TARGET_QUIET))
 		msg("%s is targeted.", m_name);
 

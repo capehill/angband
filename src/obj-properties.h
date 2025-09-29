@@ -34,7 +34,7 @@
  */
 enum
 {
-	#define TV(a, b, c) TV_##a,
+	#define TV(a, b) TV_##a,
 	#include "list-tvals.h"
 	#undef TV
 
@@ -46,7 +46,7 @@ enum
  */
 enum {
 	OF_NONE,
-	#define OF(a) OF_##a,
+	#define OF(a, b) OF_##a,
     #include "list-object-flags.h"
     #undef OF
 };
@@ -88,6 +88,8 @@ enum object_flag_type {
 	OFT_MELEE,		/* applicable only to melee weapons */
 	OFT_BAD,		/* an undesirable flag */
 	OFT_DIG,		/* applicable only to diggers */
+	OFT_THROW,		/* applicable only to throwables */
+	OFT_CURSE_ONLY,		/* only relevant as part of a curse */
 
 	OFT_MAX
 };

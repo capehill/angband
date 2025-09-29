@@ -46,7 +46,6 @@
 #include "ui-player.h"
 #include "ui-prefs.h"
 #include "ui-target.h"
-#include "wizard.h"
 
 
 
@@ -64,10 +63,6 @@
  */
 void do_cmd_redraw(void)
 {
-	int j;
-
-	term *old = Term;
-
 	/* Low level flush */
 	Term_flush();
 
@@ -77,7 +72,7 @@ void do_cmd_redraw(void)
 	if (character_dungeon)
 		verify_panel();
 
-	/* Hack -- React to changes */
+	/* React to changes */
 	Term_xtra(TERM_XTRA_REACT, 0);
 
 	if (character_dungeon) {
@@ -103,7 +98,7 @@ void do_cmd_redraw(void)
 	Term_clear();
 
 	if (character_dungeon) {
-		/* Hack -- update */
+		/* Update */
 		handle_stuff(player);
 
 		/* Place the cursor on the player */
@@ -118,14 +113,7 @@ void do_cmd_redraw(void)
 	}
 
 	/* Redraw every window */
-	for (j = 0; j < ANGBAND_TERM_MAX; j++) {
-		if (!angband_term[j]) continue;
-
-		Term_activate(angband_term[j]);
-		Term_redraw();
-		Term_fresh();
-		Term_activate(old);
-	}
+	(void) Term_redraw_all();
 }
 
 
@@ -163,39 +151,15 @@ void do_cmd_version(void)
 			  format("You are playing %s.  Type '?' for more info.", buildver),
 			  sizeof(header_buf));
 	textblock_append(tb, "\n");
-	textblock_append(tb, copyright);
+	textblock_append(tb, "%s", copyright);
 	textui_textblock_show(tb, local_area, header_buf);
 	textblock_free(tb);
 }
 
 /**
- * Verify use of "debug" mode
+ * Verify the retire command
  */
-void textui_cmd_debug(void)
-{
-	/* Ask first time */
-	if (!(player->noscore & NOSCORE_DEBUG)) {
-		/* Mention effects */
-		msg("You are about to use the dangerous, unsupported, debug commands!");
-		msg("Your machine may crash, and your savefile may become corrupted!");
-		event_signal(EVENT_MESSAGE_FLUSH);
-
-		/* Verify request */
-		if (!get_check("Are you sure you want to use the debug commands? "))
-			return;
-
-		/* Mark savefile */
-		player->noscore |= NOSCORE_DEBUG;
-	}
-
-	/* Okay */
-	get_debug_command();
-}
-
-/**
- * Verify the suicide command
- */
-void textui_cmd_suicide(void)
+void textui_cmd_retire(void)
 {
 	/* Flush input */
 	event_signal(EVENT_INPUT_FLUSH);
@@ -207,18 +171,18 @@ void textui_cmd_suicide(void)
 	} else {
 		struct keypress ch;
 
-		if (!get_check("Do you really want to kill this character? "))
+		if (!get_check("Do you really want to retire?"))
 			return;
 
-		/* Special Verification for suicide */
-		prt("Please verify KILLING THIS CHARACTER by typing the '@' sign: ", 0, 0);
+		/* Special Verification for retirement */
+		prt("Please verify RETIRING THIS CHARACTER by typing the '@' sign: ", 0, 0);
 		event_signal(EVENT_INPUT_FLUSH);
 		ch = inkey();
 		prt("", 0, 0);
 		if (ch.code != '@') return;
 	}
 
-	cmdq_push(CMD_SUICIDE);
+	cmdq_push(CMD_RETIRE);
 }
 
 /**
@@ -272,7 +236,7 @@ void textui_quit(void)
  * Screenshot loading/saving code
  * ------------------------------------------------------------------------ */
 
-static void write_html_escape_char(ang_file *fp, wchar_t c)
+static void write_html_escape_char(ang_file *fp, char *mbbuf, wchar_t c)
 {
 	switch (c)
 	{
@@ -287,15 +251,39 @@ static void write_html_escape_char(ang_file *fp, wchar_t c)
 			break;
 		default:
 		{
-			char *mbseq = (char*) mem_alloc(sizeof(char)*(MB_CUR_MAX+1));
-			byte len;
-			len = wctomb(mbseq, c);
-			if (len > MB_CUR_MAX) 
-				len = MB_CUR_MAX;
-			mbseq[len] = '\0';
-			file_putf(fp, "%s", mbseq);
-			mem_free(mbseq);
+			int nc = text_wctomb(mbbuf, c);
+
+			if (nc > 0) {
+				mbbuf[nc] = 0;
+			} else {
+				mbbuf[0] = ' ';
+				mbbuf[1] = 0;
+			}
+			file_putf(fp, "%s", mbbuf);
 			break;
+		}
+	}
+}
+
+
+static void screenshot_term_query(int wid, int hgt, int x, int y, int *a, wchar_t *c)
+{
+	if (y < ROW_MAP || y >= hgt - ROW_BOTTOM_MAP || x < COL_MAP) {
+		/* Record everything outside the map. */
+		(void) Term_what(x, y, a, c);
+	} else {
+		/*
+		 * In the map, skip over the padding for scaled up tiles.  As
+		 * necessary, pad trailing columns and rows with blanks.
+		 */
+		int srcx = (x - COL_MAP) * tile_width + COL_MAP;
+		int srcy = (y - ROW_MAP) * tile_height + ROW_MAP;
+
+		if (srcx < wid && srcy < hgt - ROW_BOTTOM_MAP) {
+			(void) Term_what(srcx, srcy, a, c);
+		} else {
+			*a = COLOUR_WHITE;
+			*c = ' ';
 		}
 	}
 }
@@ -304,58 +292,108 @@ static void write_html_escape_char(ang_file *fp, wchar_t c)
 /**
  * Take an html screenshot
  */
-void html_screenshot(const char *path, int mode)
+void html_screenshot(const char *path, int mode, term *other_term)
 {
+	/* Put the contents of the other terminal on the right by default. */
+	bool other_left = false;
 	int y, x;
-	int wid, hgt;
-
+	int main_wid, main_hgt, other_wid, other_hgt, wid, hgt;
+	int main_xst, other_xst;
 	int a = COLOUR_WHITE;
 	int oa = COLOUR_WHITE;
 	int fg_colour = COLOUR_WHITE;
 	int bg_colour = COLOUR_DARK;
 	wchar_t c = L' ';
+	term *main_term = Term;
 
-	const char *new_color_fmt = (mode == 0) ?
-					"<font color=\"#%02X%02X%02X\" style=\"background-color: #%02X%02X%02X\">"
-				 	: "[COLOR=\"#%02X%02X%02X\"]";
+	const char *new_color_fmt = "<font color=\"#%02X%02X%02X\" style=\"background-color: #%02X%02X%02X\">";
 	const char *change_color_fmt = (mode == 0) ?
 					"</font><font color=\"#%02X%02X%02X\" style=\"background-color: #%02X%02X%02X\">"
 					: "[/COLOR][COLOR=\"#%02X%02X%02X\"]";
-	const char *close_color_fmt = mode ==  0 ? "</font>" : "[/COLOR]";
+	const char *close_color_str = "</font>";
 
+	char *mbbuf;
 	ang_file *fp;
 
+	mbbuf = mem_alloc(text_wcsz() + 1);
 	fp = file_open(path, MODE_WRITE, FTYPE_TEXT);
 
 	/* Oops */
 	if (!fp) {
+		mem_free(mbbuf);
 		plog_fmt("Cannot write the '%s' file!", path);
 		return;
 	}
 
 	/* Retrieve current screen size */
-	Term_get_size(&wid, &hgt);
+	Term_get_size(&main_wid, &main_hgt);
+	if (other_term) {
+		Term_activate(other_term);
+		Term_get_size(&other_wid, &other_hgt);
+		Term_activate(main_term);
+	} else {
+		other_wid = 0;
+		other_hgt = 0;
+	}
+	if (other_left) {
+		other_xst = 0;
+		main_xst = (other_wid > 0) ? other_wid + 1 : 0;
+	} else {
+		other_xst = main_wid + 1;
+		main_xst = 0;
+	}
+	hgt = MAX(main_hgt, other_hgt);
+	wid = (other_wid > 0) ? main_wid + other_wid + 1 : main_wid;
 
 	if (mode == 0) {
 		file_putf(fp, "<!DOCTYPE html><html><head>\n");
-		file_putf(fp, "  <meta='generator' content='%s'>\n", buildid);
+		file_putf(fp, "  <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>\n");
+		file_putf(fp, "  <meta name='generator' content='%s'>\n", buildid);
 		file_putf(fp, "  <title>%s</title>\n", path);
 		file_putf(fp, "</head>\n\n");
-		file_putf(fp, "<body style='color: #fff; background: #000;'>\n");
+		file_putf(fp, "<body style='color: #%02X%02X%02X; background: #%02X%02X%02X;'>\n",
+			angband_color_table[COLOUR_WHITE][1],
+			angband_color_table[COLOUR_WHITE][2],
+			angband_color_table[COLOUR_WHITE][3],
+			angband_color_table[COLOUR_DARK][1],
+			angband_color_table[COLOUR_DARK][2],
+			angband_color_table[COLOUR_DARK][3]);
 		file_putf(fp, "<pre>\n");
 	} else {
-		file_putf(fp, "[CODE][TT][BC=black][COLOR=white]\n");
+		file_putf(fp, "[CODE][TT][BC=\"#%02X%02X%02X\"][COLOR=\"#%02X%02X%02X\"]\n",
+			angband_color_table[COLOUR_DARK][1],
+			angband_color_table[COLOUR_DARK][2],
+			angband_color_table[COLOUR_DARK][3],
+			angband_color_table[COLOUR_WHITE][1],
+			angband_color_table[COLOUR_WHITE][2],
+			angband_color_table[COLOUR_WHITE][3]);
 	}
 
 	/* Dump the screen */
 	for (y = 0; y < hgt; y++) {
 		for (x = 0; x < wid; x++) {
 			/* Get the attr/char */
-			(void)(Term_what(x, y, &a, &c));
+			if (x >= main_xst && x < main_xst + main_wid
+					&& y < main_hgt) {
+				screenshot_term_query(wid, hgt, x - main_xst, y,
+					&a, &c);
+			} else if (x >= other_xst && x < other_xst + other_wid
+					&& y < other_hgt) {
+				if (x == other_xst) {
+					Term_activate(other_term);
+				}
+				Term_what(x - other_xst, y, &a, &c);
+				if (x == other_xst + other_wid - 1) {
+					Term_activate(main_term);
+				}
+			} else {
+				a = COLOUR_WHITE;
+				c = ' ';
+			}
 
 			/* Set the foreground and background */
 			fg_colour = a % MAX_COLORS;
-			switch (a / MAX_COLORS)
+			switch (a / MULT_BG)
 			{
 				case BG_BLACK:
 					bg_colour = COLOUR_DARK;
@@ -367,12 +405,17 @@ void html_screenshot(const char *path, int mode)
 					bg_colour = COLOUR_SHADE;
 					break;
 				default:
-				assert((a >= BG_BLACK) && (a < BG_MAX * MAX_COLORS));
+					assert((a >= 0)
+						&& (a < BG_MAX * MULT_BG));
 			}
 
-			/* Color change */
-			if (oa != a) {
-				if (oa == COLOUR_WHITE) {
+			/*
+			 * Color change (for forum text, ignore changes if the character is
+			 * a space since the forum software strips [COLOR][/COLOR] elements that
+			 * only contain whitespace)
+			 */
+			if (oa != a && (mode == 0 || c != L' ')) {
+				if (oa == COLOUR_WHITE && mode == 0) {
 					/* From the default white to another color */
 					file_putf(fp, new_color_fmt,
 							  angband_color_table[fg_colour][1],
@@ -381,10 +424,11 @@ void html_screenshot(const char *path, int mode)
 							  angband_color_table[bg_colour][1],
 							  angband_color_table[bg_colour][2],
 							  angband_color_table[bg_colour][3]);
-				} else if (fg_colour == COLOUR_WHITE &&
-						   bg_colour == COLOUR_DARK) {
+				} else if (fg_colour == COLOUR_WHITE
+						&& bg_colour == COLOUR_DARK
+						&& mode == 0) {
 					/* From another color to the default white */
-					file_putf(fp, close_color_fmt);
+					file_putf(fp, "%s", close_color_str);
 				} else {
 					/* Change colors */
 					file_putf(fp, change_color_fmt,
@@ -401,11 +445,17 @@ void html_screenshot(const char *path, int mode)
 			}
 
 			/* Write the character and escape special HTML characters */
-			if (mode == 0) write_html_escape_char(fp, c);
+			if (mode == 0) write_html_escape_char(fp, mbbuf, c);
 			else {
-				char mbseq[MB_LEN_MAX+1] = {0};
-				wctomb(mbseq, c);
-				file_putf(fp, "%s", mbseq);
+				int nc = text_wctomb(mbbuf, c);
+
+				if (nc > 0) {
+					mbbuf[nc] = 0;
+				} else {
+					mbbuf[0] = ' ';
+					mbbuf[1] = 0;
+				}
+				file_putf(fp, "%s", mbbuf);
 			}
 		}
 
@@ -414,7 +464,7 @@ void html_screenshot(const char *path, int mode)
 	}
 
 	/* Close the last font-color tag if necessary */
-	if (oa != COLOUR_WHITE) file_putf(fp, close_color_fmt);
+	if (oa != COLOUR_WHITE && mode == 0) file_putf(fp, "%s", close_color_str);
 
 	if (mode == 0) {
 		file_putf(fp, "</pre>\n");
@@ -426,14 +476,16 @@ void html_screenshot(const char *path, int mode)
 
 	/* Close it */
 	file_close(fp);
+
+	mem_free(mbbuf);
 }
 
 
 
 /**
- * Hack -- save a screen dump to a file in html format
+ * Save a screen dump to a file in html format
  */
-static void do_cmd_save_screen_html(int mode)
+static void do_cmd_save_screen_html(int mode, term *other_term)
 {
 	size_t i;
 
@@ -451,8 +503,7 @@ static void do_cmd_save_screen_html(int mode)
 
 	/* Save current preferences */
 	path_build(file_name, sizeof(file_name), ANGBAND_DIR_USER, "dump.prf");
-	fff = file_open(file_name, MODE_WRITE,
-					(mode == 0 ? FTYPE_HTML : FTYPE_TEXT));
+	fff = file_open(file_name, MODE_WRITE, FTYPE_TEXT);
 
 	/* Check for failure */
 	if (!fff) {
@@ -470,7 +521,7 @@ static void do_cmd_save_screen_html(int mode)
 	/* Dump the screen with raw character attributes */
 	reset_visuals(false);
 	do_cmd_redraw();
-	html_screenshot(tmp_val, mode);
+	html_screenshot(tmp_val, mode, other_term);
 
 	/* Recover current graphics settings */
 	reset_visuals(true);
@@ -484,16 +535,27 @@ static void do_cmd_save_screen_html(int mode)
 
 
 /**
- * Hack -- save a screen dump to a file
+ * Save a screen dump to a file
  */
 void do_cmd_save_screen(void)
 {
-	char ch;
-	ch = get_char("Dump as (H)TML or (F)orum text? ", "hf", 2, ' ');
+	char ch = get_char("Dump as (H)TML or (F)orum text? ", "hf", 2, ' ');
+	int mode = 0;
+	term *ml_term;
 
-	switch (ch)
-	{
-		case 'h': do_cmd_save_screen_html(0); break;
-		case 'f': do_cmd_save_screen_html(1); break;
+	switch (ch) {
+		case 'h':
+			mode = 0;
+			break;
+		case 'f':
+			mode = 1;
+			break;
+		default:
+			return;
 	}
+	ml_term = find_first_subwindow(PW_MONLIST);
+	if (ml_term) {
+		if (!get_check("Include monster list? ")) ml_term = NULL;
+	}
+	do_cmd_save_screen_html(mode, ml_term);
 }

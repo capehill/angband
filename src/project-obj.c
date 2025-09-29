@@ -18,6 +18,7 @@
 
 #include "angband.h"
 #include "cave.h"
+#include "cmd-core.h"
 #include "mon-util.h"
 #include "obj-chest.h"
 #include "obj-desc.h"
@@ -27,6 +28,7 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "player-calcs.h"
+#include "project.h"
 #include "source.h"
 
 
@@ -59,7 +61,7 @@ int inven_damage(struct player *p, int type, int cperc)
 			continue;
 		}
 
-		/* Hack -- for now, skip artifacts */
+		/* For now, skip artifacts */
 		if (obj->artifact) {
 			obj = next;
 			continue;
@@ -130,14 +132,15 @@ int inven_damage(struct player *p, int type, int cperc)
 				bool none_left = false;
 
 				/* Get a description */
-				object_desc(o_name, sizeof(o_name), obj, ODESC_BASE);
+				object_desc(o_name, sizeof(o_name), obj,
+					ODESC_BASE, p);
 
 				/* Message */
 				msgt(MSG_DESTROY, "%sour %s (%c) %s %s!",
 				           ((obj->number > 1) ?
 				            ((amt == obj->number) ? "All of y" :
 				             (amt > 1 ? "Some of y" : "One of y")) : "Y"),
-				           o_name, gear_to_label(obj),
+				           o_name, gear_to_label(p, obj),
 				           ((amt > 1) ? "were" : "was"),
 					   (damage ? "damaged" : "destroyed"));
 
@@ -146,10 +149,11 @@ int inven_damage(struct player *p, int type, int cperc)
 					continue;
 
 				/* Destroy "amt" items */
-				destroyed = gear_object_for_use(obj, amt, false, &none_left);
+				destroyed = gear_object_for_use(p, obj, amt,
+					false, &none_left);
 				if (destroyed->known)
-					object_delete(&destroyed->known);
-				object_delete(&destroyed);
+					object_delete(NULL, NULL, &destroyed->known);
+				object_delete(NULL, NULL, &destroyed);
 
 				/* Count the casualties */
 				k += amt;
@@ -322,7 +326,7 @@ static void project_object_handler_MANA(project_object_handler_context_t *contex
 	context->note_kill = VERB_AGREEMENT(context->obj->number, "is destroyed", "are destroyed");
 }
 
-/* Holy Orb -- destroys cursed non-artifacts */
+/* Holy Orb  */
 static void project_object_handler_HOLY_ORB(project_object_handler_context_t *context)
 {
 }
@@ -356,7 +360,8 @@ static void project_object_handler_KILL_TRAP(project_object_handler_context_t *c
 		unlock_chest((struct object * const)context->obj);
 
 		/* Notice */
-		if (context->obj->known && !ignore_item_ok(context->obj)) {
+		if (context->obj->known
+				&& !ignore_item_ok(player, context->obj)) {
 			context->obj->known->pval = context->obj->pval;
 			msg("Click!");
 			context->obvious = true;
@@ -486,8 +491,7 @@ static const project_object_handler_f object_handlers[] = {
  *
  * \param origin is the origin of the effect
  * \param r is the distance from the centre of the effect
- * \param y the coordinates of the grid being handled
- * \param x the coordinates of the grid being handled
+ * \param grid is the coordinates of the grid being handled
  * \param dam is the "damage" from the effect at distance r from the centre
  * \param typ is the projection (PROJ_) type
  * \param protected_obj is an object that should not be affected by the
@@ -497,7 +501,7 @@ static const project_object_handler_f object_handlers[] = {
  * Note that this function determines if the player can see anything that
  * happens by taking into account: blindness, line-of-sight, and illumination.
  *
- * Hack -- effects on objects which are memorized but not in view are also seen.
+ * Effects on objects which are memorized but not in view are also seen.
  */
 bool project_o(struct source origin, int r, struct loc grid, int dam, int typ,
 			   const struct object *protected_obj)
@@ -539,35 +543,40 @@ bool project_o(struct source origin, int r, struct loc grid, int dam, int typ,
 			char o_name[80];
 
 			/* Effect observed */
-			if (obj->known && !ignore_item_ok(obj) &&
+			if (obj->known && !ignore_item_ok(player, obj) &&
 				square_isseen(cave, grid)) {
 				obvious = true;
-				object_desc(o_name, sizeof(o_name), obj, ODESC_BASE);
+				object_desc(o_name, sizeof(o_name), obj,
+					ODESC_BASE, player);
 			}
 
 			/* Artifacts, and other objects, get to resist */
 			if (obj->artifact || ignore) {
 				/* Observe the resist */
-				if (obvious && obj->known && !ignore_item_ok(obj))
+				if (obvious && obj->known
+						&& !ignore_item_ok(player, obj)) {
 					msg("The %s %s unaffected!", o_name,
 						VERB_AGREEMENT(obj->number, "is", "are"));
+				}
 			} else if (obj->mimicking_m_idx) {
 				/* Reveal mimics */
 				if (obvious)
-					become_aware(cave_monster(cave, obj->mimicking_m_idx));
+					become_aware(cave, cave_monster(
+						cave, obj->mimicking_m_idx));
 			} else {
 				/* Describe if needed */
-				if (obvious && obj->known && note_kill && !ignore_item_ok(obj))
+				if (obvious && obj->known && note_kill
+						&& !ignore_item_ok(player, obj)) {
 					msgt(MSG_DESTROY, "The %s %s!", o_name, note_kill);
+				}
+
+				/* Prevent command repetition, if necessary. */
+				if (loc_eq(grid, player->grid)) {
+					cmd_disable_repeat_floor_item();
+				}
 
 				/* Delete the object */
-				square_excise_object(cave, grid, obj);
-				delist_object(cave, obj);
-				object_delete(&obj);
-
-				/* Redraw */
-				square_note_spot(cave, grid);
-				square_light_spot(cave, grid);
+				square_delete_object(cave, grid, obj, true, true);
 			}
 		}
 

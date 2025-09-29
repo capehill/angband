@@ -94,7 +94,7 @@ static bool use_flavor_glyph(const struct object_kind *kind)
  * Use "flavor" if available.
  * Default to user definitions.
  */
-byte object_kind_attr(const struct object_kind *kind)
+uint8_t object_kind_attr(const struct object_kind *kind)
 {
 	return use_flavor_glyph(kind) ? flavor_x_attr[kind->flavor->fidx] :
 		kind_x_attr[kind->kidx];
@@ -116,7 +116,7 @@ wchar_t object_kind_char(const struct object_kind *kind)
  * Use "flavor" if available.
  * Default to user definitions.
  */
-byte object_attr(const struct object *obj)
+uint8_t object_attr(const struct object *obj)
 {
 	return object_kind_attr(obj->kind);
 }
@@ -233,10 +233,9 @@ static void show_obj(int obj_num, int row, int col, bool cursor,
 
 	/* Weight */
 	if (mode & OLIST_WEIGHT) {
-		int weight = obj->weight * obj->number;
+		int weight = obj->number * object_weight_one(obj);
 		strnfmt(buf, sizeof(buf), "%4d.%1d lb", weight / 10, weight % 10);
 		put_str(buf, row + obj_num, col + ex_offset_ctr);
-		ex_offset_ctr += 9;
 	}
 }
 
@@ -290,7 +289,7 @@ static void build_obj_list(int last, struct object **list, item_tester tester,
 		/* Acceptable items get a label */
 		if (object_test(tester, obj) ||	(obj && tval_is_money(obj) && gold_ok))
 			strnfmt(items[num_obj].label, sizeof(items[num_obj].label), "%c) ",
-					quiver ? I2D(i) : I2A(i));
+				quiver ? I2D(i) : all_letters_nohjkl[i]);
 
 		/* Unacceptable items are still sometimes shown */
 		else if ((!obj && show_empty) || in_term)
@@ -302,7 +301,21 @@ static void build_obj_list(int last, struct object **list, item_tester tester,
 
 		/* Show full slot labels for equipment (or quiver in subwindow) */
 		if (equip) {
-			strnfmt(buf, sizeof(buf), "%-14s: ", equip_mention(player, i));
+			const char *mention = equip_mention(player, i);
+			size_t u8len = utf8_strlen(mention);
+
+			if (u8len < 14) {
+				strnfmt(buf, sizeof(buf), "%s%*s", mention,
+					(int)(14 - u8len), " ");
+			} else {
+				char *mention_copy = string_make(mention);
+
+				if (u8len > 14) {
+					utf8_clipto(mention_copy, 14);
+				}
+				strnfmt(buf, sizeof(buf), "%s", mention_copy);
+				string_free(mention_copy);
+			}
 			my_strcpy(items[num_obj].equip_label, buf,
 					  sizeof(items[num_obj].equip_label));
 		} else if ((in_term || dead) && quiver) {
@@ -311,7 +324,7 @@ static void build_obj_list(int last, struct object **list, item_tester tester,
 					  sizeof(items[num_obj].equip_label));
 		} else {
 			strnfmt(items[num_obj].equip_label,
-					sizeof(items[num_obj].equip_label), "");
+				sizeof(items[num_obj].equip_label), "%s", "");
 		}
 
 		/* Save the object */
@@ -325,7 +338,7 @@ static void build_obj_list(int last, struct object **list, item_tester tester,
  * Set object names and get their maximum length.
  * Only makes sense after building the object list.
  */
-static void set_obj_names(bool terse)
+static void set_obj_names(bool terse, const struct player *p)
 {
 	int i;
 	struct object *obj;
@@ -336,17 +349,21 @@ static void set_obj_names(bool terse)
 
 		/* Null objects are used to skip lines, or display only a label */		
 		if (!obj) {
-			if ((i < num_head) || !strcmp(items[i].label, "In quiver"))
-				strnfmt(items[i].o_name, sizeof(items[i].o_name), "");
+			if ((i < num_head) || streq(items[i].label, "In quiver"))
+				strnfmt(items[i].o_name, sizeof(items[i].o_name), "%s", "");
 			else
 				strnfmt(items[i].o_name, sizeof(items[i].o_name), "(nothing)");
 		} else {
-			if (terse)
-				object_desc(items[i].o_name, sizeof(items[i].o_name), obj,
-							ODESC_PREFIX | ODESC_FULL | ODESC_TERSE);
-			else
-				object_desc(items[i].o_name, sizeof(items[i].o_name), obj,
-							ODESC_PREFIX | ODESC_FULL);
+			if (terse) {
+				object_desc(items[i].o_name,
+					sizeof(items[i].o_name), obj,
+					ODESC_PREFIX | ODESC_FULL | ODESC_TERSE,
+					p);
+			} else {
+				object_desc(items[i].o_name,
+					sizeof(items[i].o_name), obj,
+					ODESC_PREFIX | ODESC_FULL, p);
+			}
 		}
 
 		/* Max length of label + object name */
@@ -380,7 +397,7 @@ static void show_obj_list(olist_detail_t mode)
 	if (Term->wid < 50) terse = true;
 
 	/* Set the names and get the max length */
-	set_obj_names(terse);
+	set_obj_names(terse, player);
 
 	/* Take the quiver message into consideration */
 	if (mode & OLIST_QUIVER && player->upkeep->quiver[0] != NULL)
@@ -419,7 +436,7 @@ static void show_obj_list(olist_detail_t mode)
 		/* Quiver may take multiple lines */
 		for (j = 0; j < quiver_slots; j++, i++) {
 			const char *fmt = "in Quiver: %d missile%s";
-			char letter = I2A(in_term ? i - 1 : i);
+			char letter = all_letters_nohjkl[in_term ? i - 1 : i];
 
 			/* Number of missiles in this "slot" */
 			if (j == quiver_slots - 1)
@@ -463,7 +480,7 @@ void show_inven(int mode, item_tester tester)
 
 	bool in_term = (mode & OLIST_WINDOW) ? true : false;
 
-	/* Intialize */
+	/* Initialize */
 	wipe_obj_list();
 
 	/* Include burden for term windows */
@@ -503,7 +520,7 @@ void show_quiver(int mode, item_tester tester)
 {
 	int i, last_slot = -1;
 
-	/* Intialize */
+	/* Initialize */
 	wipe_obj_list();
 
 	/* Find the last occupied quiver slot */
@@ -529,7 +546,7 @@ void show_equip(int mode, item_tester tester)
 	int i;
 	bool in_term = (mode & OLIST_WINDOW) ? true : false;
 
-	/* Intialize */
+	/* Initialize */
 	wipe_obj_list();
 
 	/* Build the object list */
@@ -566,7 +583,7 @@ void show_equip(int mode, item_tester tester)
 void show_floor(struct object **floor_list, int floor_num, int mode,
 				item_tester tester)
 {
-	/* Intialize */
+	/* Initialize */
 	wipe_obj_list();
 
 	if (floor_num > z_info->floor_size)
@@ -595,7 +612,9 @@ static int i1, i2;
 static int e1, e2;
 static int q1, q2;
 static int f1, f2;
+static int throwing_num;
 static struct object **floor_list;
+static struct object **throwing_list;
 static olist_detail_t olist_mode = 0;
 static int item_mode;
 static cmd_code item_cmd;
@@ -619,9 +638,13 @@ bool get_item_allow(const struct object *obj, unsigned char ch, cmd_code cmd,
 
 	unsigned n;
 
-	/* Hack - Only shift the command key if it actually needs to be shifted. */
+	/*
+	 * Hack - Only shift the command key if it actually needs to be shifted.
+	 * Because UN_KTRL('ctrl-d') (i.e. rogue-like ignore command) gives 'd'
+	 * which is the drop command in both keysets, use UN_KTRL_CAP().
+	 */
 	if (ch < 0x20)
-		ch = UN_KTRL(ch);
+		ch = UN_KTRL_CAP(ch);
 
 	/* The inscription to look for */
 	verify_inscrip[1] = ch;
@@ -629,7 +652,7 @@ bool get_item_allow(const struct object *obj, unsigned char ch, cmd_code cmd,
 	/* Look for the inscription */
 	n = check_for_inscrip(obj, verify_inscrip);
 
-	/* Also look for for the inscription '!*' */
+	/* Also look for the inscription '!*' */
 	if (!is_harmless)
 		n += check_for_inscrip(obj, "!*");
 
@@ -645,8 +668,9 @@ bool get_item_allow(const struct object *obj, unsigned char ch, cmd_code cmd,
 
 		/* Prompt for confirmation n times */
 		while (n--) {
-			if (!verify_object(prompt_buf, (struct object *) obj))
-				return (false);
+			if (!verify_object(prompt_buf, obj, player)) {
+				return false;
+			}
 		}
 	}
 
@@ -708,11 +732,7 @@ static bool get_tag(struct object **tagged_obj, char tag, cmd_code cmd,
 				return true;
 			}
 
-			cmdkey = cmd_lookup_key(cmd, mode);
-
-			/* Hack - Only shift the command key if it actually needs to be. */
-			if (cmdkey < 0x20)
-				cmdkey = UN_KTRL(cmdkey);
+			cmdkey = cmd_lookup_key_unktrl(cmd, mode);
 
 			/* Check the special tags */
 			if ((s[1] == cmdkey) && (s[2] == tag)) {
@@ -759,7 +779,8 @@ static void menu_header(void)
 		/* List choices */
 		if (i1 <= i2) {
 			/* Build the header */
-			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,", I2A(i1), I2A(i2));
+			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,",
+				all_letters_nohjkl[i1], all_letters_nohjkl[i2]);
 
 			/* Append */
 			my_strcat(out_val, tmp_val, sizeof(out_val));
@@ -786,7 +807,8 @@ static void menu_header(void)
 		/* List choices */
 		if (e1 <= e2) {
 			/* Build the header */
-			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,", I2A(e1), I2A(e2));
+			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,",
+				all_letters_nohjkl[e1], all_letters_nohjkl[e2]);
 
 			/* Append */
 			my_strcat(out_val, tmp_val, sizeof(out_val));
@@ -830,6 +852,34 @@ static void menu_header(void)
 			my_strcat(out_val, " - for floor,", sizeof(out_val));
 	}
 
+	/* Viewing throwing */
+	else if (player->upkeep->command_wrk == SHOW_THROWING) {
+		/* Begin the header */
+		strnfmt(out_val, sizeof(out_val), "Throwing items:");
+
+		/* List choices */
+		if (throwing_num) {
+			/* Build the header */
+			strnfmt(tmp_val, sizeof(tmp_val),  " a-%c,",
+				all_letters_nohjkl[throwing_num - 1]);
+
+			/* Append */
+			my_strcat(out_val, tmp_val, sizeof(out_val));
+		}
+
+		/* Indicate legality of inventory */
+		if (use_inven)
+			my_strcat(out_val, " / for Inven,", sizeof(out_val));
+
+		/* Indicate legality of quiver */
+		if (use_quiver)
+			my_strcat(out_val, " | for Quiver,", sizeof(out_val));
+
+		/* Indicate legality of the "floor" */
+		if (allow_floor)
+			my_strcat(out_val, " - for floor,", sizeof(out_val));
+	}
+
 	/* Viewing floor */
 	else {
 		/* Begin the header */
@@ -838,7 +888,8 @@ static void menu_header(void)
 		/* List choices */
 		if (f1 <= f2) {
 			/* Build the header */
-			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,", I2A(f1), I2A(f2));
+			strnfmt(tmp_val, sizeof(tmp_val), " %c-%c,",
+				all_letters_nohjkl[f1], all_letters_nohjkl[f2]);
 
 			/* Append */
 			my_strcat(out_val, tmp_val, sizeof(out_val));
@@ -866,7 +917,7 @@ static void menu_header(void)
 /**
  * Get an item tag
  */
-char get_item_tag(struct menu *menu, int oid)
+static char get_item_tag(struct menu *menu, int oid)
 {
 	struct object_menu_data *choice = menu_priv(menu);
 
@@ -876,7 +927,7 @@ char get_item_tag(struct menu *menu, int oid)
 /**
  * Determine if an item is a valid choice
  */
-int get_item_validity(struct menu *menu, int oid)
+static int get_item_validity(struct menu *menu, int oid)
 {
 	struct object_menu_data *choice = menu_priv(menu);
 
@@ -886,7 +937,7 @@ int get_item_validity(struct menu *menu, int oid)
 /**
  * Display an entry on the item menu
  */
-void get_item_display(struct menu *menu, int oid, bool cursor, int row,
+static void get_item_display(struct menu *menu, int oid, bool cursor, int row,
 					  int col, int width)
 {
 	/* Print it */
@@ -896,7 +947,7 @@ void get_item_display(struct menu *menu, int oid, bool cursor, int row,
 /**
  * Deal with events on the get_item menu
  */
-bool get_item_action(struct menu *menu, const ui_event *event, int oid)
+static bool get_item_action(struct menu *menu, const ui_event *event, int oid)
 {
 	struct object_menu_data *choice = menu_priv(menu);
 	char key = event->key.code;
@@ -904,7 +955,7 @@ bool get_item_action(struct menu *menu, const ui_event *event, int oid)
 	int mode = OPT(player, rogue_like_commands) ? KEYMAP_MODE_ROGUE : KEYMAP_MODE_ORIG;
 
 	if (event->type == EVT_SELECT) {
-		if (get_item_allow(choice[oid].object, cmd_lookup_key(item_cmd, mode),
+		if (choice[oid].object && get_item_allow(choice[oid].object, cmd_lookup_key(item_cmd, mode),
 						   item_cmd, is_harmless))
 			selection = choice[oid].object;
 	}
@@ -921,14 +972,14 @@ bool get_item_action(struct menu *menu, const ui_event *event, int oid)
 				player->upkeep->command_wrk = USE_EQUIP;
 				newmenu = true;
 			} else {
-				bell("Cannot switch item selector!");
+				bell();
 			}
 		}
 
 		else if (key == '|') {
 			/* No toggle allowed */
 			if ((q1 > q2) && !allow_all){
-				bell("Cannot select quiver!");
+				bell();
 			} else {
 				/* Toggle to quiver */
 				player->upkeep->command_wrk = (USE_QUIVER);
@@ -939,7 +990,7 @@ bool get_item_action(struct menu *menu, const ui_event *event, int oid)
 		else if (key == '-') {
 			/* No toggle allowed */
 			if ((f1 > f2) && !allow_all) {
-				bell("Cannot select floor!");
+				bell();
 			} else {
 				/* Toggle to floor */
 				player->upkeep->command_wrk = (USE_FLOOR);
@@ -974,7 +1025,7 @@ static void item_menu_browser(int oid, void *data, const region *local_area)
 		/* Quiver may take multiple lines */
 		for (j = 0; j < quiver_slots; j++, i++) {
 			const char *fmt = "in Quiver: %d missile%s\n";
-			char letter = I2A(i);
+			char letter = all_letters_nohjkl[i];
 
 			/* Number of missiles in this "slot" */
 			if (j == quiver_slots - 1)
@@ -1008,9 +1059,87 @@ static void item_menu_browser(int oid, void *data, const region *local_area)
 }
 
 /**
+ * Display and handle user interaction with a context menu to switch the
+ * item list.
+ *
+ * \param current_menu is the standard (not contextual) menu displaying the
+ * item list.
+ * \param in is the event triggering the context menu.  in->type must be
+ * EVT_MOUSE.
+ * \param out is the event to be passed upstream (to internal handling in
+ * menu_select() or, potentially, menu_select()'s caller).
+ * \return true if the event was handled; otherwise, return false.
+ */
+static bool use_context_menu_list_switcher(struct menu *current_menu,
+		const ui_event *in, ui_event *out)
+{
+	struct menu *m;
+	char *labels;
+	bool allows_inven;
+	int selected;
+
+	assert(in->type == EVT_MOUSE);
+	if (in->mouse.y != 0) {
+		return false;
+	}
+
+	m = menu_dynamic_new();
+	if (!m) {
+		return false;
+	}
+	labels = string_make(lower_case);
+
+	m->selections = labels;
+	if (((item_mode & USE_INVEN) || allow_all)
+			&& player->upkeep->command_wrk != USE_INVEN) {
+		menu_dynamic_add_label(m, "Inventory", '/', USE_INVEN, labels);
+		allows_inven = true;
+	} else {
+		allows_inven = false;
+	}
+	if (((item_mode & USE_EQUIP) || allow_all)
+			&& player->upkeep->command_wrk != USE_EQUIP) {
+		menu_dynamic_add_label(m, "Equipment",
+			(allows_inven) ? 'e' : '/', USE_EQUIP, labels);
+	}
+	if ((q1 <= q2 || allow_all)
+			&& player->upkeep->command_wrk != USE_QUIVER) {
+		menu_dynamic_add_label(m, "Quiver", '|', USE_QUIVER, labels);
+	}
+	if ((f1 <= f2 || allow_all)
+			&& player->upkeep->command_wrk != USE_FLOOR) {
+		menu_dynamic_add_label(m, "Floor", '-', USE_FLOOR, labels);
+	}
+	menu_dynamic_add_label(m, "Escape", 'q', 0, labels);
+
+	screen_save();
+
+	menu_dynamic_calc_location(m, in->mouse.x, in->mouse.y);
+	region_erase_bordered(&m->boundary);
+
+	selected = menu_dynamic_select(m);
+
+	menu_dynamic_free(m);
+	string_free(labels);
+
+	screen_load();
+
+	if (selected == USE_INVEN || selected == USE_EQUIP
+			|| selected == USE_QUIVER || selected == USE_FLOOR) {
+		player->upkeep->command_wrk = selected;
+		newmenu = true;
+		out->type = EVT_SWITCH;
+	} else if (selected == 0) {
+		out->type = EVT_ESCAPE;
+	}
+
+	return true;
+}
+
+/**
  * Display list items to choose from
  */
-struct object *item_menu(cmd_code cmd, int prompt_size, int mode)
+static struct object *item_menu(cmd_code cmd, int prompt_size, int mode)
 {
 	menu_iter menu_f = { get_item_tag, get_item_validity, get_item_display,
 						 get_item_action, 0 };
@@ -1025,9 +1154,10 @@ struct object *item_menu(cmd_code cmd, int prompt_size, int mode)
 	if (player->upkeep->command_wrk == USE_QUIVER)
 		m->selections = "0123456789";
 	else
-		m->selections = lower_case;
+		m->selections = all_letters_nohjkl;
 	m->switch_keys = "/|-";
-	m->flags = (MN_PVT_TAGS | MN_INSCRIP_TAGS);
+	m->context_hook = use_context_menu_list_switcher;
+	m->flags = (MN_PVT_TAGS | MN_INSCRIP_TAGS | MN_KEYMAP_ESC);
 	m->browse_hook = item_menu_browser;
 
 	/* Get inscriptions */
@@ -1048,7 +1178,7 @@ struct object *item_menu(cmd_code cmd, int prompt_size, int mode)
 
 	/* Set up the item list variables */
 	selection = NULL;
-	set_obj_names(false);
+	set_obj_names(false, player);
 
 	if (mode & OLIST_QUIVER && player->upkeep->quiver[0] != NULL)
 		max_len = MAX(max_len, 24);
@@ -1135,6 +1265,16 @@ struct object *item_menu(cmd_code cmd, int prompt_size, int mode)
 				else if (i1 <= i2) player->upkeep->command_wrk = USE_INVEN;
 				else if (q1 <= q2) player->upkeep->command_wrk = USE_QUIVER;
 			}
+		} else if (player->upkeep->command_wrk == SHOW_THROWING) {
+			if (left) {
+				if (q1 <= q2) player->upkeep->command_wrk = USE_QUIVER;
+				else if (i1 <= i2) player->upkeep->command_wrk = USE_INVEN;
+				else if (e1 <= e2) player->upkeep->command_wrk = USE_EQUIP;
+			} else {
+				if (e1 <= e2) player->upkeep->command_wrk = USE_EQUIP;
+				else if (i1 <= i2) player->upkeep->command_wrk = USE_INVEN;
+				else if (q1 <= q2) player->upkeep->command_wrk = USE_QUIVER;
+			}
 		}
 
 		newmenu = true;
@@ -1188,6 +1328,7 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 	bool use_quiver = ((mode & USE_QUIVER) ? true : false);
 	bool use_floor = ((mode & USE_FLOOR) ? true : false);
 	bool quiver_tags = ((mode & QUIVER_TAGS) ? true : false);
+	bool show_throwing = ((mode & SHOW_THROWING) ? true : false);
 
 	bool allow_inven = false;
 	bool allow_equip = false;
@@ -1199,7 +1340,11 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 	int floor_max = z_info->floor_size;
 	int floor_num;
 
+	int throwing_max = z_info->pack_size + z_info->quiver_size +
+		z_info->floor_size;
+
 	floor_list = mem_zalloc(floor_max * sizeof(*floor_list));
+	throwing_list = mem_zalloc(throwing_max * sizeof(*throwing_list));
 	olist_mode = 0;
 	item_mode = mode;
 	item_cmd = cmd;
@@ -1288,8 +1433,8 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 		item_mode -= USE_QUIVER;
 
 	/* Scan all non-gold objects in the grid */
-	floor_num = scan_floor(floor_list, floor_max,
-						   OFLOOR_TEST | OFLOOR_SENSE | OFLOOR_VISIBLE, tester);
+	floor_num = scan_floor(floor_list, floor_max, player,
+		OFLOOR_TEST | OFLOOR_SENSE | OFLOOR_VISIBLE, tester);
 
 	/* Full floor */
 	f1 = 0;
@@ -1308,10 +1453,18 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 	else if (item_mode & USE_FLOOR)
 		item_mode -= USE_FLOOR;
 
+	/* Scan all throwing objects in reach */
+	throwing_num = scan_items(throwing_list, throwing_max, player,
+		USE_INVEN | USE_QUIVER | USE_FLOOR, obj_is_throwing);
+
 	/* Require at least one legal choice */
 	if (allow_inven || allow_equip || allow_quiver || allow_floor) {
-		/* Start where requested if possible */
-		if ((player->upkeep->command_wrk == USE_EQUIP) && allow_equip)
+		/* Use throwing menu if at all possible */
+		if (show_throwing && throwing_num) {
+			player->upkeep->command_wrk = SHOW_THROWING;
+
+			/* Start where requested if possible */
+		} else if ((player->upkeep->command_wrk == USE_EQUIP) && allow_equip)
 			player->upkeep->command_wrk = USE_EQUIP;
 		else if ((player->upkeep->command_wrk == USE_INVEN) && allow_inven)
 			player->upkeep->command_wrk = USE_INVEN;
@@ -1321,7 +1474,7 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 			player->upkeep->command_wrk = USE_FLOOR;
 
 		/* If we are obviously using the quiver then start on quiver */
-		else if (quiver_tags && allow_quiver)
+		else if (quiver_tags && allow_quiver && (cmd != CMD_USE))
 			player->upkeep->command_wrk = USE_QUIVER;
 
 		/* Otherwise choose whatever is allowed */
@@ -1398,6 +1551,9 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 				build_obj_list(q2, player->upkeep->quiver, tester_m,olist_mode);
 			else if (player->upkeep->command_wrk == USE_FLOOR)
 				build_obj_list(f2, floor_list, tester_m, olist_mode);
+			else if (player->upkeep->command_wrk == SHOW_THROWING)
+				build_obj_list(throwing_num, throwing_list, tester_m,
+							   olist_mode);
 
 			/* Show the prompt */
 			menu_header();
@@ -1436,6 +1592,7 @@ bool textui_get_item(struct object **choice, const char *pmt, const char *str,
 
 	/* Clean up */
 	player->upkeep->command_wrk = 0;
+	mem_free(throwing_list);
 	mem_free(floor_list);
 
 	/* Result */
@@ -1458,7 +1615,8 @@ void display_object_recall(struct object *obj)
 	char header_buf[120];
 
 	textblock *tb = object_info(obj, OINFO_NONE);
-	object_desc(header_buf, sizeof(header_buf), obj, ODESC_PREFIX | ODESC_FULL);
+	object_desc(header_buf, sizeof(header_buf), obj,
+		ODESC_PREFIX | ODESC_FULL, player);
 
 	clear_from(0);
 	textui_textblock_place(tb, SCREEN_REGION, header_buf);
@@ -1474,9 +1632,14 @@ void display_object_kind_recall(struct object_kind *kind)
 {
 	struct object object = OBJECT_NULL, known_obj = OBJECT_NULL;
 	object_prep(&object, kind, 0, EXTREMIFY);
+	if (kind->aware || !kind->flavor) {
+		object_copy(&known_obj, &object);
+	}
 	object.known = &known_obj;
 
 	display_object_recall(&object);
+	object_wipe(&known_obj);
+	object_wipe(&object);
 }
 
 /**
@@ -1494,7 +1657,8 @@ void display_object_recall_interactive(struct object *obj)
 	event_signal(EVENT_MESSAGE_FLUSH);
 
 	tb = object_info(obj, OINFO_NONE);
-	object_desc(header_buf, sizeof(header_buf), obj, ODESC_PREFIX | ODESC_FULL);
+	object_desc(header_buf, sizeof(header_buf), obj,
+		ODESC_PREFIX | ODESC_FULL, player);
 	textui_textblock_show(tb, SCREEN_REGION, header_buf);
 	textblock_free(tb);
 }
@@ -1522,7 +1686,7 @@ void textui_obj_examine(void)
 	/* Display info */
 	tb = object_info(obj, OINFO_NONE);
 	object_desc(header_buf, sizeof(header_buf), obj,
-			ODESC_PREFIX | ODESC_FULL | ODESC_CAPITAL);
+		ODESC_PREFIX | ODESC_FULL | ODESC_CAPITAL, player);
 
 	textui_textblock_show(tb, local_area, header_buf);
 	textblock_free(tb);
@@ -1551,14 +1715,14 @@ void textui_cmd_ignore_menu(struct object *obj)
 	struct menu *m;
 	region r;
 	int selected;
-	byte value;
+	uint8_t value;
 	int type;
 
 	if (!obj)
 		return;
 
 	m = menu_dynamic_new();
-	m->selections = lower_case;
+	m->selections = all_letters_nohjkl;
 
 	/* Basic ignore option */
 	if (!(obj->known->notice & OBJ_NOTICE_IGNORE)) {
@@ -1575,7 +1739,7 @@ void textui_cmd_ignore_menu(struct object *obj)
 
 		char tmp[70];
 		object_desc(tmp, sizeof(tmp), obj,
-					ODESC_NOEGO | ODESC_BASE | ODESC_PLURAL);
+			ODESC_NOEGO | ODESC_BASE | ODESC_PLURAL, player);
 		if (!ignored) {
 			strnfmt(out_val, sizeof out_val, "All %s", tmp);
 			menu_dynamic_add(m, out_val, IGNORE_THIS_FLAVOR);
@@ -1585,14 +1749,16 @@ void textui_cmd_ignore_menu(struct object *obj)
 		}
 	}
 
+	type = ignore_type_of(obj);
+
 	/* Ego ignoring */
-	if (obj->known->ego) {
+	if (obj->known->ego && type != ITYPE_MAX) {
 		struct ego_desc choice;
 		struct ego_item *ego = obj->ego;
 		char tmp[80] = "";
 
 		choice.e_idx = ego->eidx;
-		choice.itype = ignore_type_of(obj);
+		choice.itype = type;
 		choice.short_name = "";
 		(void) ego_item_name(tmp, sizeof(tmp), &choice);
 		if (!ego_is_ignored(choice.e_idx, choice.itype)) {
@@ -1606,7 +1772,6 @@ void textui_cmd_ignore_menu(struct object *obj)
 
 	/* Quality ignoring */
 	value = ignore_level_of(obj);
-	type = ignore_type_of(obj);
 
 	if (tval_is_jewelry(obj) &&	ignore_level_of(obj) != IGNORE_BAD)
 		value = IGNORE_MAX;
@@ -1646,7 +1811,7 @@ void textui_cmd_ignore_menu(struct object *obj)
 	} else if (selected == UNIGNORE_THIS_EGO) {
 		ego_ignore_clear(obj);
 	} else if (selected == IGNORE_THIS_QUALITY) {
-		byte ignore_value = ignore_level_of(obj);
+		uint8_t ignore_value = ignore_level_of(obj);
 		int ignore_type = ignore_type_of(obj);
 
 		ignore_level[ignore_type] = ignore_value;

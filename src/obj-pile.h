@@ -23,7 +23,7 @@
 #define OBJECT_LIST_INCR  128
 
 /**
- * Modes for stacking by object_similar()
+ * Modes for stacking by object_similar()/object_stackable()/object_mergeable()
  */
 typedef enum
 {
@@ -50,8 +50,9 @@ typedef enum
 
 struct object *object_new(void);
 void object_free(struct object *obj);
-void object_delete(struct object **obj_address);
-void object_pile_free(struct object *obj);
+void object_delete(struct chunk *c, struct chunk *p_c,
+				   struct object **obj_address);
+void object_pile_free(struct chunk *c, struct chunk *p_c, struct object *obj);
 
 void pile_insert(struct object **pile, struct object *obj);
 void pile_insert_end(struct object **pile, struct object *obj);
@@ -59,28 +60,32 @@ void pile_excise(struct object **pile, struct object *obj);
 struct object *pile_last_item(struct object *const pile);
 bool pile_contains(const struct object *top, const struct object *obj);
 
+bool object_similar(const struct object *obj1, const struct object *obj2,
+	object_stack_t mode);
 bool object_stackable(const struct object *obj1, const struct object *obj2,
 					  object_stack_t mode);
-bool object_similar(const struct object *obj1, const struct object *obj2,
+bool object_mergeable(const struct object *obj1, const struct object *obj2,
 					object_stack_t mode);
 void object_origin_combine(struct object *obj1, const struct object *obj2);
-void object_absorb_partial(struct object *obj1, struct object *obj2);
+void object_absorb_partial(struct object *obj1, struct object *obj2,
+	object_stack_t mode1, object_stack_t mode2);
 void object_absorb(struct object *obj1, struct object *obj2);
 void object_wipe(struct object *obj);
 void object_copy(struct object *obj1, const struct object *obj2);
 void object_copy_amt(struct object *dest, struct object *src, int amt);
 struct object *object_split(struct object *src, int amt);
-struct object *floor_object_for_use(struct object *obj, int num, bool message,
-									bool *none_left);
+struct object *floor_object_for_use(struct player *p, struct object *obj,
+	int num, bool message, bool *none_left);
 bool floor_carry(struct chunk *c, struct loc grid, struct object *drop,
 				 bool *note);
 void drop_near(struct chunk *c, struct object **dropped, int chance,
-			   struct loc grid, bool verbose);
+			   struct loc grid, bool verbose, bool prefer_pile);
 void push_object(struct loc grid);
 void floor_item_charges(struct object *obj);
-int scan_floor(struct object **items, int max_size, object_floor_t mode,
-			   item_tester tester);
-int scan_distant_floor(struct object **items, int max_size, struct loc grid);
-int scan_items(struct object **item_list, size_t item_list_max, int mode,
-			   item_tester tester);
+int scan_floor(struct object **items, int max_size, struct player *p,
+		object_floor_t mode, item_tester tester);
+int scan_distant_floor(struct object **items, int max_size, struct player *p,
+		struct loc grid);
+int scan_items(struct object **item_list, size_t item_list_max,
+		struct player *p, int mode, item_tester tester);
 bool item_is_available(struct object *obj);

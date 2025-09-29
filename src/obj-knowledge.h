@@ -48,15 +48,16 @@ struct rune {
 int max_runes(void);
 enum rune_variety rune_variety(size_t i);
 bool player_knows_rune(struct player *p, size_t i);
-char *rune_name(size_t i);
-char *rune_desc(size_t i);
+const char *rune_name(size_t i);
+const char *rune_desc(size_t i);
 quark_t rune_note(size_t i);
 void rune_set_note(size_t i, const char *inscription);
 
 bool player_knows_brand(struct player *p, int i);
 bool player_knows_slay(struct player *p, int i);
 bool player_knows_curse(struct player *p, int i);
-bool player_knows_ego(struct player *p, struct ego_item *ego);
+bool player_knows_ego(struct player *p, struct ego_item *ego,
+	const struct object *obj);
 bool object_effect_is_known(const struct object *obj);
 bool object_is_known_artifact(const struct object *obj);
 bool object_is_in_store(const struct object *obj);
@@ -64,10 +65,12 @@ bool object_has_standard_to_h(const struct object *obj);
 bool object_has_rune(const struct object *obj, int rune_no);
 bool object_runes_known(const struct object *obj);
 bool object_fully_known(const struct object *obj);
-bool object_flag_is_known(const struct object *obj, int flag);
-bool object_element_is_known(const struct object *obj, int element);
+bool object_flag_is_known(const struct player *p, const struct object *obj,
+	int flag);
+bool object_element_is_known(const struct player *p, const struct object *obj,
+	int element);
 
-void object_set_base_known(struct object *obj);
+void object_set_base_known(struct player *p, struct object *obj);
 void object_sense(struct player *p, struct object *obj);
 void object_see(struct player *p, struct object *obj);
 void object_touch(struct player *p, struct object *obj);
@@ -76,6 +79,8 @@ void player_know_object(struct player *p, struct object *obj);
 void update_player_object_knowledge(struct player *p);
 
 void player_learn_flag(struct player *p, int flag);
+void player_learn_brand(struct player *p, int index);
+void player_learn_slay(struct player *p, int index);
 void player_learn_curse(struct player *p, struct curse *curse);
 void player_learn_innate(struct player *p);
 void player_learn_all_runes(struct player *p);
@@ -91,12 +96,10 @@ void object_learn_unknown_rune(struct player *p, struct object *obj);
 void object_learn_on_wield(struct player *p, struct object *obj);
 void shape_learn_on_assume(struct player *p, const char *name);
 void object_learn_on_use(struct player *p, struct object *obj);
-void object_learn_brand(struct player *p, struct object *obj, int index);
-void object_learn_slay(struct player *p, struct object *obj, int index);
 void missile_learn_on_ranged_attack(struct player *p, struct object *obj);
 
 bool easy_know(const struct object *obj);
 bool object_flavor_is_aware(const struct object *obj);
 bool object_flavor_was_tried(const struct object *obj);
-void object_flavor_aware(struct object *obj);
+void object_flavor_aware(struct player *p, struct object *obj);
 void object_flavor_tried(struct object *obj);
